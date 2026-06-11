@@ -49,7 +49,7 @@ class PrintRecord:
 class BarTenderPrintApp:
     """BarTender 标签打印应用"""
     
-    VERSION = "v2.2.0"
+    VERSION = "v2.2.1"
     
     def __init__(self):
         self.root = tk.Tk()
