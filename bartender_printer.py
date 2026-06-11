@@ -53,12 +53,7 @@ class BarTenderPrintApp:
     VERSION = "v2.2.3"
     
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title(f"BarTender 标签打印工具 {self.VERSION}")
-        self.root.geometry("950x750")
-        self.root.minsize(850, 700)
-        
-        # 配置文件路径 - 使用用户目录避免权限问题
+        # 先初始化所有变量，再创建窗口
         self.app_dir = os.path.join(os.path.expanduser("~"), ".bartender-printer")
         os.makedirs(self.app_dir, exist_ok=True)
         self.config_file = os.path.join(self.app_dir, "bt_config.json")
@@ -73,10 +68,18 @@ class BarTenderPrintApp:
         self.excel_data = []
         self.excel_file_path = ""
         
-        # 加载配置和记录
+        # 初始化变量
         self.init_vars()
+        
+        # 加载配置和记录
         missing_files = self.load_config()
         self.load_records()
+        
+        # 创建主窗口
+        self.root = tk.Tk()
+        self.root.title(f"BarTender 标签打印工具 {self.VERSION}")
+        self.root.geometry("950x750")
+        self.root.minsize(850, 700)
         
         # 创建 UI
         self.create_ui()
