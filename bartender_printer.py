@@ -12,6 +12,7 @@ import json
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
+import threading
 
 # BarTender COM 接口
 try:
@@ -49,7 +50,7 @@ class PrintRecord:
 class BarTenderPrintApp:
     """BarTender 标签打印应用"""
     
-    VERSION = "v2.2.1"
+    VERSION = "v2.2.3"
     
     def __init__(self):
         self.root = tk.Tk()
@@ -601,10 +602,17 @@ class BarTenderPrintApp:
                     self.update_print_status("所有 IMEI 都已打印过", "error")
                     return
         
-        # 开始打印
+        # 开始打印（使用线程避免阻塞UI）
         self.clear_print_status()
         self.update_print_status(f"开始打印 {len(imei_list)} 个 IMEI...", "info")
         
+        # 在新线程中执行打印
+        thread = threading.Thread(target=self._do_print, args=(imei_list, template_path, printer, datasource_name))
+        thread.daemon = True
+        thread.start()
+    
+    def _do_print(self, imei_list, template_path, printer, datasource_name):
+        """在后台线程中执行打印"""
         success_count = 0
         fail_count = 0
         
@@ -616,22 +624,23 @@ class BarTenderPrintApp:
                 record = PrintRecord(imei, now, 1, "PASS")
                 self.print_records.append(record)
                 success_count += 1
-                self.update_print_status(f"PASS {imei}", "success")
+                self.root.after(0, lambda m=f"PASS {imei}": self.update_print_status(m, "success"))
             else:
                 fail_count += 1
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 record = PrintRecord(imei, now, 1, "FAIL")
                 self.print_records.append(record)
-                self.update_print_status(f"FAIL {imei}", "error")
+                self.root.after(0, lambda m=f"FAIL {imei}": self.update_print_status(m, "error"))
         
         # 保存配置和记录
         self.save_config()
         self.save_records()
-        self.refresh_history()
-        self.refresh_stats()
         
-        self.update_print_status(f"\n打印完成：成功 {success_count}，失败 {fail_count}", "info")
-        self.update_status(f"打印完成：成功 {success_count}，失败 {fail_count}")
+        # 在主线程中刷新UI
+        self.root.after(0, self.refresh_history)
+        self.root.after(0, self.refresh_stats)
+        self.root.after(0, lambda: self.update_print_status(f"\n打印完成：成功 {success_count}，失败 {fail_count}", "info"))
+        self.root.after(0, lambda: self.update_status(f"打印完成：成功 {success_count}，失败 {fail_count}"))
     
     def clear_print_status(self):
         """清空打印状态"""
@@ -846,28 +855,33 @@ class BarTenderPrintApp:
         """保存打印记录"""
         try:
             with open(self.records_file, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.DictWriter(f, fieldnames=['imei', 'print_time', 'copies', 'status'])
-                writer.writeheader()
+                writer = csv.writer(f)
+                writer.writerow(['imei', 'print_time', 'copies', 'status'])
                 for record in self.print_records:
-                    writer.writerow(record.to_dict())
+                    # 确保IMEI作为字符串保存，添加前缀防止Excel截断
+                    imei_str = str(record.imei) if record.imei else ''
+                    writer.writerow([imei_str, record.print_time, record.copies, record.status])
         except Exception as e:
             print(f"保存记录失败: {e}")
     
-    def update_status(self, message):
-        """更新状态栏"""
-        self.status_var.set(message)
-        self.root.update_idletasks()
-    
-    def on_closing(self):
-        """关闭应用"""
-        self.save_config()
-        self.save_records()
-        
-        if self.bt_app:
-            try:
-                self.bt_app.Quit()
-            except Exception:
-                pass
+    def load_records(self):
+        """加载打印记录"""
+        try:
+            if os.path.exists(self.records_file):
+                with open(self.records_file, 'r', encoding='utf-8-sig') as f:
+                    reader = csv.reader(f)
+                    header = next(reader, None)  # 跳过表头
+                    for row in reader:
+                        if len(row) >= 4:
+                            record = PrintRecord(
+                                imei=row[0].strip(),
+                                print_time=row[1].strip(),
+                                copies=int(row[2]) if row[2].isdigit() else 1,
+                                status=row[3].strip()
+                            )
+                            self.print_records.append(record)
+        except Exception as e:
+            print(f"加载记录失败: {e}")
         
         # 清理 COM
         if HAS_WIN32COM:
