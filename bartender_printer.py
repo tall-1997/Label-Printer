@@ -490,6 +490,8 @@ class BarTenderPrintApp:
         bt_format = None
         try:
             print(f"[DEBUG] 准备打开模板: {template_path}")
+            print(f"[DEBUG] bt_app 类型: {type(self.bt_app)}")
+            print(f"[DEBUG] bt_app.Formats 类型: {type(self.bt_app.Formats)}")
             
             # 打开模板 - 不传第三个参数
             bt_format = self.bt_app.Formats.Open(template_path, False)
@@ -519,6 +521,7 @@ class BarTenderPrintApp:
         except Exception as e:
             error_msg = str(e)
             print(f"[DEBUG] 打印失败: {error_msg}")
+            print(f"[DEBUG] 错误类型: {type(e)}")
             if bt_format:
                 try:
                     bt_format.Close()
