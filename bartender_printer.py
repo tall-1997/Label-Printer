@@ -457,33 +457,17 @@ class BarTenderPrintApp:
         """后台打印线程"""
         # 线程必须初始化 COM
         pythoncom.CoInitialize()
-        bt_app = None
         try:
-            # 在线程中重新创建 BarTender 对象
-            print("[DEBUG] 线程中创建 BarTender 对象...")
-            bt_app = win32com.client.Dispatch("BarTender.Application")
-            bt_app.Visible = False
-            print("[DEBUG] 线程中 BarTender 对象创建成功")
-            
-            self._do_print_inner(bt_app, imei_list, template_path, printer, datasource)
-        except Exception as e:
-            print(f"[DEBUG] 线程异常: {e}")
-            self.root.after(0, lambda: self._update_status(f"线程错误: {e}", "error"))
+            self._do_print_inner(imei_list, template_path, printer, datasource)
         finally:
-            # 关闭 BarTender
-            if bt_app:
-                try:
-                    bt_app.Quit()
-                except:
-                    pass
             pythoncom.CoUninitialize()
     
-    def _do_print_inner(self, bt_app, imei_list, template_path, printer, datasource):
+    def _do_print_inner(self, imei_list, template_path, printer, datasource):
         """实际打印逻辑"""
         ok = 0
         fail = 0
         for imei in imei_list:
-            success, error_msg = self._print_single(bt_app, imei, template_path, printer, datasource)
+            success, error_msg = self._print_single(imei, template_path, printer, datasource)
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if success:
                 self.print_records.append(PrintRecord(imei, now, "PASS"))
@@ -501,28 +485,15 @@ class BarTenderPrintApp:
         self.root.after(0, lambda: self._update_status(f"\n完成：成功 {ok}，失败 {fail}", "info"))
         self.root.after(0, lambda: self.status_var.set(f"完成：成功 {ok}，失败 {fail}"))
 
-    def _print_single(self, bt_app, imei, template_path, printer, datasource):
+    def _print_single(self, imei, template_path, printer, datasource):
         """打印单个IMEI"""
         bt_format = None
         try:
             print(f"[DEBUG] 准备打开模板: {template_path}")
             
-            # 打开模板 - 尝试不同的参数组合
-            try:
-                # 尝试1: 只传文件名
-                bt_format = bt_app.Formats.Open(template_path)
-                print(f"[DEBUG] 模板打开成功 (方式1)")
-            except Exception as e1:
-                print(f"[DEBUG] 方式1失败: {e1}")
-                try:
-                    # 尝试2: 传两个参数
-                    bt_format = bt_app.Formats.Open(template_path, False)
-                    print(f"[DEBUG] 模板打开成功 (方式2)")
-                except Exception as e2:
-                    print(f"[DEBUG] 方式2失败: {e2}")
-                    # 尝试3: 传三个参数，第三个是0
-                    bt_format = bt_app.Formats.Open(template_path, False, 0)
-                    print(f"[DEBUG] 模板打开成功 (方式3)")
+            # 打开模板 - 使用 pythoncom.VT_EMPTY 作为第三个参数
+            bt_format = self.bt_app.Formats.Open(template_path, False, pythoncom.VT_EMPTY)
+            print(f"[DEBUG] 模板打开成功")
             
             # 设置数据源
             bt_format.SetNamedSubStringValue(datasource, str(imei))
