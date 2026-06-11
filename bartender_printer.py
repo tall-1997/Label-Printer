@@ -265,11 +265,15 @@ class BarTenderPrintApp:
             return
         try:
             pythoncom.CoInitialize()
+            print("[DEBUG] 正在创建 BarTender.Application...")
             self.bt_app = win32com.client.Dispatch("BarTender.Application")
+            print(f"[DEBUG] BarTender 对象: {self.bt_app}")
             self.bt_app.Visible = False
+            print("[DEBUG] Visible 设置完成")
             self.status_var.set("BarTender 已连接")
             self._refresh_printers()
         except Exception as e:
+            print(f"[DEBUG] BarTender 初始化失败: {e}")
             self.status_var.set(f"BarTender 连接失败: {e}")
 
     def _refresh_printers(self):
@@ -472,32 +476,38 @@ class BarTenderPrintApp:
         self.root.after(0, lambda: self.status_var.set(f"完成：成功 {ok}，失败 {fail}"))
 
     def _print_single(self, imei, template_path, printer, datasource):
-        """打印单个IMEI - 只要模板操作成功就视为打印成功"""
+        """打印单个IMEI"""
         try:
+            print(f"[DEBUG] 准备打开模板: {template_path}")
+            
             # 打开模板
             self.bt_format = self.bt_app.Formats.Open(template_path, False, "")
+            print(f"[DEBUG] 模板打开成功")
             
             # 设置数据源
             self.bt_format.SetNamedSubStringValue(datasource, str(imei))
+            print(f"[DEBUG] 数据源设置成功: {datasource}={imei}")
             
             # 设置打印机
             self.bt_format.Printer = printer
+            print(f"[DEBUG] 打印机设置成功: {printer}")
             
-            # 打印 - 完全忽略异常，因为PrintOut可能抛出异常但打印仍然成功
+            # 打印
             try:
                 self.bt_format.PrintOut(False, False)
-            except:
-                pass
+                print(f"[DEBUG] PrintOut 执行完成")
+            except Exception as e:
+                print(f"[DEBUG] PrintOut 异常(通常可忽略): {e}")
             
             # 关闭模板
             self.bt_format.Close()
+            print(f"[DEBUG] 模板关闭成功")
             
-            # 只要到这里就是成功
             return True, ""
                 
         except Exception as e:
-            # 只有打开模板、设置数据源等失败才算真正的失败
             error_msg = str(e)
+            print(f"[DEBUG] 打印失败: {error_msg}")
             try:
                 self.bt_format.Close()
             except:
