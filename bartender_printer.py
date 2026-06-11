@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 BarTender 标签打印工具 v2.1
-功能：集成 BarTender 2021 Automation，IMEI 标签打印，Excel 数据校验
+功能：集成 BarTender 2022 R2 Enterprise，IMEI 标签打印，Excel 数据校验
 """
 
 import os
@@ -16,6 +16,7 @@ from datetime import datetime
 # BarTender COM 接口
 try:
     import win32com.client
+    import pythoncom
     HAS_WIN32COM = True
 except ImportError:
     HAS_WIN32COM = False
@@ -64,8 +65,8 @@ class BarTenderPrintApp:
         
         # 数据
         self.print_records = []
-        self.excel_data = []  # Excel 数据缓存
-        self.excel_file_path = ""  # Excel 文件路径
+        self.excel_data = []
+        self.excel_file_path = ""
         
         # 加载配置和记录
         self.load_config()
@@ -300,13 +301,187 @@ class BarTenderPrintApp:
             return
         
         try:
+            # 初始化 COM
+            pythoncom.CoInitialize()
+            
+            # 尝试连接 BarTender
             self.bt_app = win32com.client.Dispatch("BarTender.Application")
             self.bt_app.Visible = False
-            self.update_status("BarTender 已连接")
+            self.update_status("BarTender 2022 R2 已连接")
             self.refresh_printers()
         except Exception as e:
             self.update_status(f"BarTender 连接失败: {e}")
             self.bt_app = None
+    
+    def refresh_printers(self):
+        """刷新打印机列表"""
+        printer_names = []
+        
+        try:
+            if sys.platform == 'win32':
+                # 方法1: 使用 win32print
+                try:
+                    import win32print
+                    printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
+                    printer_names = [p[2] for p in printers]
+                except Exception:
+                    pass
+                
+                # 方法2: 使用 PowerShell 获取打印机
+                if not printer_names:
+                    try:
+                        import subprocess
+                        result = subprocess.run(
+                            ['powershell', '-Command', 'Get-Printer | Select-Object -ExpandProperty Name'],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if result.returncode == 0:
+                            printer_names = [p.strip() for p in result.stdout.split('\n') if p.strip()]
+                    except Exception:
+                        pass
+                
+                # 方法3: 使用 wmic 获取打印机
+                if not printer_names:
+                    try:
+                        import subprocess
+                        result = subprocess.run(
+                            ['wmic', 'printer', 'get', 'name'],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if result.returncode == 0:
+                            lines = result.stdout.split('\n')
+                            printer_names = [line.strip() for line in lines[1:] if line.strip()]
+                    except Exception:
+                        pass
+        except Exception as e:
+            self.update_status(f"获取打印机列表失败: {e}")
+        
+        # 更新打印机列表
+        self.printer_combo['values'] = printer_names
+        if printer_names:
+            self.printer_combo.current(0)
+            self.update_status(f"找到 {len(printer_names)} 台打印机")
+        else:
+            self.update_status("未找到打印机，请检查打印机连接")
+    
+    def browse_template(self):
+        """浏览模板文件"""
+        file_path = filedialog.askopenfilename(
+            title="选择 BarTender 模板",
+            filetypes=[("BarTender 文件", "*.btw"), ("所有文件", "*.*")]
+        )
+        if file_path:
+            self.template_path_var.set(file_path)
+            self.save_config()
+    
+    def browse_excel(self):
+        """浏览 Excel 文件"""
+        file_path = filedialog.askopenfilename(
+            title="选择 IMEI 数据 Excel 文件",
+            filetypes=[("Excel 文件", "*.xlsx *.xls"), ("CSV 文件", "*.csv"), ("所有文件", "*.*")]
+        )
+        if file_path:
+            self.excel_path_var.set(file_path)
+            self.excel_file_path = file_path
+            self.load_excel_data()
+            self.save_config()
+    
+    def load_excel_data(self):
+        """加载 Excel 数据"""
+        file_path = self.excel_path_var.get()
+        if not file_path or not os.path.exists(file_path):
+            self.excel_data = []
+            self.excel_count_var.set("0 条")
+            return
+        
+        try:
+            column_name = self.excel_column_var.get().strip()
+            if not column_name:
+                messagebox.showwarning("警告", "请输入 IMEI 列名")
+                return
+            
+            if file_path.endswith('.csv'):
+                # CSV 文件
+                with open(file_path, 'r', encoding='utf-8-sig') as f:
+                    reader = csv.DictReader(f)
+                    self.excel_data = [row.get(column_name, '').strip() for row in reader if row.get(column_name, '').strip()]
+            else:
+                # Excel 文件
+                if not HAS_OPENPYXL:
+                    messagebox.showerror("错误", "未安装 openpyxl，无法读取 Excel 文件")
+                    return
+                
+                wb = openpyxl.load_workbook(file_path, read_only=True)
+                ws = wb.active
+                
+                # 获取列索引
+                header = [cell.value for cell in ws[1]]
+                if column_name not in header:
+                    messagebox.showerror("错误", f"Excel 中未找到列 '{column_name}'")
+                    wb.close()
+                    return
+                
+                col_idx = header.index(column_name)
+                
+                # 读取数据
+                self.excel_data = []
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if col_idx < len(row) and row[col_idx]:
+                        self.excel_data.append(str(row[col_idx]).strip())
+                
+                wb.close()
+            
+            self.excel_count_var.set(f"{len(self.excel_data)} 条")
+            self.update_status(f"已加载 {len(self.excel_data)} 条 IMEI 数据")
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"加载 Excel 失败: {e}")
+            self.excel_data = []
+            self.excel_count_var.set("0 条")
+    
+    def verify_excel_data(self):
+        """校验 Excel 数据"""
+        if not self.excel_data:
+            messagebox.showwarning("警告", "请先选择并加载 Excel 文件")
+            return
+        
+        messagebox.showinfo("校验结果", f"Excel 数据已加载\n\n文件: {os.path.basename(self.excel_file_path)}\n列名: {self.excel_column_var.get()}\n数据量: {len(self.excel_data)} 条")
+    
+    def is_imei_in_excel(self, imei):
+        """检查 IMEI 是否在 Excel 数据中"""
+        if not self.excel_data:
+            return True
+        return imei.strip() in self.excel_data
+    
+    def show_imei_input_dialog(self):
+        """显示 IMEI 输入弹窗"""
+        dialog = IMEIInputDialog(self.root, self)
+        dialog.show()
+    
+    def import_imei_file(self):
+        """从文件导入 IMEI"""
+        file_path = filedialog.askopenfilename(
+            title="选择 IMEI 文件",
+            filetypes=[("文本文件", "*.txt"), ("CSV 文件", "*.csv"), ("所有文件", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                imei_list = [line.strip() for line in content.split('\n') if line.strip()]
+                
+                if imei_list:
+                    self.process_imei_list(imei_list)
+                else:
+                    messagebox.showwarning("警告", "文件中未找到 IMEI 数据")
+            except Exception as e:
+                messagebox.showerror("错误", f"文件读取失败: {e}")
+    
+    def is_imei_printed(self, imei):
+        """检查 IMEI 是否已打印"""
+        return any(r.imei == imei for r in self.print_records)
     
     def print_single_imei(self, imei, template_path, printer, datasource_name, copies):
         """打印单个 IMEI"""
@@ -662,6 +837,13 @@ class BarTenderPrintApp:
             except Exception:
                 pass
         
+        # 清理 COM
+        if HAS_WIN32COM:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+        
         self.root.destroy()
     
     def run(self):
@@ -743,10 +925,8 @@ class IMEIInputDialog:
             if not content:
                 return
             
-            # 检查是否是单个 IMEI（没有换行）
             lines = [l.strip() for l in content.split('\n') if l.strip()]
             if len(lines) == 1:
-                # 单个 IMEI，自动打印
                 on_print()
         
         # 绑定回车键
