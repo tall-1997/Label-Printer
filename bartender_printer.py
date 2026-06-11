@@ -706,17 +706,55 @@ class BarTenderPrintApp:
     
     def load_config(self):
         """加载配置"""
+        missing_files = []
+        
         try:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                    self.template_path_var = tk.StringVar(value=config.get('template_path', ''))
+                    
+                    # 加载模板路径
+                    template_path = config.get('template_path', '')
+                    if template_path and not os.path.exists(template_path):
+                        missing_files.append(f"BarTender 模板: {os.path.basename(template_path)}")
+                    self.template_path_var = tk.StringVar(value=template_path)
+                    
+                    # 加载数据源名称
                     self.datasource_var = tk.StringVar(value=config.get('datasource', 'IMEI1'))
-                    self.excel_path_var = tk.StringVar(value=config.get('excel_path', ''))
+                    
+                    # 加载 Excel 路径
+                    excel_path = config.get('excel_path', '')
+                    if excel_path and not os.path.exists(excel_path):
+                        missing_files.append(f"Excel 文件: {os.path.basename(excel_path)}")
+                    self.excel_path_var = tk.StringVar(value=excel_path)
+                    self.excel_file_path = excel_path
+                    
+                    # 加载 Excel 列名
                     self.excel_column_var = tk.StringVar(value=config.get('excel_column', 'IMEI1'))
-                    self.excel_file_path = config.get('excel_path', '')
-        except Exception:
-            pass
+                    
+                    # 加载打印机
+                    printer = config.get('printer', '')
+                    self.printer_var = tk.StringVar(value=printer)
+                    
+                    # 加载打印份数
+                    copies = config.get('copies', 1)
+                    self.copies_var = tk.IntVar(value=copies)
+                    
+                    # 加载校验选项
+                    self.verify_excel_var = tk.BooleanVar(value=config.get('verify_excel', True))
+                    
+                    # 加载 Excel 数据（如果文件存在）
+                    if excel_path and os.path.exists(excel_path):
+                        self.root.after(100, self.load_excel_data)
+                    
+                # 弹窗提示缺失的文件
+                if missing_files:
+                    self.root.after(500, lambda: messagebox.showwarning(
+                        "配置文件缺失",
+                        "以下配置的文件未找到：\n\n" + "\n".join(missing_files) + "\n\n请重新选择这些文件。"
+                    ))
+        except Exception as e:
+            print(f"加载配置失败: {e}")
     
     def save_config(self):
         """保存配置"""
@@ -725,12 +763,15 @@ class BarTenderPrintApp:
                 'template_path': self.template_path_var.get(),
                 'datasource': self.datasource_var.get(),
                 'excel_path': self.excel_path_var.get(),
-                'excel_column': self.excel_column_var.get()
+                'excel_column': self.excel_column_var.get(),
+                'printer': self.printer_var.get(),
+                'copies': self.copies_var.get(),
+                'verify_excel': self.verify_excel_var.get()
             }
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"保存配置失败: {e}")
     
     def load_records(self):
         """加载打印记录"""
