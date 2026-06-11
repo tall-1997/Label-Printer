@@ -495,10 +495,8 @@ class BarTenderPrintApp:
             # 设置打印机
             self.bt_format.Printer = printer
             
-            # 设置份数
-            self.bt_format.NumberOfSerializedLabels = copies
-            
-            # 打印
+            # 打印（指定份数）
+            # PrintOut(promptUser, usePrinterSettings)
             result = self.bt_format.PrintOut(False, False)
             
             # 关闭模板
@@ -575,23 +573,27 @@ class BarTenderPrintApp:
                     return
         
         # 开始打印
-        self.update_status(f"开始打印 {len(imei_list)} 个 IMEI...")
+        self.update_status(f"开始打印 {len(imei_list)} 个 IMEI（每个 {copies} 份）...")
         
         success_count = 0
         fail_count = 0
         
         for imei in imei_list:
-            success, message = self.print_single_imei(imei, template_path, printer, datasource_name, copies)
-            
-            if success:
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                record = PrintRecord(imei, now, copies)
-                self.print_records.append(record)
-                success_count += 1
-                self.update_print_status(f"✅ {imei} - 打印成功")
-            else:
-                fail_count += 1
-                self.update_print_status(f"❌ {imei} - {message}")
+            # 根据份数循环打印
+            for copy_idx in range(copies):
+                success, message = self.print_single_imei(imei, template_path, printer, datasource_name, 1)
+                
+                if success:
+                    if copy_idx == 0:  # 只在第一次打印成功时记录
+                        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        record = PrintRecord(imei, now, copies)
+                        self.print_records.append(record)
+                        success_count += 1
+                        self.update_print_status(f"✅ {imei} - 打印成功（{copies}份）")
+                else:
+                    fail_count += 1
+                    self.update_print_status(f"❌ {imei} - {message}")
+                    break  # 打印失败则跳过剩余份数
         
         # 保存记录
         self.save_records()
