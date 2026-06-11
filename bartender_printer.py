@@ -507,8 +507,8 @@ class BarTenderPrintApp:
         try:
             print(f"[DEBUG] 准备打开模板: {template_path}")
             
-            # 打开模板
-            bt_format = bt_app.Formats.Open(template_path, False, "")
+            # 打开模板 - 使用正确的参数
+            bt_format = bt_app.Formats.Open(template_path, False)
             print(f"[DEBUG] 模板打开成功")
             
             # 设置数据源
