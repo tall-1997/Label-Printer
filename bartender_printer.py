@@ -516,6 +516,25 @@ class BarTenderPrintApp:
                         messagebox.showinfo("完成", "没有有效的 IMEI 可以打印")
                         return
         
+        # 检查已打印的 IMEI
+        printed_imei = [imei for imei in imei_list if self.is_imei_printed(imei)]
+        if printed_imei:
+            result = messagebox.askyesnocancel(
+                "发现重复数据",
+                f"发现 {len(printed_imei)} 个 IMEI 已打印过！\n\n"
+                f"已打印 IMEI: {', '.join(printed_imei[:5])}{'...' if len(printed_imei) > 5 else ''}\n\n"
+                "点击「是」继续打印全部（包括已打印的）\n"
+                "点击「否」跳过已打印的 IMEI\n"
+                "点击「取消」取消操作"
+            )
+            if result is None:
+                return
+            elif not result:
+                imei_list = [imei for imei in imei_list if not self.is_imei_printed(imei)]
+                if not imei_list:
+                    messagebox.showinfo("完成", "所有 IMEI 都已打印过")
+                    return
+        
         # 开始打印
         self.update_status(f"开始打印 {len(imei_list)} 个 IMEI...")
         
