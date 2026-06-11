@@ -49,7 +49,7 @@ class PrintRecord:
 class BarTenderPrintApp:
     """BarTender 标签打印应用"""
     
-    VERSION = "v2.1.5"
+    VERSION = "v2.2.0"
     
     def __init__(self):
         self.root = tk.Tk()
@@ -73,6 +73,7 @@ class BarTenderPrintApp:
         self.excel_file_path = ""
         
         # 加载配置和记录
+        self.init_vars()
         missing_files = self.load_config()
         self.load_records()
         
@@ -92,6 +93,16 @@ class BarTenderPrintApp:
         
         # 绑定关闭事件
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def init_vars(self):
+        """初始化变量"""
+        self.template_path_var = tk.StringVar()
+        self.datasource_var = tk.StringVar(value="IMEI1")
+        self.excel_path_var = tk.StringVar()
+        self.excel_column_var = tk.StringVar(value="IMEI1")
+        self.printer_var = tk.StringVar()
+        self.copies_var = tk.IntVar(value=1)
+        self.verify_excel_var = tk.BooleanVar(value=True)
     
     def create_ui(self):
         """创建用户界面"""
@@ -498,7 +509,7 @@ class BarTenderPrintApp:
         """检查 IMEI 是否已打印"""
         return any(r.imei == imei for r in self.print_records)
     
-    def print_single_imei(self, imei, template_path, printer, datasource_name, copies):
+    def print_single_imei(self, imei, template_path, printer, datasource_name):
         """打印单个 IMEI"""
         try:
             # 打开模板
@@ -510,26 +521,25 @@ class BarTenderPrintApp:
             # 设置打印机
             self.bt_format.Printer = printer
             
-            # 打印
+            # 打印 - 忽略所有异常，只要执行到这里就视为成功
             try:
                 self.bt_format.PrintOut(False, False)
-            except Exception:
-                # PrintOut 可能抛出异常但打印仍然成功，忽略
+            except:
                 pass
             
             # 关闭模板
             self.bt_format.Close()
             
             # 打印成功
-            return True, "PASS"
+            return True
                 
         except Exception as e:
-            # 只有打开模板等真正失败才算失败
+            # 只有打开模板失败才算失败
             try:
                 self.bt_format.Close()
             except:
                 pass
-            return False, f"FAIL: {str(e)}"
+            return False
     
     def process_imei_list(self, imei_list):
         """处理 IMEI 列表"""
@@ -570,35 +580,29 @@ class BarTenderPrintApp:
         
         # 开始打印
         self.clear_print_status()
-        self.update_print_status(f"开始打印 {len(imei_list)} 个 IMEI（每个 {copies} 份）...", "info")
+        self.update_print_status(f"开始打印 {len(imei_list)} 个 IMEI...", "info")
         
         success_count = 0
         fail_count = 0
         
         for imei in imei_list:
-            # 根据份数循环打印
-            for copy_idx in range(copies):
-                success, message = self.print_single_imei(imei, template_path, printer, datasource_name, 1)
-                
-                if success:
-                    if copy_idx == 0:  # 只在第一次打印成功时记录
-                        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        record = PrintRecord(imei, now, copies, "PASS")
-                        self.print_records.append(record)
-                        success_count += 1
-                        self.update_print_status(f"PASS {imei}（{copies}份）", "success")
-                else:
-                    fail_count += 1
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    record = PrintRecord(imei, now, copies, message)
-                    self.print_records.append(record)
-                    self.update_print_status(f"FAIL {imei} - {message}", "error")
-                    break  # 打印失败则跳过剩余份数
+            success = self.print_single_imei(imei, template_path, printer, datasource_name)
+            
+            if success:
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                record = PrintRecord(imei, now, 1, "PASS")
+                self.print_records.append(record)
+                success_count += 1
+                self.update_print_status(f"PASS {imei}", "success")
+            else:
+                fail_count += 1
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                record = PrintRecord(imei, now, 1, "FAIL")
+                self.print_records.append(record)
+                self.update_print_status(f"FAIL {imei}", "error")
         
-        # 保存配置（打印机选择等）
+        # 保存配置和记录
         self.save_config()
-        
-        # 保存记录
         self.save_records()
         self.refresh_history()
         self.refresh_stats()
@@ -745,15 +749,6 @@ class BarTenderPrintApp:
     
     def load_config(self):
         """加载配置"""
-        # 初始化默认值
-        self.template_path_var = tk.StringVar()
-        self.datasource_var = tk.StringVar(value="IMEI1")
-        self.excel_path_var = tk.StringVar()
-        self.excel_column_var = tk.StringVar(value="IMEI1")
-        self.printer_var = tk.StringVar()
-        self.copies_var = tk.IntVar(value=1)
-        self.verify_excel_var = tk.BooleanVar(value=True)
-        
         missing_files = []
         
         try:
@@ -783,13 +778,8 @@ class BarTenderPrintApp:
                     # 加载打印机
                     self.printer_var.set(config.get('printer', ''))
                     
-                    # 加载打印份数
-                    self.copies_var.set(config.get('copies', 1))
-                    
                     # 加载校验选项
                     self.verify_excel_var.set(config.get('verify_excel', True))
-                    
-                    print(f"配置已加载: {config}")  # 调试日志
                     
         except Exception as e:
             print(f"加载配置失败: {e}")
@@ -805,7 +795,6 @@ class BarTenderPrintApp:
                 'excel_path': self.excel_path_var.get(),
                 'excel_column': self.excel_column_var.get(),
                 'printer': self.printer_var.get(),
-                'copies': self.copies_var.get(),
                 'verify_excel': self.verify_excel_var.get()
             }
             with open(self.config_file, 'w', encoding='utf-8') as f:
@@ -882,7 +871,7 @@ class IMEIInputDialog:
         """显示弹窗"""
         dialog = tk.Toplevel(self.parent)
         dialog.title("输入 IMEI")
-        dialog.geometry("500x350")
+        dialog.geometry("400x200")
         dialog.transient(self.parent)
         dialog.grab_set()
         
@@ -891,10 +880,10 @@ class IMEIInputDialog:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 说明
-        ttk.Label(main_frame, text="输入要打印的 IMEI（每行一个，单个 IMEI 可回车打印）：", font=("微软雅黑", 11)).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text="输入要打印的 IMEI（每行一个）：", font=("微软雅黑", 11)).pack(anchor=tk.W, pady=(0, 10))
         
-        # IMEI 输入框 - 使用 Text 控件，初始高度为1行
-        imei_text = tk.Text(main_frame, wrap=tk.WORD, height=1, width=40)
+        # IMEI 输入框
+        imei_text = tk.Text(main_frame, wrap=tk.WORD, height=3, width=40)
         imei_text.pack(fill=tk.X, pady=(0, 10))
         imei_text.focus_set()
         
@@ -902,34 +891,10 @@ class IMEIInputDialog:
         def on_content_change(event=None):
             content = imei_text.get("1.0", tk.END)
             lines = content.count('\n') + 1
-            new_height = min(max(lines, 1), 10)  # 最小1行，最大10行
+            new_height = min(max(lines, 3), 10)
             imei_text.config(height=new_height)
         
         imei_text.bind('<KeyRelease>', on_content_change)
-        imei_text.bind('<Return>', on_content_change)
-        
-        # 快捷操作
-        quick_frame = ttk.Frame(main_frame)
-        quick_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(quick_frame, text="快捷操作：").pack(side=tk.LEFT)
-        ttk.Button(quick_frame, text="从剪贴板粘贴", command=lambda: [self.paste_from_clipboard(imei_text), on_content_change()]).pack(side=tk.LEFT, padx=(5, 0))
-        ttk.Button(quick_frame, text="清空", command=lambda: [imei_text.delete("1.0", tk.END), on_content_change()]).pack(side=tk.LEFT, padx=(5, 0))
-        
-        # 回车自动打印选项
-        auto_print_frame = ttk.Frame(main_frame)
-        auto_print_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        auto_print_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(auto_print_frame, text="回车自动打印（单个 IMEI 时）", variable=auto_print_var).pack(side=tk.LEFT)
-        
-        # 打印份数
-        copies_frame = ttk.Frame(main_frame)
-        copies_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(copies_frame, text="打印份数：").pack(side=tk.LEFT)
-        copies_var = tk.IntVar(value=self.app.copies_var.get())
-        ttk.Spinbox(copies_frame, from_=1, to=100, textvariable=copies_var, width=10).pack(side=tk.LEFT, padx=(5, 0))
         
         # 按钮
         btn_frame = ttk.Frame(main_frame)
@@ -941,36 +906,20 @@ class IMEIInputDialog:
                 return
             
             imei_list = [line.strip() for line in imei_text_content.split('\n') if line.strip()]
-            self.app.copies_var.set(copies_var.get())
             dialog.destroy()
             self.app.process_imei_list(imei_list)
         
         def on_enter(event):
-            """回车键处理"""
-            if not auto_print_var.get():
-                return
-            
             content = imei_text.get("1.0", tk.END).strip()
-            if not content:
-                return
-            
-            lines = [l.strip() for l in content.split('\n') if l.strip()]
-            if len(lines) == 1:
-                on_print()
+            if content:
+                lines = [l.strip() for l in content.split('\n') if l.strip()]
+                if len(lines) == 1:
+                    on_print()
         
-        # 绑定回车键
         imei_text.bind('<Return>', on_enter)
         
         ttk.Button(btn_frame, text="打印", command=on_print).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT)
-    
-    def paste_from_clipboard(self, text_widget):
-        """从剪贴板粘贴"""
-        try:
-            clipboard = self.parent.clipboard_get()
-            text_widget.insert(tk.END, clipboard)
-        except Exception:
-            pass
 
 
 class SettingsWindow:
@@ -982,7 +931,7 @@ class SettingsWindow:
         
         self.window = tk.Toplevel(parent)
         self.window.title("设置")
-        self.window.geometry("450x350")
+        self.window.geometry("400x300")
         self.window.transient(parent)
         self.window.grab_set()
         
@@ -1000,13 +949,8 @@ class SettingsWindow:
         self.default_printer_var = tk.StringVar(value=self.app.printer_var.get())
         ttk.Entry(main_frame, textvariable=self.default_printer_var).pack(fill=tk.X, pady=(0, 10))
         
-        # 默认份数
-        ttk.Label(main_frame, text="默认打印份数：").pack(anchor=tk.W)
-        self.default_copies_var = tk.IntVar(value=1)
-        ttk.Spinbox(main_frame, from_=1, to=100, textvariable=self.default_copies_var).pack(fill=tk.X, pady=(0, 10))
-        
         # 自动校验
-        self.auto_verify_var = tk.BooleanVar(value=True)
+        self.auto_verify_var = tk.BooleanVar(value=self.app.verify_excel_var.get())
         ttk.Checkbutton(main_frame, text="打印前自动校验 Excel 数据", variable=self.auto_verify_var).pack(anchor=tk.W, pady=(0, 10))
         
         # 数据源名称
@@ -1024,7 +968,6 @@ class SettingsWindow:
     def save(self):
         """保存设置"""
         self.app.printer_var.set(self.default_printer_var.get())
-        self.app.copies_var.set(self.default_copies_var.get())
         self.app.verify_excel_var.set(self.auto_verify_var.get())
         self.app.datasource_var.set(self.datasource_var.get())
         self.app.save_config()
