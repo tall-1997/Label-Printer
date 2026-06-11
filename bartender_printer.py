@@ -491,8 +491,8 @@ class BarTenderPrintApp:
         try:
             print(f"[DEBUG] 准备打开模板: {template_path}")
             
-            # 打开模板 - 使用 pythoncom.VT_EMPTY 作为第三个参数
-            bt_format = self.bt_app.Formats.Open(template_path, False, pythoncom.VT_EMPTY)
+            # 打开模板 - 不传第三个参数
+            bt_format = self.bt_app.Formats.Open(template_path, False)
             print(f"[DEBUG] 模板打开成功")
             
             # 设置数据源
