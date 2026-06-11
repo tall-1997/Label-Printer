@@ -775,7 +775,7 @@ class IMEIInputDialog:
         """显示弹窗"""
         dialog = tk.Toplevel(self.parent)
         dialog.title("输入 IMEI")
-        dialog.geometry("500x400")
+        dialog.geometry("500x450")
         dialog.transient(self.parent)
         dialog.grab_set()
         
@@ -784,11 +784,12 @@ class IMEIInputDialog:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 说明
-        ttk.Label(main_frame, text="输入要打印的 IMEI（每行一个）：", font=("微软雅黑", 11)).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text="输入要打印的 IMEI（每行一个，或单个 IMEI 直接回车打印）：", font=("微软雅黑", 11)).pack(anchor=tk.W, pady=(0, 10))
         
         # IMEI 输入框
         imei_text = tk.Text(main_frame, wrap=tk.WORD)
         imei_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        imei_text.focus_set()
         
         # 快捷操作
         quick_frame = ttk.Frame(main_frame)
@@ -797,6 +798,13 @@ class IMEIInputDialog:
         ttk.Label(quick_frame, text="快捷操作：").pack(side=tk.LEFT)
         ttk.Button(quick_frame, text="从剪贴板粘贴", command=lambda: self.paste_from_clipboard(imei_text)).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(quick_frame, text="清空", command=lambda: imei_text.delete("1.0", tk.END)).pack(side=tk.LEFT, padx=(5, 0))
+        
+        # 回车自动打印选项
+        auto_print_frame = ttk.Frame(main_frame)
+        auto_print_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        auto_print_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(auto_print_frame, text="回车自动打印（单个 IMEI 时）", variable=auto_print_var).pack(side=tk.LEFT)
         
         # 打印份数
         copies_frame = ttk.Frame(main_frame)
@@ -820,6 +828,24 @@ class IMEIInputDialog:
             self.app.copies_var.set(copies_var.get())
             dialog.destroy()
             self.app.process_imei_list(imei_list)
+        
+        def on_enter(event):
+            """回车键处理"""
+            if not auto_print_var.get():
+                return
+            
+            content = imei_text.get("1.0", tk.END).strip()
+            if not content:
+                return
+            
+            # 检查是否是单个 IMEI（没有换行）
+            lines = [l.strip() for l in content.split('\n') if l.strip()]
+            if len(lines) == 1:
+                # 单个 IMEI，自动打印
+                on_print()
+        
+        # 绑定回车键
+        imei_text.bind('<Return>', on_enter)
         
         ttk.Button(btn_frame, text="打印", command=on_print).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT)
