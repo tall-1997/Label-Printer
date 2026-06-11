@@ -49,15 +49,19 @@ class PrintRecord:
 class BarTenderPrintApp:
     """BarTender 标签打印应用"""
     
+    VERSION = "v2.1.5"
+    
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("BarTender 标签打印工具 v2.1")
+        self.root.title(f"BarTender 标签打印工具 {self.VERSION}")
         self.root.geometry("950x750")
         self.root.minsize(850, 700)
         
-        # 配置文件路径
-        self.config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bt_config.json")
-        self.records_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "print_records.csv")
+        # 配置文件路径 - 使用用户目录避免权限问题
+        self.app_dir = os.path.join(os.path.expanduser("~"), ".bartender-printer")
+        os.makedirs(self.app_dir, exist_ok=True)
+        self.config_file = os.path.join(self.app_dir, "bt_config.json")
+        self.records_file = os.path.join(self.app_dir, "print_records.csv")
         
         # BarTender 相关
         self.bt_app = None
@@ -69,11 +73,22 @@ class BarTenderPrintApp:
         self.excel_file_path = ""
         
         # 加载配置和记录
-        self.load_config()
+        missing_files = self.load_config()
         self.load_records()
         
         # 创建 UI
         self.create_ui()
+        
+        # 刷新历史和统计
+        self.refresh_history()
+        self.refresh_stats()
+        
+        # 弹窗提示缺失的文件
+        if missing_files:
+            self.root.after(500, lambda: messagebox.showwarning(
+                "配置文件缺失",
+                "以下配置的文件未找到：\n\n" + "\n".join(missing_files) + "\n\n请重新选择这些文件。"
+            ))
         
         # 绑定关闭事件
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -729,6 +744,15 @@ class BarTenderPrintApp:
     
     def load_config(self):
         """加载配置"""
+        # 初始化默认值
+        self.template_path_var = tk.StringVar()
+        self.datasource_var = tk.StringVar(value="IMEI1")
+        self.excel_path_var = tk.StringVar()
+        self.excel_column_var = tk.StringVar(value="IMEI1")
+        self.printer_var = tk.StringVar()
+        self.copies_var = tk.IntVar(value=1)
+        self.verify_excel_var = tk.BooleanVar(value=True)
+        
         missing_files = []
         
         try:
@@ -740,44 +764,36 @@ class BarTenderPrintApp:
                     template_path = config.get('template_path', '')
                     if template_path and not os.path.exists(template_path):
                         missing_files.append(f"BarTender 模板: {os.path.basename(template_path)}")
-                    self.template_path_var = tk.StringVar(value=template_path)
+                    self.template_path_var.set(template_path)
                     
                     # 加载数据源名称
-                    self.datasource_var = tk.StringVar(value=config.get('datasource', 'IMEI1'))
+                    self.datasource_var.set(config.get('datasource', 'IMEI1'))
                     
                     # 加载 Excel 路径
                     excel_path = config.get('excel_path', '')
                     if excel_path and not os.path.exists(excel_path):
                         missing_files.append(f"Excel 文件: {os.path.basename(excel_path)}")
-                    self.excel_path_var = tk.StringVar(value=excel_path)
+                    self.excel_path_var.set(excel_path)
                     self.excel_file_path = excel_path
                     
                     # 加载 Excel 列名
-                    self.excel_column_var = tk.StringVar(value=config.get('excel_column', 'IMEI1'))
+                    self.excel_column_var.set(config.get('excel_column', 'IMEI1'))
                     
                     # 加载打印机
-                    printer = config.get('printer', '')
-                    self.printer_var = tk.StringVar(value=printer)
+                    self.printer_var.set(config.get('printer', ''))
                     
                     # 加载打印份数
-                    copies = config.get('copies', 1)
-                    self.copies_var = tk.IntVar(value=copies)
+                    self.copies_var.set(config.get('copies', 1))
                     
                     # 加载校验选项
-                    self.verify_excel_var = tk.BooleanVar(value=config.get('verify_excel', True))
+                    self.verify_excel_var.set(config.get('verify_excel', True))
                     
-                    # 加载 Excel 数据（如果文件存在）
-                    if excel_path and os.path.exists(excel_path):
-                        self.root.after(100, self.load_excel_data)
+                    print(f"配置已加载: {config}")  # 调试日志
                     
-                # 弹窗提示缺失的文件
-                if missing_files:
-                    self.root.after(500, lambda: messagebox.showwarning(
-                        "配置文件缺失",
-                        "以下配置的文件未找到：\n\n" + "\n".join(missing_files) + "\n\n请重新选择这些文件。"
-                    ))
         except Exception as e:
             print(f"加载配置失败: {e}")
+        
+        return missing_files
     
     def save_config(self):
         """保存配置"""
