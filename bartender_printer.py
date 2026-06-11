@@ -454,6 +454,16 @@ class BarTenderPrintApp:
         threading.Thread(target=self._do_print, args=(imei_list, template_path, printer, datasource), daemon=True).start()
 
     def _do_print(self, imei_list, template_path, printer, datasource):
+        """后台打印线程"""
+        # 线程必须初始化 COM
+        pythoncom.CoInitialize()
+        try:
+            self._do_print_inner(imei_list, template_path, printer, datasource)
+        finally:
+            pythoncom.CoUninitialize()
+    
+    def _do_print_inner(self, imei_list, template_path, printer, datasource):
+        """实际打印逻辑"""
         ok = 0
         fail = 0
         for imei in imei_list:
