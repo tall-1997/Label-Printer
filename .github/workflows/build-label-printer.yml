@@ -1,0 +1,35 @@
+name: Build BarTender Printer EXE
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'bartender_printer.py'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller pywin32 openpyxl
+
+      - name: Build EXE
+        run: |
+          pyinstaller --onefile --windowed --name "bartender-printer" --collect-all tkinter --hidden-import tkinter --hidden-import tkinter.ttk --hidden-import tkinter.messagebox --hidden-import tkinter.filedialog --hidden-import win32com.client --hidden-import openpyxl bartender_printer.py
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: bartender-printer-exe
+          path: dist/bartender-printer.exe
+          if-no-files-found: error
