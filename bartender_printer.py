@@ -495,9 +495,8 @@ class BarTenderPrintApp:
             # 设置打印机
             self.bt_format.Printer = printer
             
-            # 打印（指定份数）
-            # PrintOut(promptUser, usePrinterSettings)
-            result = self.bt_format.PrintOut(False, False)
+            # 打印（不带参数调用）
+            result = self.bt_format.PrintOut()
             
             # 关闭模板
             self.bt_format.Close()
