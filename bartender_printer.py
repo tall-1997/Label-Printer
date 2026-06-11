@@ -310,16 +310,54 @@ class BarTenderPrintApp:
     
     def refresh_printers(self):
         """刷新打印机列表"""
+        printer_names = []
+        
         try:
             if sys.platform == 'win32':
-                import win32print
-                printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
-                printer_names = [p[2] for p in printers]
-                self.printer_combo['values'] = printer_names
-                if printer_names:
-                    self.printer_combo.current(0)
+                # 方法1: 使用 win32print
+                try:
+                    import win32print
+                    printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
+                    printer_names = [p[2] for p in printers]
+                except Exception:
+                    pass
+                
+                # 方法2: 使用 PowerShell 获取打印机
+                if not printer_names:
+                    try:
+                        import subprocess
+                        result = subprocess.run(
+                            ['powershell', '-Command', 'Get-Printer | Select-Object -ExpandProperty Name'],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if result.returncode == 0:
+                            printer_names = [p.strip() for p in result.stdout.split('\n') if p.strip()]
+                    except Exception:
+                        pass
+                
+                # 方法3: 使用 wmic 获取打印机
+                if not printer_names:
+                    try:
+                        import subprocess
+                        result = subprocess.run(
+                            ['wmic', 'printer', 'get', 'name'],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if result.returncode == 0:
+                            lines = result.stdout.split('\n')
+                            printer_names = [line.strip() for line in lines[1:] if line.strip()]
+                    except Exception:
+                        pass
         except Exception as e:
             self.update_status(f"获取打印机列表失败: {e}")
+        
+        # 更新打印机列表
+        self.printer_combo['values'] = printer_names
+        if printer_names:
+            self.printer_combo.current(0)
+            self.update_status(f"找到 {len(printer_names)} 台打印机")
+        else:
+            self.update_status("未找到打印机，请检查打印机连接")
     
     def browse_template(self):
         """浏览模板文件"""
