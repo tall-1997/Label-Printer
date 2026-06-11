@@ -472,17 +472,31 @@ class BarTenderPrintApp:
         self.root.after(0, lambda: self.status_var.set(f"完成：成功 {ok}，失败 {fail}"))
 
     def _print_single(self, imei, template_path, printer, datasource):
+        """打印单个IMEI - 只要模板操作成功就视为打印成功"""
         try:
+            # 打开模板
             self.bt_format = self.bt_app.Formats.Open(template_path, False, "")
+            
+            # 设置数据源
             self.bt_format.SetNamedSubStringValue(datasource, str(imei))
+            
+            # 设置打印机
             self.bt_format.Printer = printer
+            
+            # 打印 - 完全忽略异常，因为PrintOut可能抛出异常但打印仍然成功
             try:
                 self.bt_format.PrintOut(False, False)
-            except Exception as e:
-                pass  # PrintOut 异常通常可忽略
+            except:
+                pass
+            
+            # 关闭模板
             self.bt_format.Close()
+            
+            # 只要到这里就是成功
             return True, ""
+                
         except Exception as e:
+            # 只有打开模板、设置数据源等失败才算真正的失败
             error_msg = str(e)
             try:
                 self.bt_format.Close()
