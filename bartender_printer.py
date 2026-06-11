@@ -457,17 +457,33 @@ class BarTenderPrintApp:
         """后台打印线程"""
         # 线程必须初始化 COM
         pythoncom.CoInitialize()
+        bt_app = None
         try:
-            self._do_print_inner(imei_list, template_path, printer, datasource)
+            # 在线程中重新创建 BarTender 对象
+            print("[DEBUG] 线程中创建 BarTender 对象...")
+            bt_app = win32com.client.Dispatch("BarTender.Application")
+            bt_app.Visible = False
+            print("[DEBUG] 线程中 BarTender 对象创建成功")
+            
+            self._do_print_inner(bt_app, imei_list, template_path, printer, datasource)
+        except Exception as e:
+            print(f"[DEBUG] 线程异常: {e}")
+            self.root.after(0, lambda: self._update_status(f"线程错误: {e}", "error"))
         finally:
+            # 关闭 BarTender
+            if bt_app:
+                try:
+                    bt_app.Quit()
+                except:
+                    pass
             pythoncom.CoUninitialize()
     
-    def _do_print_inner(self, imei_list, template_path, printer, datasource):
+    def _do_print_inner(self, bt_app, imei_list, template_path, printer, datasource):
         """实际打印逻辑"""
         ok = 0
         fail = 0
         for imei in imei_list:
-            success, error_msg = self._print_single(imei, template_path, printer, datasource)
+            success, error_msg = self._print_single(bt_app, imei, template_path, printer, datasource)
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if success:
                 self.print_records.append(PrintRecord(imei, now, "PASS"))
@@ -485,32 +501,33 @@ class BarTenderPrintApp:
         self.root.after(0, lambda: self._update_status(f"\n完成：成功 {ok}，失败 {fail}", "info"))
         self.root.after(0, lambda: self.status_var.set(f"完成：成功 {ok}，失败 {fail}"))
 
-    def _print_single(self, imei, template_path, printer, datasource):
+    def _print_single(self, bt_app, imei, template_path, printer, datasource):
         """打印单个IMEI"""
+        bt_format = None
         try:
             print(f"[DEBUG] 准备打开模板: {template_path}")
             
             # 打开模板
-            self.bt_format = self.bt_app.Formats.Open(template_path, False, "")
+            bt_format = bt_app.Formats.Open(template_path, False, "")
             print(f"[DEBUG] 模板打开成功")
             
             # 设置数据源
-            self.bt_format.SetNamedSubStringValue(datasource, str(imei))
+            bt_format.SetNamedSubStringValue(datasource, str(imei))
             print(f"[DEBUG] 数据源设置成功: {datasource}={imei}")
             
             # 设置打印机
-            self.bt_format.Printer = printer
+            bt_format.Printer = printer
             print(f"[DEBUG] 打印机设置成功: {printer}")
             
             # 打印
             try:
-                self.bt_format.PrintOut(False, False)
+                bt_format.PrintOut(False, False)
                 print(f"[DEBUG] PrintOut 执行完成")
             except Exception as e:
                 print(f"[DEBUG] PrintOut 异常(通常可忽略): {e}")
             
             # 关闭模板
-            self.bt_format.Close()
+            bt_format.Close()
             print(f"[DEBUG] 模板关闭成功")
             
             return True, ""
@@ -518,10 +535,11 @@ class BarTenderPrintApp:
         except Exception as e:
             error_msg = str(e)
             print(f"[DEBUG] 打印失败: {error_msg}")
-            try:
-                self.bt_format.Close()
-            except:
-                pass
+            if bt_format:
+                try:
+                    bt_format.Close()
+                except:
+                    pass
             return False, error_msg
 
     def _clear_status(self):
