@@ -453,7 +453,7 @@ class BarTenderPrintApp:
         ok = 0
         fail = 0
         for imei in imei_list:
-            success = self._print_single(imei, template_path, printer, datasource)
+            success, error_msg = self._print_single(imei, template_path, printer, datasource)
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if success:
                 self.print_records.append(PrintRecord(imei, now, "PASS"))
@@ -462,7 +462,7 @@ class BarTenderPrintApp:
             else:
                 self.print_records.append(PrintRecord(imei, now, "FAIL"))
                 fail += 1
-                self.root.after(0, lambda m=f"FAIL {imei}": self._update_status(m, "error"))
+                self.root.after(0, lambda m=f"FAIL {imei} - {error_msg}": self._update_status(m, "error"))
 
         self._save_config()
         self._save_records()
@@ -479,16 +479,16 @@ class BarTenderPrintApp:
             try:
                 self.bt_format.PrintOut(False, False)
             except Exception as e:
-                print(f"PrintOut 异常（可忽略）: {e}")
+                pass  # PrintOut 异常通常可忽略
             self.bt_format.Close()
-            return True
+            return True, ""
         except Exception as e:
-            print(f"打印失败: {e}")
+            error_msg = str(e)
             try:
                 self.bt_format.Close()
             except:
                 pass
-            return False
+            return False, error_msg
 
     def _clear_status(self):
         self.print_status.config(state=tk.NORMAL)
