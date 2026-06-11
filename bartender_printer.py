@@ -511,21 +511,25 @@ class BarTenderPrintApp:
             self.bt_format.Printer = printer
             
             # 打印
-            self.bt_format.PrintOut(False, False)
+            try:
+                self.bt_format.PrintOut(False, False)
+            except Exception:
+                # PrintOut 可能抛出异常但打印仍然成功，忽略
+                pass
             
             # 关闭模板
             self.bt_format.Close()
             
-            # 打印成功（忽略返回值检查）
-            return True, "打印成功"
+            # 打印成功
+            return True, "PASS"
                 
         except Exception as e:
-            # 只有真正的异常才算失败
+            # 只有打开模板等真正失败才算失败
             try:
                 self.bt_format.Close()
             except:
                 pass
-            return False, str(e)
+            return False, f"FAIL: {str(e)}"
     
     def process_imei_list(self, imei_list):
         """处理 IMEI 列表"""
@@ -589,7 +593,8 @@ class BarTenderPrintApp:
                     return
         
         # 开始打印
-        self.update_status(f"开始打印 {len(imei_list)} 个 IMEI（每个 {copies} 份）...")
+        self.clear_print_status()
+        self.update_print_status(f"开始打印 {len(imei_list)} 个 IMEI（每个 {copies} 份）...", "info")
         
         success_count = 0
         fail_count = 0
@@ -605,10 +610,10 @@ class BarTenderPrintApp:
                         record = PrintRecord(imei, now, copies)
                         self.print_records.append(record)
                         success_count += 1
-                        self.update_print_status(f"✅ {imei} - 打印成功（{copies}份）")
+                        self.update_print_status(f"PASS {imei}（{copies}份）", "success")
                 else:
                     fail_count += 1
-                    self.update_print_status(f"❌ {imei} - {message}")
+                    self.update_print_status(f"FAIL {imei} - {message}", "error")
                     break  # 打印失败则跳过剩余份数
         
         # 保存记录
@@ -616,13 +621,27 @@ class BarTenderPrintApp:
         self.refresh_history()
         self.refresh_stats()
         
+        self.update_print_status(f"\n打印完成：成功 {success_count}，失败 {fail_count}", "info")
         self.update_status(f"打印完成：成功 {success_count}，失败 {fail_count}")
-        messagebox.showinfo("完成", f"打印完成！\n\n成功: {success_count}\n失败: {fail_count}")
     
-    def update_print_status(self, message):
-        """更新打印状态"""
+    def clear_print_status(self):
+        """清空打印状态"""
         self.print_status.config(state=tk.NORMAL)
-        self.print_status.insert(tk.END, message + "\n")
+        self.print_status.delete("1.0", tk.END)
+        self.print_status.config(state=tk.DISABLED)
+    
+    def update_print_status(self, message, status="info"):
+        """更新打印状态（带颜色）"""
+        self.print_status.config(state=tk.NORMAL)
+        
+        # 配置颜色标签
+        self.print_status.tag_configure("success", foreground="green")
+        self.print_status.tag_configure("error", foreground="red")
+        self.print_status.tag_configure("info", foreground="black")
+        
+        # 插入带颜色的文本
+        tag = status if status in ["success", "error", "info"] else "info"
+        self.print_status.insert(tk.END, message + "\n", tag)
         self.print_status.see(tk.END)
         self.print_status.config(state=tk.DISABLED)
         self.root.update_idletasks()
@@ -881,7 +900,7 @@ class IMEIInputDialog:
         """显示弹窗"""
         dialog = tk.Toplevel(self.parent)
         dialog.title("输入 IMEI")
-        dialog.geometry("500x450")
+        dialog.geometry("500x350")
         dialog.transient(self.parent)
         dialog.grab_set()
         
@@ -890,20 +909,30 @@ class IMEIInputDialog:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 说明
-        ttk.Label(main_frame, text="输入要打印的 IMEI（每行一个，或单个 IMEI 直接回车打印）：", font=("微软雅黑", 11)).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text="输入要打印的 IMEI（每行一个，单个 IMEI 可回车打印）：", font=("微软雅黑", 11)).pack(anchor=tk.W, pady=(0, 10))
         
-        # IMEI 输入框
-        imei_text = tk.Text(main_frame, wrap=tk.WORD)
-        imei_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        # IMEI 输入框 - 使用 Text 控件，初始高度为1行
+        imei_text = tk.Text(main_frame, wrap=tk.WORD, height=1, width=40)
+        imei_text.pack(fill=tk.X, pady=(0, 10))
         imei_text.focus_set()
+        
+        # 监听内容变化，自动调整高度
+        def on_content_change(event=None):
+            content = imei_text.get("1.0", tk.END)
+            lines = content.count('\n') + 1
+            new_height = min(max(lines, 1), 10)  # 最小1行，最大10行
+            imei_text.config(height=new_height)
+        
+        imei_text.bind('<KeyRelease>', on_content_change)
+        imei_text.bind('<Return>', on_content_change)
         
         # 快捷操作
         quick_frame = ttk.Frame(main_frame)
         quick_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(quick_frame, text="快捷操作：").pack(side=tk.LEFT)
-        ttk.Button(quick_frame, text="从剪贴板粘贴", command=lambda: self.paste_from_clipboard(imei_text)).pack(side=tk.LEFT, padx=(5, 0))
-        ttk.Button(quick_frame, text="清空", command=lambda: imei_text.delete("1.0", tk.END)).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(quick_frame, text="从剪贴板粘贴", command=lambda: [self.paste_from_clipboard(imei_text), on_content_change()]).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(quick_frame, text="清空", command=lambda: [imei_text.delete("1.0", tk.END), on_content_change()]).pack(side=tk.LEFT, padx=(5, 0))
         
         # 回车自动打印选项
         auto_print_frame = ttk.Frame(main_frame)
@@ -927,7 +956,6 @@ class IMEIInputDialog:
         def on_print():
             imei_text_content = imei_text.get("1.0", tk.END).strip()
             if not imei_text_content:
-                messagebox.showwarning("警告", "请输入 IMEI", parent=dialog)
                 return
             
             imei_list = [line.strip() for line in imei_text_content.split('\n') if line.strip()]
@@ -960,7 +988,7 @@ class IMEIInputDialog:
             clipboard = self.parent.clipboard_get()
             text_widget.insert(tk.END, clipboard)
         except Exception:
-            messagebox.showwarning("警告", "剪贴板为空或无法读取")
+            pass
 
 
 class SettingsWindow:
