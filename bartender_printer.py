@@ -478,11 +478,12 @@ class BarTenderPrintApp:
             self.bt_format.Printer = printer
             try:
                 self.bt_format.PrintOut(False, False)
-            except:
-                pass
+            except Exception as e:
+                print(f"PrintOut 异常（可忽略）: {e}")
             self.bt_format.Close()
             return True
-        except:
+        except Exception as e:
+            print(f"打印失败: {e}")
             try:
                 self.bt_format.Close()
             except:
