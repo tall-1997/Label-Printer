@@ -507,9 +507,22 @@ class BarTenderPrintApp:
         try:
             print(f"[DEBUG] 准备打开模板: {template_path}")
             
-            # 打开模板 - 使用 None 作为第三个参数
-            bt_format = bt_app.Formats.Open(template_path, False, None)
-            print(f"[DEBUG] 模板打开成功")
+            # 打开模板 - 尝试不同的参数组合
+            try:
+                # 尝试1: 只传文件名
+                bt_format = bt_app.Formats.Open(template_path)
+                print(f"[DEBUG] 模板打开成功 (方式1)")
+            except Exception as e1:
+                print(f"[DEBUG] 方式1失败: {e1}")
+                try:
+                    # 尝试2: 传两个参数
+                    bt_format = bt_app.Formats.Open(template_path, False)
+                    print(f"[DEBUG] 模板打开成功 (方式2)")
+                except Exception as e2:
+                    print(f"[DEBUG] 方式2失败: {e2}")
+                    # 尝试3: 传三个参数，第三个是0
+                    bt_format = bt_app.Formats.Open(template_path, False, 0)
+                    print(f"[DEBUG] 模板打开成功 (方式3)")
             
             # 设置数据源
             bt_format.SetNamedSubStringValue(datasource, str(imei))
