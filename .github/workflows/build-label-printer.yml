@@ -25,7 +25,19 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --onefile --windowed --name "bartender-printer" --collect-all tkinter --hidden-import tkinter --hidden-import tkinter.ttk --hidden-import tkinter.messagebox --hidden-import tkinter.filedialog --hidden-import win32com.client --hidden-import openpyxl bartender_printer.py
+          pyinstaller --onefile --windowed --name "bartender-printer" \
+            --collect-all tkinter \
+            --hidden-import tkinter \
+            --hidden-import tkinter.ttk \
+            --hidden-import tkinter.messagebox \
+            --hidden-import tkinter.filedialog \
+            --hidden-import win32com.client \
+            --hidden-import pythoncom \
+            --hidden-import openpyxl \
+            --hidden-import csv \
+            --hidden-import json \
+            --add-data "bartender_printer.py;." \
+            bartender_printer.py
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
