@@ -536,18 +536,18 @@ class BarTenderPrintApp:
         # 检查打印机
         printer = self.printer_var.get()
         if not printer:
-            messagebox.showerror("错误", "请选择打印机")
+            self.update_print_status("错误：请选择打印机", "error")
             return
         
         # 检查模板
         template_path = self.template_path_var.get()
         if not template_path or not os.path.exists(template_path):
-            messagebox.showerror("错误", "请选择有效的 BarTender 模板文件")
+            self.update_print_status("错误：请选择有效的 BarTender 模板文件", "error")
             return
         
         # 检查 BarTender
         if not self.bt_app:
-            messagebox.showerror("错误", "BarTender 未连接，请检查安装")
+            self.update_print_status("错误：BarTender 未连接，请检查安装", "error")
             return
         
         copies = self.copies_var.get()
@@ -557,40 +557,16 @@ class BarTenderPrintApp:
         if self.verify_excel_var.get() and self.excel_data:
             invalid_imei = [imei for imei in imei_list if not self.is_imei_in_excel(imei)]
             if invalid_imei:
-                result = messagebox.askyesnocancel(
-                    "发现无效 IMEI",
-                    f"发现 {len(invalid_imei)} 个 IMEI 不在 Excel 数据中！\n\n"
-                    f"无效 IMEI: {', '.join(invalid_imei[:5])}{'...' if len(invalid_imei) > 5 else ''}\n\n"
-                    "点击「是」继续打印全部\n"
-                    "点击「否」跳过无效 IMEI\n"
-                    "点击「取消」取消操作"
-                )
-                if result is None:
-                    return
-                elif not result:
-                    imei_list = [imei for imei in imei_list if self.is_imei_in_excel(imei)]
-                    if not imei_list:
-                        messagebox.showinfo("完成", "没有有效的 IMEI 可以打印")
-                        return
+                self.update_print_status(f"警告：发现 {len(invalid_imei)} 个 IMEI 不在 Excel 数据中", "error")
+                self.update_print_status(f"无效 IMEI: {', '.join(invalid_imei[:3])}{'...' if len(invalid_imei) > 3 else ''}", "error")
+                # 继续打印，不中断
         
         # 检查已打印的 IMEI
         printed_imei = [imei for imei in imei_list if self.is_imei_printed(imei)]
         if printed_imei:
-            result = messagebox.askyesnocancel(
-                "发现重复数据",
-                f"发现 {len(printed_imei)} 个 IMEI 已打印过！\n\n"
-                f"已打印 IMEI: {', '.join(printed_imei[:5])}{'...' if len(printed_imei) > 5 else ''}\n\n"
-                "点击「是」继续打印全部（包括已打印的）\n"
-                "点击「否」跳过已打印的 IMEI\n"
-                "点击「取消」取消操作"
-            )
-            if result is None:
-                return
-            elif not result:
-                imei_list = [imei for imei in imei_list if not self.is_imei_printed(imei)]
-                if not imei_list:
-                    messagebox.showinfo("完成", "所有 IMEI 都已打印过")
-                    return
+            self.update_print_status(f"警告：发现 {len(printed_imei)} 个 IMEI 已打印过", "error")
+            self.update_print_status(f"已打印: {', '.join(printed_imei[:3])}{'...' if len(printed_imei) > 3 else ''}", "error")
+            # 继续打印，不中断
         
         # 开始打印
         self.clear_print_status()
@@ -607,14 +583,20 @@ class BarTenderPrintApp:
                 if success:
                     if copy_idx == 0:  # 只在第一次打印成功时记录
                         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        record = PrintRecord(imei, now, copies)
+                        record = PrintRecord(imei, now, copies, "PASS")
                         self.print_records.append(record)
                         success_count += 1
                         self.update_print_status(f"PASS {imei}（{copies}份）", "success")
                 else:
                     fail_count += 1
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    record = PrintRecord(imei, now, copies, message)
+                    self.print_records.append(record)
                     self.update_print_status(f"FAIL {imei} - {message}", "error")
                     break  # 打印失败则跳过剩余份数
+        
+        # 保存配置（打印机选择等）
+        self.save_config()
         
         # 保存记录
         self.save_records()
