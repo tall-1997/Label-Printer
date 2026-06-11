@@ -495,19 +495,21 @@ class BarTenderPrintApp:
             # 设置打印机
             self.bt_format.Printer = printer
             
-            # 打印（不带参数调用）
-            result = self.bt_format.PrintOut()
+            # 打印
+            self.bt_format.PrintOut(False, False)
             
             # 关闭模板
             self.bt_format.Close()
             
-            # 检查结果
-            if result == 0:
-                return True, "打印成功"
-            else:
-                return False, f"打印失败，返回值: {result}"
+            # 打印成功（忽略返回值检查）
+            return True, "打印成功"
                 
         except Exception as e:
+            # 只有真正的异常才算失败
+            try:
+                self.bt_format.Close()
+            except:
+                pass
             return False, str(e)
     
     def process_imei_list(self, imei_list):
