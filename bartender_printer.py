@@ -560,23 +560,46 @@ class BarTenderPrintApp:
             self.update_print_status("错误：BarTender 未连接，请检查安装", "error")
             return
         
-        copies = self.copies_var.get()
         datasource_name = self.datasource_var.get()
         
         # 校验 Excel 数据
         if self.verify_excel_var.get() and self.excel_data:
             invalid_imei = [imei for imei in imei_list if not self.is_imei_in_excel(imei)]
             if invalid_imei:
-                self.update_print_status(f"警告：发现 {len(invalid_imei)} 个 IMEI 不在 Excel 数据中", "error")
-                self.update_print_status(f"无效 IMEI: {', '.join(invalid_imei[:3])}{'...' if len(invalid_imei) > 3 else ''}", "error")
-                # 继续打印，不中断
+                result = messagebox.askyesnocancel(
+                    "数据不在文件中",
+                    f"发现 {len(invalid_imei)} 个 IMEI 不在 Excel 数据文件中！\n\n"
+                    f"无效 IMEI:\n{chr(10).join(invalid_imei[:5])}{'...' if len(invalid_imei) > 5 else ''}\n\n"
+                    "点击「是」继续打印全部\n"
+                    "点击「否」跳过无效 IMEI，只打印有效的\n"
+                    "点击「取消」取消打印"
+                )
+                if result is None:  # 取消
+                    return
+                elif not result:  # 跳过无效
+                    imei_list = [imei for imei in imei_list if self.is_imei_in_excel(imei)]
+                    if not imei_list:
+                        self.update_print_status("没有有效的 IMEI 可以打印", "error")
+                        return
         
         # 检查已打印的 IMEI
         printed_imei = [imei for imei in imei_list if self.is_imei_printed(imei)]
         if printed_imei:
-            self.update_print_status(f"警告：发现 {len(printed_imei)} 个 IMEI 已打印过", "error")
-            self.update_print_status(f"已打印: {', '.join(printed_imei[:3])}{'...' if len(printed_imei) > 3 else ''}", "error")
-            # 继续打印，不中断
+            result = messagebox.askyesnocancel(
+                "数据重复",
+                f"发现 {len(printed_imei)} 个 IMEI 已经打印过！\n\n"
+                f"已打印的 IMEI:\n{chr(10).join(printed_imei[:5])}{'...' if len(printed_imei) > 5 else ''}\n\n"
+                "点击「是」继续打印全部（包括已打印的）\n"
+                "点击「否」跳过已打印的，只打印新的\n"
+                "点击「取消」取消打印"
+            )
+            if result is None:  # 取消
+                return
+            elif not result:  # 跳过已打印
+                imei_list = [imei for imei in imei_list if not self.is_imei_printed(imei)]
+                if not imei_list:
+                    self.update_print_status("所有 IMEI 都已打印过", "error")
+                    return
         
         # 开始打印
         self.clear_print_status()
