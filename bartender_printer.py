@@ -489,12 +489,16 @@ class BarTenderPrintApp:
         """打印单个IMEI"""
         bt_format = None
         try:
-            print(f"[DEBUG] 准备打开模板: {template_path}")
-            print(f"[DEBUG] bt_app 类型: {type(self.bt_app)}")
-            print(f"[DEBUG] bt_app.Formats 类型: {type(self.bt_app.Formats)}")
+            debug_msg = f"准备打开模板: {template_path}"
+            print(f"[DEBUG] {debug_msg}")
+            self.root.after(0, lambda: self._update_status(debug_msg, "info"))
             
-            # 打开模板 - 不传第三个参数
-            bt_format = self.bt_app.Formats.Open(template_path, False)
+            # 检查 bt_app
+            if not self.bt_app:
+                return False, "BarTender 未初始化"
+            
+            # 打开模板 - 使用原始的三个参数方式
+            bt_format = self.bt_app.Formats.Open(template_path, False, "")
             print(f"[DEBUG] 模板打开成功")
             
             # 设置数据源
@@ -521,7 +525,7 @@ class BarTenderPrintApp:
         except Exception as e:
             error_msg = str(e)
             print(f"[DEBUG] 打印失败: {error_msg}")
-            print(f"[DEBUG] 错误类型: {type(e)}")
+            self.root.after(0, lambda: self._update_status(f"打印失败: {error_msg}", "error"))
             if bt_format:
                 try:
                     bt_format.Close()
