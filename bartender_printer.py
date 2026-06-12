@@ -523,8 +523,11 @@ class BarTenderPrintApp:
             return True, ""
                 
         except Exception as e:
-            error_msg = str(e)
+            import traceback
+            error_detail = traceback.format_exc()
+            error_msg = f"{type(e).__name__}: {e}"
             print(f"[DEBUG] 打印失败: {error_msg}")
+            print(f"[DEBUG] 详细错误:\n{error_detail}")
             self.root.after(0, lambda: self._update_status(f"打印失败: {error_msg}", "error"))
             if bt_format:
                 try:
