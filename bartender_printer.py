@@ -448,21 +448,12 @@ class BarTenderPrintApp:
                     self._update_status("所有 IMEI 都已打印过", "error")
                     return
 
-        # 后台打印
+        # BarTender COM 对象必须在创建它的线程中使用。
         self._clear_status()
         self._update_status(f"开始打印 {len(imei_list)} 个 IMEI...", "info")
-        threading.Thread(target=self._do_print, args=(imei_list, template_path, printer, datasource), daemon=True).start()
+        self._do_print(imei_list, template_path, printer, datasource)
 
     def _do_print(self, imei_list, template_path, printer, datasource):
-        """后台打印线程"""
-        # 线程必须初始化 COM
-        pythoncom.CoInitialize()
-        try:
-            self._do_print_inner(imei_list, template_path, printer, datasource)
-        finally:
-            pythoncom.CoUninitialize()
-    
-    def _do_print_inner(self, imei_list, template_path, printer, datasource):
         """实际打印逻辑"""
         ok = 0
         fail = 0
@@ -480,10 +471,10 @@ class BarTenderPrintApp:
 
         self._save_config()
         self._save_records()
-        self.root.after(0, self.refresh_history)
-        self.root.after(0, self.refresh_stats)
-        self.root.after(0, lambda: self._update_status(f"\n完成：成功 {ok}，失败 {fail}", "info"))
-        self.root.after(0, lambda: self.status_var.set(f"完成：成功 {ok}，失败 {fail}"))
+        self.refresh_history()
+        self.refresh_stats()
+        self._update_status(f"\n完成：成功 {ok}，失败 {fail}", "info")
+        self.status_var.set(f"完成：成功 {ok}，失败 {fail}")
 
     def _print_single(self, imei, template_path, printer, datasource):
         """打印单个IMEI"""
@@ -491,7 +482,7 @@ class BarTenderPrintApp:
         try:
             debug_msg = f"准备打开模板: {template_path}"
             print(f"[DEBUG] {debug_msg}")
-            self.root.after(0, lambda: self._update_status(debug_msg, "info"))
+            self._update_status(debug_msg, "info")
             
             # 检查 bt_app
             if not self.bt_app:
@@ -528,7 +519,7 @@ class BarTenderPrintApp:
             error_msg = f"{type(e).__name__}: {e}"
             print(f"[DEBUG] 打印失败: {error_msg}")
             print(f"[DEBUG] 详细错误:\n{error_detail}")
-            self.root.after(0, lambda: self._update_status(f"打印失败: {error_msg}", "error"))
+            self._update_status(f"打印失败: {error_msg}", "error")
             if bt_format:
                 try:
                     bt_format.Close()
