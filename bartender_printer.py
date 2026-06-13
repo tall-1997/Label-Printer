@@ -37,7 +37,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.4.3"
+    VERSION = "v2.4.4"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -489,8 +489,7 @@ class BarTenderPrintApp:
             if not self.bt_app:
                 return False, "BarTender 未初始化"
             
-            # 打开模板 - 使用原始的三个参数方式
-            bt_format = self.bt_app.Formats.Open(template_path, False, "")
+            bt_format = self._open_template(template_path)
             print(f"[DEBUG] 模板打开成功")
             
             # 设置数据源
@@ -527,6 +526,25 @@ class BarTenderPrintApp:
                 except:
                     pass
             return False, error_msg
+
+    def _open_template(self, template_path):
+        formats = self.bt_app.Formats
+        attempts = (
+            ("Open(path, False)", lambda: formats.Open(template_path, False)),
+            ("Open(path)", lambda: formats.Open(template_path)),
+            ("Open(path, False, '')", lambda: formats.Open(template_path, False, "")),
+            ("Open(path, False, 0)", lambda: formats.Open(template_path, False, 0)),
+        )
+        errors = []
+        for label, opener in attempts:
+            try:
+                self._update_status(f"尝试打开模板: {label}", "info")
+                return opener()
+            except Exception as e:
+                error_msg = f"{label} => {type(e).__name__}: {e}"
+                errors.append(error_msg)
+                print(f"[DEBUG] {error_msg}")
+        raise RuntimeError("; ".join(errors))
 
     def _clear_status(self):
         self.print_status.config(state=tk.NORMAL)
