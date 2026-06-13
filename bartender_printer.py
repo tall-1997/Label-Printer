@@ -37,7 +37,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.4.4"
+    VERSION = "v2.4.5"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -528,22 +528,41 @@ class BarTenderPrintApp:
             return False, error_msg
 
     def _open_template(self, template_path):
-        formats = self.bt_app.Formats
-        attempts = (
-            ("Open(path, False)", lambda: formats.Open(template_path, False)),
-            ("Open(path)", lambda: formats.Open(template_path)),
-            ("Open(path, False, '')", lambda: formats.Open(template_path, False, "")),
-            ("Open(path, False, 0)", lambda: formats.Open(template_path, False, 0)),
-        )
         errors = []
-        for label, opener in attempts:
+
+        def try_open(label, opener):
             try:
                 self._update_status(f"尝试打开模板: {label}", "info")
                 return opener()
-            except Exception as e:
+            except BaseException as e:
                 error_msg = f"{label} => {type(e).__name__}: {e}"
                 errors.append(error_msg)
                 print(f"[DEBUG] {error_msg}")
+                return None
+
+        formats = getattr(self.bt_app, "Formats", None)
+        if formats is not None:
+            for label, opener in (
+                ("Formats.Open(path, False)", lambda: formats.Open(template_path, False)),
+                ("Formats.Open(path)", lambda: formats.Open(template_path)),
+                ("Formats.Open(path, False, '')", lambda: formats.Open(template_path, False, "")),
+                ("Formats.Open(path, False, 0)", lambda: formats.Open(template_path, False, 0)),
+            ):
+                opened = try_open(label, opener)
+                if opened is not None:
+                    return opened
+
+        documents = getattr(self.bt_app, "Documents", None)
+        if documents is not None:
+            for label, opener in (
+                ("Documents.Open(path)", lambda: documents.Open(template_path)),
+                ("Documents.Open(path, False)", lambda: documents.Open(template_path, False)),
+                ("Documents.Open(path, False, '')", lambda: documents.Open(template_path, False, "")),
+            ):
+                opened = try_open(label, opener)
+                if opened is not None:
+                    return opened
+
         raise RuntimeError("; ".join(errors))
 
     def _clear_status(self):
