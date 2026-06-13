@@ -16,6 +16,7 @@ import threading
 
 try:
     import win32com.client
+    import win32com.client.dynamic
     import pythoncom
     HAS_WIN32COM = True
 except ImportError:
@@ -36,7 +37,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.2.7"
+    VERSION = "v2.4.3"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -266,7 +267,7 @@ class BarTenderPrintApp:
         try:
             pythoncom.CoInitialize()
             print("[DEBUG] 正在创建 BarTender.Application...")
-            self.bt_app = win32com.client.Dispatch("BarTender.Application")
+            self.bt_app = win32com.client.dynamic.Dispatch("BarTender.Application")
             print(f"[DEBUG] BarTender 对象: {self.bt_app}")
             self.bt_app.Visible = False
             print("[DEBUG] Visible 设置完成")
