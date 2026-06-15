@@ -37,7 +37,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.4.7"
+    VERSION = "v2.4.8"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -489,7 +489,7 @@ class BarTenderPrintApp:
             if not self.bt_app:
                 return False, "BarTender 未初始化"
             
-            bt_format = self._open_template(template_path)
+            bt_format = self._open_template(template_path, printer)
             print(f"[DEBUG] 模板打开成功")
             
             # 设置数据源
@@ -527,9 +527,14 @@ class BarTenderPrintApp:
                     pass
             return False, error_msg
 
-    def _open_template(self, template_path):
+    def _open_template(self, template_path, printer):
         template_path = os.path.abspath(template_path).replace('/', '\\')
         errors = []
+        missing = None
+        try:
+            missing = win32com.client.VARIANT(pythoncom.VT_ERROR, pythoncom.DISP_E_PARAMNOTFOUND)
+        except Exception:
+            pass
 
         def try_open(label, opener):
             try:
@@ -547,6 +552,7 @@ class BarTenderPrintApp:
                 ("Documents.Open(path)", lambda: documents.Open(template_path)),
                 ("Documents.Open(path, False)", lambda: documents.Open(template_path, False)),
                 ("Documents.Open(path, False, 0)", lambda: documents.Open(template_path, False, 0)),
+                ("Documents.Open(path, False, printer)", lambda: documents.Open(template_path, False, printer)),
             ):
                 opened = try_open(label, opener)
                 if opened is not None:
@@ -554,10 +560,16 @@ class BarTenderPrintApp:
 
         formats = getattr(self.bt_app, "Formats", None)
         if formats is not None:
-            for label, opener in (
+            attempts = [
+                ("Formats.Open(path, False, printer)", lambda: formats.Open(template_path, False, printer)),
                 ("Formats.Open(path)", lambda: formats.Open(template_path)),
                 ("Formats.Open(path, False)", lambda: formats.Open(template_path, False)),
-            ):
+                ("Formats.Open(path, False, '')", lambda: formats.Open(template_path, False, "")),
+            ]
+            if missing is not None:
+                attempts.insert(1, ("Formats.Open(path, False, missing)", lambda: formats.Open(template_path, False, missing)))
+                attempts.insert(2, ("Formats.Open(path, missing, missing)", lambda: formats.Open(template_path, missing, missing)))
+            for label, opener in attempts:
                 opened = try_open(label, opener)
                 if opened is not None:
                     return opened
