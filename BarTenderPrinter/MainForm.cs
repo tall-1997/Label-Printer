@@ -639,8 +639,8 @@ namespace BarTenderPrinter
 
         private void SetStatus(string text)
         {
-            if (lblStatusStrip.InvokeRequired)
-                lblStatusStrip.Invoke((Action)(() => lblStatusStrip.Text = text));
+            if (statusStrip.InvokeRequired)
+                statusStrip.Invoke((Action)(() => lblStatusStrip.Text = text));
             else
                 lblStatusStrip.Text = text;
         }
