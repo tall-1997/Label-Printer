@@ -37,7 +37,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.4.6"
+    VERSION = "v2.4.7"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -528,6 +528,7 @@ class BarTenderPrintApp:
             return False, error_msg
 
     def _open_template(self, template_path):
+        template_path = os.path.abspath(template_path).replace('/', '\\')
         errors = []
 
         def try_open(label, opener):
@@ -554,9 +555,8 @@ class BarTenderPrintApp:
         formats = getattr(self.bt_app, "Formats", None)
         if formats is not None:
             for label, opener in (
-                ("Formats.Open(path, False)", lambda: formats.Open(template_path, False)),
                 ("Formats.Open(path)", lambda: formats.Open(template_path)),
-                ("Formats.Open(path, False, 0)", lambda: formats.Open(template_path, False, 0)),
+                ("Formats.Open(path, False)", lambda: formats.Open(template_path, False)),
             ):
                 opened = try_open(label, opener)
                 if opened is not None:
