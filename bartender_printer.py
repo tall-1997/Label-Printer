@@ -39,7 +39,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.6.1"
+    VERSION = "v2.6.2"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -288,7 +288,7 @@ class BarTenderPrintApp:
         try:
             pythoncom.CoInitialize()
             print("[DEBUG] 正在创建 BarTender.Application...")
-            self.bt_app = win32com.client.dynamic.Dispatch("BarTender.Application")
+            self.bt_app = win32com.client.gencache.EnsureDispatch("BarTender.Application")
             print(f"[DEBUG] BarTender 对象: {self.bt_app}")
             self.bt_app.Visible = False
             print("[DEBUG] Visible 设置完成")
@@ -489,11 +489,17 @@ class BarTenderPrintApp:
 
     def _do_print(self, imei_list, template_path, printer, datasource, copies):
         """实际打印逻辑（后台线程执行）"""
+        pythoncom.CoInitialize()
+        try:
+            self._do_print_inner(imei_list, template_path, printer, datasource, copies)
+        finally:
+            pythoncom.CoUninitialize()
+
+    def _do_print_inner(self, imei_list, template_path, printer, datasource, copies):
         ok = 0
         fail = 0
-        results = self._print_batch_vbs(imei_list, template_path, printer, datasource, copies)
         for imei in imei_list:
-            success, error_msg = results.get(str(imei), (False, "未收到打印结果"))
+            success, error_msg = self._print_single(imei, template_path, printer, datasource, copies)
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if success:
                 self.print_records.append(PrintRecord(imei, now, "PASS"))
@@ -511,20 +517,32 @@ class BarTenderPrintApp:
         self.root.after(0, lambda: self._update_status(f"\n完成：成功 {ok}，失败 {fail}", "info"))
         self.root.after(0, lambda: self.status_var.set(f"完成：成功 {ok}，失败 {fail}"))
 
-    def _print_single(self, imei, template_path, printer, datasource):
-        """打印单个IMEI"""
+    def _print_single(self, imei, template_path, printer, datasource, copies):
+        """打印单个IMEI（直接pywin32调用）"""
         try:
             debug_msg = f"准备打开模板: {template_path}"
             print(f"[DEBUG] {debug_msg}")
-            self._update_status(debug_msg, "info")
-            return self._print_single_vbs(imei, template_path, printer, datasource)
+            bt_format = self.bt_app.Formats.Open(template_path, False, "")
+            print(f"[DEBUG] 模板打开成功")
+            bt_format.SetNamedSubStringValue(datasource, str(imei))
+            print(f"[DEBUG] 数据源设置成功: {datasource}={imei}")
+            bt_format.Printer = printer
+            print(f"[DEBUG] 打印机设置成功: {printer}")
+            bt_format.PrintSetup.IdenticalCopiesOfLabel = copies
+            try:
+                bt_format.PrintOut(False, False)
+                print(f"[DEBUG] PrintOut 执行完成")
+            except Exception as e:
+                print(f"[DEBUG] PrintOut 异常(通常可忽略): {e}")
+            bt_format.Close()
+            print(f"[DEBUG] 模板关闭成功")
+            return True, ""
         except Exception as e:
             import traceback
             error_detail = traceback.format_exc()
             error_msg = f"{type(e).__name__}: {e}"
             print(f"[DEBUG] 打印失败: {error_msg}")
             print(f"[DEBUG] 详细错误:\n{error_detail}")
-            self._update_status(f"打印失败: {error_msg}", "error")
             return False, error_msg
 
     def _vbs_string(self, value):
