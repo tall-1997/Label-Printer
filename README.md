@@ -2,6 +2,8 @@
 
 BarTender 标签打印工具，集成 Seagull BarTender SDK，支持 .btw 模板自动化打印。
 
+![界面预览](assets/preview.png)
+
 ## 最新版本
 
 **[v4.2.0-csharp](https://github.com/tall-1997/Label-Printer/releases/tag/v4.2.0-csharp)** - C# WinForms 原生版（推荐）
