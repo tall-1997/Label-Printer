@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace BarTenderPrinter
@@ -35,12 +36,10 @@ namespace BarTenderPrinter
             }
         }
 
-        public PrintResult Print(string templatePath, string datasource, string imei, string printer, int copies)
+        public PrintResult Print(string templatePath, DataSourceField[] fields, string printer, int copies)
         {
             if (!_connected || _btApp == null)
-            {
                 return new PrintResult(false, "BarTender 未连接");
-            }
 
             dynamic btFormat = null;
             try
@@ -49,21 +48,23 @@ namespace BarTenderPrinter
                 btFormat = _btApp.Formats.Open(templatePath, false, "");
                 LoggerService.Info("模板打开成功");
 
-                btFormat.SetNamedSubStringValue(datasource, imei);
-                LoggerService.Info($"数据源设置成功: {datasource}={imei}");
+                foreach (var f in fields)
+                {
+                    btFormat.SetNamedSubStringValue(f.FieldName, f.Value);
+                    LoggerService.Info($"数据源设置: {f.FieldName}={f.Value}");
+                }
 
                 btFormat.Printer = printer;
                 LoggerService.Info($"打印机设置成功: {printer}");
 
                 btFormat.PrintSetup.IdenticalCopiesOfLabel = copies;
-                LoggerService.Info($"打印份数设置成功: {copies}");
+                LoggerService.Info($"打印份数: {copies}");
 
                 btFormat.PrintOut(false, false);
                 LoggerService.Info("PrintOut 执行完成");
 
                 btFormat.Close();
                 LoggerService.Info("模板关闭成功");
-
                 return new PrintResult(true, "");
             }
             catch (Exception ex)
@@ -74,13 +75,37 @@ namespace BarTenderPrinter
             }
         }
 
+        public string ExportPreview(string templatePath, int width = 400, int height = 300)
+        {
+            if (!_connected || _btApp == null) return null;
+            dynamic btFormat = null;
+            try
+            {
+                btFormat = _btApp.Formats.Open(templatePath, false, "");
+                var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
+                btFormat.ExportImageToFile(tempPath, 3, 0, 0, width, height);
+                btFormat.Close();
+                return tempPath;
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error($"预览导出失败: {ex.Message}", ex);
+                try { btFormat?.Close(); } catch { }
+                return null;
+            }
+        }
+
+        public string[] GetAvailableTemplates(string directory)
+        {
+            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+                return new string[0];
+            return Directory.GetFiles(directory, "*.btw", SearchOption.TopDirectoryOnly);
+        }
+
         public string[] GetPrinters()
         {
             try
             {
-                if (System.Drawing.Printing.PrinterSettings.InstalledPrinters.Count == 0)
-                    return new string[0];
-
                 var printers = new string[System.Drawing.Printing.PrinterSettings.InstalledPrinters.Count];
                 System.Drawing.Printing.PrinterSettings.InstalledPrinters.CopyTo(printers, 0);
                 return printers;
@@ -107,17 +132,26 @@ namespace BarTenderPrinter
             _connected = false;
         }
 
-        public void Dispose()
-        {
-            Disconnect();
-        }
+        public void Dispose() => Disconnect();
+    }
+
+    public class DataSourceField
+    {
+        public string DisplayName { get; set; }
+        public string FieldName { get; set; }
+        public string Value { get; set; }
+    }
+
+    public class DataSourceConfig
+    {
+        public string DisplayName { get; set; }
+        public string FieldName { get; set; }
     }
 
     public class PrintResult
     {
         public bool Success { get; }
         public string ErrorMessage { get; }
-
         public PrintResult(bool success, string errorMessage)
         {
             Success = success;
