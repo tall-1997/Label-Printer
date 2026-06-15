@@ -47,7 +47,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.6.2"
+    VERSION = "v2.6.4"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -296,7 +296,7 @@ class BarTenderPrintApp:
         try:
             pythoncom.CoInitialize()
             print("[DEBUG] 正在创建 BarTender.Application...")
-            self.bt_app = win32com.client.Dispatch("BarTender.Application")
+            self.bt_app = win32com.client.dynamic.Dispatch("BarTender.Application")
             print(f"[DEBUG] BarTender 对象: {self.bt_app}")
             self.bt_app.Visible = False
             print("[DEBUG] Visible 设置完成")
@@ -526,31 +526,14 @@ class BarTenderPrintApp:
         self.root.after(0, lambda: self.status_var.set(f"完成：成功 {ok}，失败 {fail}"))
 
     def _print_single(self, imei, template_path, printer, datasource, copies):
-        """打印单个IMEI（直接pywin32调用）"""
+        """打印单个IMEI（通过VBScript调用BarTender COM）"""
         try:
-            debug_msg = f"准备打开模板: {template_path}"
-            print(f"[DEBUG] {debug_msg}")
-            bt_format = self.bt_app.Formats.Open(template_path, False, "")
-            print(f"[DEBUG] 模板打开成功")
-            bt_format.SetNamedSubStringValue(datasource, str(imei))
-            print(f"[DEBUG] 数据源设置成功: {datasource}={imei}")
-            bt_format.Printer = printer
-            print(f"[DEBUG] 打印机设置成功: {printer}")
-            bt_format.PrintSetup.IdenticalCopiesOfLabel = copies
-            try:
-                bt_format.PrintOut(False, False)
-                print(f"[DEBUG] PrintOut 执行完成")
-            except Exception as e:
-                print(f"[DEBUG] PrintOut 异常(通常可忽略): {e}")
-            bt_format.Close()
-            print(f"[DEBUG] 模板关闭成功")
-            return True, ""
+            return self._print_single_vbs(imei, template_path, printer, datasource, copies)
         except Exception as e:
             import traceback
-            error_detail = traceback.format_exc()
             error_msg = f"{type(e).__name__}: {e}"
             print(f"[DEBUG] 打印失败: {error_msg}")
-            print(f"[DEBUG] 详细错误:\n{error_detail}")
+            print(f"[DEBUG] 详细错误:\n{traceback.format_exc()}")
             return False, error_msg
 
     def _vbs_string(self, value):
@@ -679,7 +662,7 @@ WScript.Quit 0
                     except Exception:
                         pass
 
-    def _print_single_vbs(self, imei, template_path, printer, datasource):
+    def _print_single_vbs(self, imei, template_path, printer, datasource, copies):
         template_path = os.path.abspath(template_path).replace('/', '\\')
         script = f'''
 On Error Resume Next
@@ -717,6 +700,11 @@ If Err.Number <> 0 Then
   WScript.Quit 4
 End If
 Err.Clear
+btFormat.PrintSetup.IdenticalCopiesOfLabel = {int(copies)}
+If Err.Number <> 0 Then
+  Err.Clear
+End If
+Err.Clear
 btFormat.PrintOut False, False
 If Err.Number <> 0 Then
   WScript.Echo "WARN: PrintOut: " & Err.Number & " " & Err.Description
@@ -732,18 +720,22 @@ WScript.Quit 0
             with tempfile.NamedTemporaryFile('w', suffix='.vbs', delete=False, encoding='utf-16') as f:
                 script_file = f.name
                 f.write(script)
+            startupinfo = None
+            creationflags = 0
+            if sys.platform == 'win32':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
             result = subprocess.run(
                 ['cscript.exe', '//NoLogo', script_file],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=120,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
             )
             output = (result.stdout or '').strip()
             error_output = (result.stderr or '').strip()
-            if output:
-                self._update_status(output, "info")
-            if error_output:
-                self._update_status(error_output, "error")
             output_lines = [line.strip() for line in output.splitlines()]
             if result.returncode == 0 or "OK" in output_lines:
                 return True, ""
