@@ -25,13 +25,6 @@ namespace BarTenderPrinter
         private string _previewTempFile = null;
         private List<string> _excelData = new List<string>();
 
-        private class DataSourceItem
-        {
-            public string Name { get; set; }
-            public string Field { get; set; }
-            public bool Enabled { get; set; }
-        }
-
         public MainForm()
         {
             InitializeComponent();
@@ -495,11 +488,13 @@ namespace BarTenderPrinter
             _dataSources = new List<DataSourceItem>();
             for (int i = 0; i < count; i++)
             {
+                var enabled = true;
+                bool.TryParse(IniReadValue($"DS{i}", "Enabled", path), out enabled);
                 _dataSources.Add(new DataSourceItem
                 {
                     Name = IniReadValue($"DS{i}", "Name", path),
                     Field = IniReadValue($"DS{i}", "Field", path),
-                    bool.TryParse(IniReadValue($"DS{i}", "Enabled", path), out bool en) ? en : true
+                    Enabled = enabled
                 });
             }
             if (_dataSources.Count == 0)
