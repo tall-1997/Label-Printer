@@ -15,15 +15,13 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v4.1.0";
+        private readonly string _version = "v4.2.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
-        private Panel[] _inputPanels = new Panel[0];
         private TextBox[] _inputTextBoxes = new TextBox[0];
         private string _templatesFolder = "";
         private string _selectedTemplatePath = "";
         private string _previewTempFile = null;
-        private List<string> _excelData = new List<string>();
 
         public MainForm()
         {
@@ -33,38 +31,21 @@ namespace BarTenderPrinter
                 ".bartender-printer", "config.ini");
             Text = $"BarTender 标签打印工具 {_version}";
             MiuiTheme.ApplyTheme(this);
+            Load += MainForm_Load;
+            FormClosing += (s, e) => { CleanupPreview(); _btService.Dispose(); };
         }
-
-        #region Load / Close
 
         private void MainForm_Load(object sender, EventArgs e)
         {
-            if (File.Exists(_configFile))
-                LoadConfig(_configFile);
-            else
-            {
-                _dataSources = new List<DataSourceItem>
-                {
-                    new DataSourceItem { Name = "IMEI", Field = "IMEI1", Enabled = true }
-                };
-                _templatesFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "templates");
-                try { if (!Directory.Exists(_templatesFolder)) Directory.CreateDirectory(_templatesFolder); } catch { }
-            }
+            LoadConfig(_configFile);
             PopulateTemplateList(_templatesFolder);
             RebuildInputFields();
             _history.Load();
+            RefreshPrinters();
             RefreshStats();
             InitBarTender();
             AddLog("系统启动完成", "INFO");
         }
-
-        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
-        {
-            CleanupPreview();
-            _btService.Dispose();
-        }
-
-        #endregion
 
         #region BarTender
 
@@ -72,23 +53,36 @@ namespace BarTenderPrinter
         {
             if (_btService.Connect())
                 SetStatus("BarTender 已连接");
-            else
-            {
-                SetStatus("BarTender 连接失败");
-                AddLog("BarTender 连接失败，请检查是否已安装", "ERROR");
-            }
+            else { SetStatus("BarTender 连接失败"); AddLog("BarTender 连接失败", "ERROR"); }
         }
 
         #endregion
 
-        #region Template Selection & Preview
+        #region Printer & Copies
+
+        private void RefreshPrinters()
+        {
+            cmbPrinter.Items.Clear();
+            foreach (var p in _btService.GetPrinters())
+                cmbPrinter.Items.Add(p);
+            var saved = IniReadValue("General", "Printer", _configFile);
+            if (!string.IsNullOrEmpty(saved) && cmbPrinter.Items.Contains(saved))
+                cmbPrinter.SelectedItem = saved;
+            else if (cmbPrinter.Items.Count > 0)
+                cmbPrinter.SelectedIndex = 0;
+        }
+
+        private void btnRefreshPrinter_Click(object sender, EventArgs e) => RefreshPrinters();
+
+        #endregion
+
+        #region Template
 
         private void btnBrowseDir_Click(object sender, EventArgs e)
         {
             using (var fbd = new FolderBrowserDialog())
             {
-                if (!string.IsNullOrEmpty(_templatesFolder) && Directory.Exists(_templatesFolder))
-                    fbd.SelectedPath = _templatesFolder;
+                if (Directory.Exists(_templatesFolder)) fbd.SelectedPath = _templatesFolder;
                 if (fbd.ShowDialog(this) == DialogResult.OK)
                 {
                     _templatesFolder = fbd.SelectedPath;
@@ -102,99 +96,57 @@ namespace BarTenderPrinter
         {
             cmbTemplate.Items.Clear();
             if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
-            {
-                lblSelectedTemplate.Text = "未找到 .btw 模板";
-                _selectedTemplatePath = "";
-                return;
-            }
-            try
-            {
-                var files = Directory.GetFiles(folder, "*.btw");
-                foreach (var f in files)
-                    cmbTemplate.Items.Add(new TemplateItem(Path.GetFileName(f), f));
-                if (files.Length == 0)
-                {
-                    lblSelectedTemplate.Text = "未找到 .btw 模板";
-                    _selectedTemplatePath = "";
-                }
-                else cmbTemplate.SelectedIndex = 0;
-            }
-            catch (Exception ex) { MessageBox.Show(this, "读取模板文件夹出错: " + ex.Message); }
+            { lblSelectedTemplate.Text = "未找到模板"; _selectedTemplatePath = ""; return; }
+            foreach (var f in Directory.GetFiles(folder, "*.btw"))
+                cmbTemplate.Items.Add(new TemplateItem(Path.GetFileName(f), f));
+            if (cmbTemplate.Items.Count > 0) cmbTemplate.SelectedIndex = 0;
+            else { lblSelectedTemplate.Text = "未找到模板"; _selectedTemplatePath = ""; }
         }
 
         private void cmbTemplate_SelectedIndexChanged(object sender, EventArgs e)
         {
             var item = cmbTemplate.SelectedItem as TemplateItem;
-            if (item != null)
-            {
-                _selectedTemplatePath = item.FullPath;
-                lblSelectedTemplate.Text = item.Name;
-                LoadTemplatePreview(_selectedTemplatePath);
-                LoadTemplateDataSources(_selectedTemplatePath);
-                AddLog($"已选择模板: {item.Name}", "INFO");
-            }
-            else
-            {
-                _selectedTemplatePath = "";
-                lblSelectedTemplate.Text = "未选择模板文件";
-                pictureBoxPreview.Image = null;
-            }
+            if (item == null) return;
+            _selectedTemplatePath = item.FullPath;
+            lblSelectedTemplate.Text = item.Name;
+            LoadTemplatePreview(_selectedTemplatePath);
+            LoadTemplateDataSources(_selectedTemplatePath);
         }
 
-        private void LoadTemplatePreview(string templatePath)
+        private void LoadTemplatePreview(string path)
         {
-            CleanupPreview();
-            pictureBoxPreview.Image = null;
-            SetStatus("生成预览...");
-            if (string.IsNullOrEmpty(templatePath) || !File.Exists(templatePath)) { SetStatus("就绪"); return; }
+            CleanupPreview(); pictureBoxPreview.Image = null;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
             Task.Run(() =>
             {
-                var tempFile = _btService.ExportPreview(templatePath);
-                this.BeginInvoke((Action)(() =>
+                var tmp = _btService.ExportPreview(path);
+                BeginInvoke((Action)(() =>
                 {
-                    if (tempFile != null && File.Exists(tempFile))
+                    if (tmp != null && File.Exists(tmp))
                     {
-                        try
-                        {
-                            _previewTempFile = tempFile;
-                            using (var img = Image.FromFile(tempFile))
-                            {
-                                var bmp = new Bitmap(img);
-                                var old = pictureBoxPreview.Image;
-                                pictureBoxPreview.Image = bmp;
-                                old?.Dispose();
-                            }
-                        }
-                        catch (Exception ex) { LoggerService.Error("加载预览图片失败", ex); }
+                        try { _previewTempFile = tmp; pictureBoxPreview.Image = Image.FromFile(tmp); }
+                        catch { }
                     }
-                    SetStatus("就绪");
                 }));
             });
         }
 
-        private void LoadTemplateDataSources(string templatePath)
+        private void LoadTemplateDataSources(string path)
         {
             if (!_btService.IsConnected) return;
-            AddLog("正在读取模板数据源...", "INFO");
             Task.Run(() =>
             {
-                var names = _btService.GetTemplateDataSources(templatePath);
-                this.BeginInvoke((Action)(() =>
+                var names = _btService.GetTemplateDataSources(path);
+                BeginInvoke((Action)(() =>
                 {
-                    if (names.Count > 0)
+                    if (names.Count == 0) return;
+                    var dlg = new DataSourceSelectDialog(names, _dataSources);
+                    if (dlg.ShowDialog(this) == DialogResult.OK)
                     {
-                        var dlg = new DataSourceSelectDialog(names, _dataSources);
-                        if (dlg.ShowDialog(this) == DialogResult.OK)
-                        {
-                            _dataSources = dlg.SelectedSources;
-                            RebuildInputFields();
-                            AddLog($"已加载 {names.Count} 个数据源，选择了 {_dataSources.Count} 个", "SUCCESS");
-                        }
-                        else
-                            AddLog($"模板包含 {names.Count} 个数据源: {string.Join(", ", names)}", "INFO");
+                        _dataSources = dlg.SelectedSources;
+                        RebuildInputFields();
+                        AddLog($"已加载 {names.Count} 个数据源，选择了 {_dataSources.Count} 个", "SUCCESS");
                     }
-                    else
-                        AddLog("未能读取模板数据源", "WARNING");
                 }));
             });
         }
@@ -202,106 +154,67 @@ namespace BarTenderPrinter
         private void CleanupPreview()
         {
             if (_previewTempFile != null && File.Exists(_previewTempFile))
-            {
-                try { File.Delete(_previewTempFile); } catch { }
-                _previewTempFile = null;
-            }
+            { try { File.Delete(_previewTempFile); } catch { } _previewTempFile = null; }
         }
 
         private class TemplateItem
         {
-            public string Name { get; set; }
-            public string FullPath { get; set; }
-            public TemplateItem(string name, string fullPath) { Name = name; FullPath = fullPath; }
+            public string Name, FullPath;
+            public TemplateItem(string n, string p) { Name = n; FullPath = p; }
             public override string ToString() => Name;
         }
 
         #endregion
 
-        #region Data Source Selection
+        #region Data Source
 
         private void btnEditDataSources_Click(object sender, EventArgs e)
         {
-            var names = _dataSources.Select(d => d.Field).ToList();
-            if (names.Count == 0)
-            {
-                if (!string.IsNullOrEmpty(_selectedTemplatePath) && _btService.IsConnected)
-                    names = _btService.GetTemplateDataSources(_selectedTemplatePath);
-                if (names.Count == 0)
-                    names = new List<string> { "IMEI1", "DS1", "DS2" };
-            }
-            var dlg = new DataSourceSelectDialog(names, _dataSources);
-            if (dlg.ShowDialog(this) == DialogResult.OK)
-            {
-                _dataSources = dlg.SelectedSources;
-                RebuildInputFields();
-            }
+            var fields = _dataSources.Select(d => d.Field).ToList();
+            if (fields.Count == 0 && !string.IsNullOrEmpty(_selectedTemplatePath) && _btService.IsConnected)
+                fields = _btService.GetTemplateDataSources(_selectedTemplatePath);
+            if (fields.Count == 0) fields = new List<string> { "IMEI1" };
+            var dlg = new DataSourceSelectDialog(fields, _dataSources);
+            if (dlg.ShowDialog(this) == DialogResult.OK) { _dataSources = dlg.SelectedSources; RebuildInputFields(); }
         }
-
-        #endregion
-
-        #region Dynamic Input Fields
 
         private void RebuildInputFields()
         {
             inputPanel.Controls.Clear();
             var enabled = _dataSources.Where(d => d.Enabled).ToList();
-            _inputPanels = new Panel[enabled.Count];
             _inputTextBoxes = new TextBox[enabled.Count];
-
-            int y = 5;
+            int y = 8;
             for (int i = 0; i < enabled.Count; i++)
             {
-                var ds = enabled[i];
-                var row = new Panel { Location = new Point(5, y), Size = new Size(inputPanel.Width - 10, 28), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-                var lbl = new Label { Text = ds.Name + "：", Location = new Point(0, 4), Size = new Size(90, 20), TextAlign = ContentAlignment.MiddleRight };
+                var lbl = new Label { Text = enabled[i].Name + "：", Location = new Point(8, y + 3), Size = new Size(85, 20), TextAlign = ContentAlignment.MiddleRight };
                 MiuiTheme.StyleLabel(lbl);
-                var txt = new TextBox { Location = new Point(95, 1), Size = new Size(row.Width - 100, 25), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-                MiuiTheme.StyleTextBox(txt);
-                txt.Tag = i;
-                txt.KeyDown += InputTextBox_KeyDown;
-                row.Controls.Add(lbl);
-                row.Controls.Add(txt);
-                inputPanel.Controls.Add(row);
-                _inputPanels[i] = row;
-                _inputTextBoxes[i] = txt;
-                y += 32;
+                var txt = new TextBox { Location = new Point(98, y), Size = new Size(inputPanel.Width - 110, 25), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+                MiuiTheme.StyleTextBox(txt); txt.Tag = i; txt.KeyDown += Input_KeyDown;
+                inputPanel.Controls.Add(lbl); inputPanel.Controls.Add(txt);
+                _inputTextBoxes[i] = txt; y += 32;
             }
-            btnPrint.Location = new Point(10, inputPanel.Bottom + 8);
         }
 
-        private void InputTextBox_KeyDown(object sender, KeyEventArgs e)
+        private void Input_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode != Keys.Enter) return;
             e.SuppressKeyPress = true;
-            var tb = sender as TextBox;
-            if (tb == null) return;
-            int idx = (int)tb.Tag;
+            int idx = (int)((TextBox)sender).Tag;
             if (idx < _inputTextBoxes.Length - 1)
-            {
-                _inputTextBoxes[idx + 1].Focus();
-                _inputTextBoxes[idx + 1].SelectAll();
-            }
+            { _inputTextBoxes[idx + 1].Focus(); _inputTextBoxes[idx + 1].SelectAll(); }
             else DoPrint();
         }
 
-        private void ClearInputsAndFocusFirst()
+        private void ClearInputs()
         {
-            foreach (var tb in _inputTextBoxes)
-                if (tb != null) tb.Text = "";
+            foreach (var tb in _inputTextBoxes) if (tb != null) tb.Text = "";
             if (_inputTextBoxes.Length > 0) { _inputTextBoxes[0].Focus(); _inputTextBoxes[0].SelectAll(); }
         }
 
-        private void SetInputsReadOnly(bool readOnly)
+        private void SetInputsReadOnly(bool ro)
         {
             foreach (var tb in _inputTextBoxes)
-            {
-                if (tb != null)
-                {
-                    tb.ReadOnly = readOnly;
-                    tb.BackColor = readOnly ? SystemColors.Control : MiuiTheme.InputBackground;
-                }
-            }
+                if (tb != null) { tb.ReadOnly = ro; tb.BackColor = ro ? SystemColors.Control : MiuiTheme.InputBackground; }
         }
 
         #endregion
@@ -313,93 +226,49 @@ namespace BarTenderPrinter
         private void DoPrint()
         {
             if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath))
-            {
-                MessageBox.Show(this, "请先选择有效的模板文件 (.btw)");
-                return;
-            }
+            { MessageBox.Show(this, "请先选择模板文件"); return; }
             if (!_btService.IsConnected) { AddLog("BarTender 未连接", "ERROR"); return; }
-            var printer = GetSelectedPrinter();
-            if (string.IsNullOrEmpty(printer)) { AddLog("请在设置中选择打印机", "ERROR"); return; }
+            var printer = cmbPrinter.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(printer)) { MessageBox.Show(this, "请选择打印机"); return; }
 
             var enabled = _dataSources.Where(d => d.Enabled).ToList();
-            if (enabled.Count == 0) { AddLog("请配置数据源", "ERROR"); return; }
+            if (enabled.Count == 0) { MessageBox.Show(this, "请配置数据源"); return; }
 
             var fieldValues = new Dictionary<string, string>();
             for (int i = 0; i < enabled.Count; i++)
             {
                 var val = _inputTextBoxes[i]?.Text?.Trim() ?? "";
                 if (string.IsNullOrEmpty(val))
-                {
-                    MessageBox.Show(this, $"\"{enabled[i].Name}\" 不能为空");
-                    _inputTextBoxes[i]?.Focus();
-                    return;
-                }
+                { MessageBox.Show(this, $"\"{enabled[i].Name}\" 不能为空"); _inputTextBoxes[i]?.Focus(); return; }
                 fieldValues[enabled[i].Field] = val;
             }
 
-            // Duplicate check - check all data source values
-            var duplicateValues = new List<string>();
-            foreach (var kv in fieldValues)
+            // Duplicate check
+            var duplicates = fieldValues.Where(kv => _history.IsPrinted(kv.Value)).Select(kv => $"{kv.Key}={kv.Value}").ToList();
+            if (duplicates.Count > 0)
             {
-                if (_history.IsPrinted(kv.Value))
-                    duplicateValues.Add($"{kv.Key}={kv.Value}");
-            }
-            if (duplicateValues.Count > 0)
-            {
-                var msg = $"以下数据源值已打印过：\n\n{string.Join("\n", duplicateValues)}\n\n是否继续打印？";
-                var result = MessageBox.Show(this, msg, "数据重复提醒", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-                if (result != DialogResult.Yes)
-                {
-                    AddLog("用户取消打印（数据重复）", "WARNING");
-                    return;
-                }
-                AddLog("用户确认继续打印（数据重复）", "WARNING");
+                if (MessageBox.Show(this, $"以下数据已打印过：\n{string.Join("\n", duplicates)}\n\n是否继续？", "数据重复",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                { AddLog("用户取消（数据重复）", "WARNING"); return; }
             }
 
-            // Build display string for history
+            int copies = (int)numCopies.Value;
             var historyKey = string.Join("|", fieldValues.Values);
-
-            int copies = 1;
-            try { copies = (int)GetCopiesValue(); } catch { }
-
-            SetStatus("打印中...");
-            AddLog($"开始打印: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
-            SetInputsReadOnly(true);
-            btnPrint.Enabled = false;
+            SetStatus("打印中..."); SetInputsReadOnly(true); btnPrint.Enabled = false;
+            AddLog($"打印: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
 
             Task.Run(() =>
             {
                 var result = _btService.Print(_selectedTemplatePath, fieldValues, printer, copies);
-                this.BeginInvoke((Action)(() =>
+                BeginInvoke((Action)(() =>
                 {
                     if (result.Success)
-                    {
-                        SetStatus("打印完成");
-                        AddLog("打印完成", "SUCCESS");
-                        _history.Add(historyKey, "PASS");
-                        ClearInputsAndFocusFirst();
-                    }
+                    { SetStatus("打印完成"); AddLog("打印完成", "SUCCESS"); _history.Add(historyKey, "PASS"); ClearInputs(); }
                     else
-                    {
-                        SetStatus("打印失败");
-                        AddLog($"打印失败: {result.ErrorMessage}", "ERROR");
-                        _history.Add(historyKey, "FAIL");
-                    }
-                    SetInputsReadOnly(false);
-                    btnPrint.Enabled = true;
-                    RefreshStats();
+                    { SetStatus("打印失败"); AddLog($"失败: {result.ErrorMessage}", "ERROR"); _history.Add(historyKey, "FAIL"); }
+                    SetInputsReadOnly(false); btnPrint.Enabled = true; RefreshStats();
                 }));
             });
-        }
-
-        private string GetSelectedPrinter()
-        {
-            try { return IniReadValue("General", "Printer", _configFile); } catch { return ""; }
-        }
-        private decimal GetCopiesValue()
-        {
-            try { var v = IniReadValue("General", "Copies", _configFile); if (decimal.TryParse(v, out decimal c) && c > 0) return c; } catch { }
-            return 1;
         }
 
         #endregion
@@ -410,38 +279,30 @@ namespace BarTenderPrinter
         private void btnClearSearch_Click(object sender, EventArgs e) { txtSearch.Text = ""; }
         private void btnClearHistory_Click(object sender, EventArgs e)
         {
-            if (MessageBox.Show(this, "确定要清空所有记录吗？", "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            if (MessageBox.Show(this, "确定清空所有记录？", "确认", MessageBoxButtons.YesNo) == DialogResult.Yes)
             { _history.Clear(); LoadHistory(); RefreshStats(); }
         }
         private void btnExportHistory_Click(object sender, EventArgs e)
         {
-            if (_history.Records.Count == 0) { MessageBox.Show(this, "没有可导出的历史记录"); return; }
-            using (var sfd = new SaveFileDialog { Filter = "CSV|*.csv", FileName = $"print_records_{DateTime.Now:yyyyMMdd_HHmmss}.csv" })
+            if (_history.Records.Count == 0) { MessageBox.Show(this, "没有记录"); return; }
+            using (var sfd = new SaveFileDialog { Filter = "CSV|*.csv", FileName = $"records_{DateTime.Now:yyyyMMdd_HHmmss}.csv" })
             {
                 if (sfd.ShowDialog(this) == DialogResult.OK)
-                {
-                    try { _history.Export(sfd.FileName, txtSearch?.Text?.Trim() ?? ""); MessageBox.Show(this, $"已导出到:\n{sfd.FileName}"); }
-                    catch (Exception ex) { MessageBox.Show(this, $"导出失败: {ex.Message}"); }
-                }
+                { try { _history.Export(sfd.FileName, txtSearch?.Text?.Trim() ?? ""); MessageBox.Show(this, "导出成功"); } catch (Exception ex) { MessageBox.Show(this, ex.Message); } }
             }
         }
-
         private void LoadHistory()
         {
             dgvHistory.DataSource = null;
-            var dt = new DataTable();
-            dt.Columns.Add("IMEI", typeof(string));
-            dt.Columns.Add("打印时间", typeof(string));
-            dt.Columns.Add("状态", typeof(string));
-            var keyword = txtSearch?.Text?.Trim().ToLower() ?? "";
+            var dt = new DataTable(); dt.Columns.Add("IMEI"); dt.Columns.Add("打印时间"); dt.Columns.Add("状态");
+            var kw = txtSearch?.Text?.Trim().ToLower() ?? "";
             foreach (var r in _history.Records.AsEnumerable().Reverse())
             {
-                if (!string.IsNullOrEmpty(keyword) && !r.Imei.ToLower().Contains(keyword) && !r.PrintTime.ToLower().Contains(keyword) && !r.Status.ToLower().Contains(keyword)) continue;
+                if (!string.IsNullOrEmpty(kw) && !r.Imei.ToLower().Contains(kw) && !r.PrintTime.ToLower().Contains(kw) && !r.Status.ToLower().Contains(kw)) continue;
                 dt.Rows.Add(r.Imei, r.PrintTime, r.Status);
             }
             dgvHistory.DataSource = dt;
         }
-
         private void RefreshStats()
         {
             lblTodayCount.Text = _history.TodayCount().ToString();
@@ -451,88 +312,42 @@ namespace BarTenderPrinter
 
         #endregion
 
-        #region Config (INI)
+        #region Config
 
         private void btnSaveConfig_Click(object sender, EventArgs e)
-        {
-            SaveConfig(_configFile);
-            AddLog($"配置已保存", "SUCCESS");
-            MessageBox.Show(this, "配置已保存");
-        }
-
+        { SaveConfig(); MessageBox.Show(this, "配置已保存"); AddLog("配置已保存", "SUCCESS"); }
         private void btnLoadConfig_Click(object sender, EventArgs e)
-        {
-            if (File.Exists(_configFile))
-            {
-                LoadConfig(_configFile);
-                PopulateTemplateList(_templatesFolder);
-                RebuildInputFields();
-                AddLog("配置已加载", "SUCCESS");
-                MessageBox.Show(this, "配置已加载");
-            }
-            else { MessageBox.Show(this, "未找到配置文件"); }
-        }
+        { LoadConfig(_configFile); PopulateTemplateList(_templatesFolder); RebuildInputFields(); MessageBox.Show(this, "配置已加载"); }
 
-        private void SaveConfig(string path)
+        private void SaveConfig()
         {
-            var dir = Path.GetDirectoryName(path);
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            IniWriteValue("General", "TemplatesFolder", _templatesFolder ?? "", path);
-            IniWriteValue("General", "Printer", GetSelectedPrinter(), path);
-            IniWriteValue("General", "Copies", GetCopiesValue().ToString(), path);
-            IniWriteValue("General", "DataSourceCount", _dataSources.Count.ToString(), path);
+            var dir = Path.GetDirectoryName(_configFile); if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            IniWriteValue("General", "TemplatesFolder", _templatesFolder ?? "", _configFile);
+            IniWriteValue("General", "Printer", cmbPrinter.SelectedItem?.ToString() ?? "", _configFile);
+            IniWriteValue("General", "Copies", numCopies.Value.ToString(), _configFile);
+            IniWriteValue("General", "DSCount", _dataSources.Count.ToString(), _configFile);
             for (int i = 0; i < _dataSources.Count; i++)
             {
-                IniWriteValue($"DS{i}", "Name", _dataSources[i].Name, path);
-                IniWriteValue($"DS{i}", "Field", _dataSources[i].Field, path);
-                IniWriteValue($"DS{i}", "Enabled", _dataSources[i].Enabled.ToString(), path);
+                IniWriteValue($"DS{i}", "Name", _dataSources[i].Name, _configFile);
+                IniWriteValue($"DS{i}", "Field", _dataSources[i].Field, _configFile);
+                IniWriteValue($"DS{i}", "Enabled", _dataSources[i].Enabled.ToString(), _configFile);
             }
         }
 
         private void LoadConfig(string path)
         {
             _templatesFolder = IniReadValue("General", "TemplatesFolder", path);
-            if (string.IsNullOrWhiteSpace(_templatesFolder))
-                _templatesFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "templates");
+            if (string.IsNullOrWhiteSpace(_templatesFolder)) _templatesFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "templates");
             txtTemplateDir.Text = _templatesFolder;
-
-            var countStr = IniReadValue("General", "DataSourceCount", path);
-            int count = 0;
-            if (!int.TryParse(countStr, out count) || count < 0) count = 0;
+            var copies = 1; int.TryParse(IniReadValue("General", "Copies", path), out copies); numCopies.Value = Math.Max(1, Math.Min(99, copies));
+            int.TryParse(IniReadValue("General", "DSCount", path), out int count);
             _dataSources = new List<DataSourceItem>();
             for (int i = 0; i < count; i++)
             {
-                var enabled = true;
-                bool.TryParse(IniReadValue($"DS{i}", "Enabled", path), out enabled);
-                _dataSources.Add(new DataSourceItem
-                {
-                    Name = IniReadValue($"DS{i}", "Name", path),
-                    Field = IniReadValue($"DS{i}", "Field", path),
-                    Enabled = enabled
-                });
+                var en = true; bool.TryParse(IniReadValue($"DS{i}", "Enabled", path), out en);
+                _dataSources.Add(new DataSourceItem { Name = IniReadValue($"DS{i}", "Name", path), Field = IniReadValue($"DS{i}", "Field", path), Enabled = en });
             }
-            if (_dataSources.Count == 0)
-                _dataSources.Add(new DataSourceItem { Name = "IMEI", Field = "IMEI1", Enabled = true });
-        }
-
-        #endregion
-
-        #region Settings
-
-        private void btnSettings_Click(object sender, EventArgs e)
-        {
-            using (var dialog = new SettingsDialog())
-            {
-                var printer = GetSelectedPrinter();
-                var copies = GetCopiesValue();
-                dialog.LoadSettings(printer, (int)copies);
-                if (dialog.ShowDialog(this) == DialogResult.OK)
-                {
-                    IniWriteValue("General", "Printer", dialog.Printer, _configFile);
-                    IniWriteValue("General", "Copies", dialog.Copies.ToString(), _configFile);
-                    AddLog("设置已保存", "SUCCESS");
-                }
-            }
+            if (_dataSources.Count == 0) _dataSources.Add(new DataSourceItem { Name = "IMEI", Field = "IMEI1", Enabled = true });
         }
 
         #endregion
@@ -542,149 +357,66 @@ namespace BarTenderPrinter
         private void btnExportLog_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(txtLog.Text)) { MessageBox.Show(this, "日志为空"); return; }
-            using (var sfd = new SaveFileDialog { Filter = "文本|*.txt|日志|*.log", FileName = $"log_{DateTime.Now:yyyyMMdd_HHmmss}.log" })
+            using (var sfd = new SaveFileDialog { Filter = "文本|*.txt", FileName = $"log_{DateTime.Now:yyyyMMdd_HHmmss}.log" })
             {
                 if (sfd.ShowDialog(this) == DialogResult.OK)
-                {
-                    try { File.WriteAllText(sfd.FileName, txtLog.Text, Encoding.UTF8); AddLog($"日志已导出", "SUCCESS"); }
-                    catch (Exception ex) { MessageBox.Show(this, $"导出失败: {ex.Message}"); }
-                }
+                { try { File.WriteAllText(sfd.FileName, txtLog.Text, Encoding.UTF8); AddLog("日志已导出", "SUCCESS"); } catch (Exception ex) { MessageBox.Show(this, ex.Message); } }
             }
         }
-        private void btnClearLog_Click(object sender, EventArgs e) { txtLog.Clear(); AddLog("日志已清空", "INFO"); }
+        private void btnClearLog_Click(object sender, EventArgs e) { txtLog.Clear(); }
 
-        private void AddLog(string message, string level = "INFO")
+        private void AddLog(string msg, string level = "INFO")
         {
-            var line = $"[{DateTime.Now:HH:mm:ss}] [{level}] {message}";
-            if (txtLog.InvokeRequired) txtLog.Invoke((Action)(() => { txtLog.AppendText(line + Environment.NewLine); txtLog.ScrollToCaret(); }));
-            else { txtLog.AppendText(line + Environment.NewLine); txtLog.ScrollToCaret(); }
-            if (level == "ERROR") LoggerService.Error(message); else LoggerService.Info(message);
+            var line = $"[{DateTime.Now:HH:mm:ss}] [{level}] {msg}";
+            if (txtLog.InvokeRequired) txtLog.Invoke((Action)(() => { txtLog.AppendText(line + Environment.NewLine); }));
+            else { txtLog.AppendText(line + Environment.NewLine); }
+            if (level == "ERROR") LoggerService.Error(msg); else LoggerService.Info(msg);
         }
 
         #endregion
 
-        #region Status
+        #region Status & INI
 
         private void SetStatus(string text)
-        {
-            if (statusStrip.InvokeRequired) statusStrip.Invoke((Action)(() => lblStatusStrip.Text = text));
-            else lblStatusStrip.Text = text;
-        }
-
-        #endregion
-
-        #region INI
+        { if (statusStrip.InvokeRequired) statusStrip.Invoke((Action)(() => lblStatus.Text = text)); else lblStatus.Text = text; }
 
         [System.Runtime.InteropServices.DllImport("kernel32", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-        static extern long WritePrivateProfileString(string section, string key, string val, string filePath);
+        static extern long WritePrivateProfileString(string s, string k, string v, string p);
         [System.Runtime.InteropServices.DllImport("kernel32", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-        static extern int GetPrivateProfileString(string section, string key, string def, StringBuilder retVal, int size, string filePath);
+        static extern int GetPrivateProfileString(string s, string k, string d, StringBuilder r, int n, string p);
         private static void IniWriteValue(string s, string k, string v, string p) => WritePrivateProfileString(s, k, v, p);
         private static string IniReadValue(string s, string k, string p) { var sb = new StringBuilder(2048); GetPrivateProfileString(s, k, "", sb, sb.Capacity, p); return sb.ToString(); }
 
         #endregion
     }
 
-    // Data Source Selection Dialog
     public class DataSourceSelectDialog : Form
     {
         public List<DataSourceItem> SelectedSources { get; private set; }
-        private CheckBox[] _checkBoxes;
-        private TextBox[] _nameBoxes;
-        private readonly List<string> _availableFields;
-        private readonly List<DataSourceItem> _currentSources;
+        private CheckBox[] _cbs; private TextBox[] _names;
+        private readonly List<string> _fields; private readonly List<DataSourceItem> _current;
 
-        public DataSourceSelectDialog(List<string> availableFields, List<DataSourceItem> currentSources)
+        public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current)
         {
-            _availableFields = availableFields;
-            _currentSources = currentSources;
-            Text = "选择数据源";
-            Size = new Size(450, 400);
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false;
-            MinimizeBox = false;
+            _fields = fields; _current = current;
+            Text = "选择数据源"; Size = new Size(440, 380);
+            FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
+            MaximizeBox = false; MinimizeBox = false;
 
             var lbl = new Label { Text = "勾选需要的数据源并设置显示名称：", Location = new Point(10, 10), Size = new Size(400, 20) };
-            var panel = new Panel { Location = new Point(10, 35), Size = new Size(415, 280), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
-
-            _checkBoxes = new CheckBox[availableFields.Count];
-            _nameBoxes = new TextBox[availableFields.Count];
-
-            for (int i = 0; i < availableFields.Count; i++)
+            var panel = new Panel { Location = new Point(10, 35), Size = new Size(405, 260), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
+            _cbs = new CheckBox[fields.Count]; _names = new TextBox[fields.Count];
+            for (int i = 0; i < fields.Count; i++)
             {
-                int y = i * 32 + 5;
-                var existing = currentSources.FirstOrDefault(d => d.Field == availableFields[i]);
-                var cb = new CheckBox { Text = availableFields[i], Location = new Point(5, y + 3), Size = new Size(120, 20), Checked = existing?.Enabled ?? false };
-                var txt = new TextBox { Location = new Point(130, y), Size = new Size(270, 25), Text = existing?.Name ?? availableFields[i] };
-                _checkBoxes[i] = cb;
-                _nameBoxes[i] = txt;
-                panel.Controls.Add(cb);
-                panel.Controls.Add(txt);
+                int y = i * 30 + 5; var ex = current.FirstOrDefault(d => d.Field == fields[i]);
+                _cbs[i] = new CheckBox { Text = fields[i], Location = new Point(5, y + 2), Size = new Size(115, 20), Checked = ex?.Enabled ?? false };
+                _names[i] = new TextBox { Location = new Point(125, y), Size = new Size(265, 25), Text = ex?.Name ?? fields[i] };
+                panel.Controls.Add(_cbs[i]); panel.Controls.Add(_names[i]);
             }
-
-            var btnOk = new Button { Text = "确定", Location = new Point(260, 325), Size = new Size(75, 28), DialogResult = DialogResult.OK };
-            btnOk.Click += (s, e) => Save();
-            var btnCancel = new Button { Text = "取消", Location = new Point(350, 325), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
-            Controls.AddRange(new Control[] { lbl, panel, btnOk, btnCancel });
-            AcceptButton = btnOk;
-            CancelButton = btnCancel;
-        }
-
-        private void Save()
-        {
-            SelectedSources = new List<DataSourceItem>();
-            for (int i = 0; i < _availableFields.Count; i++)
-            {
-                if (_checkBoxes[i].Checked)
-                {
-                    SelectedSources.Add(new DataSourceItem
-                    {
-                        Name = _nameBoxes[i].Text?.Trim() ?? _availableFields[i],
-                        Field = _availableFields[i],
-                        Enabled = true
-                    });
-                }
-            }
-        }
-    }
-
-    // Settings Dialog
-    public class SettingsDialog : Form
-    {
-        public string Printer { get; private set; }
-        public int Copies { get; private set; }
-        private ComboBox cmbPrinter;
-        private NumericUpDown numCopies;
-
-        public SettingsDialog()
-        {
-            Text = "设置";
-            Size = new Size(400, 180);
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false;
-            MinimizeBox = false;
-
-            var lblPrinter = new Label { Text = "打印机：", Location = new Point(10, 15), Size = new Size(60, 20) };
-            cmbPrinter = new ComboBox { Location = new Point(75, 12), Size = new Size(290, 25), DropDownStyle = ComboBoxStyle.DropDownList };
-            try { foreach (var p in System.Drawing.Printing.PrinterSettings.InstalledPrinters) cmbPrinter.Items.Add(p); } catch { }
-
-            var lblCopies = new Label { Text = "打印份数：", Location = new Point(10, 50), Size = new Size(60, 20) };
-            numCopies = new NumericUpDown { Location = new Point(75, 47), Size = new Size(60, 25), Minimum = 1, Maximum = 99 };
-
-            var btnOk = new Button { Text = "确定", Location = new Point(210, 90), Size = new Size(75, 28), DialogResult = DialogResult.OK };
-            btnOk.Click += (s, e) => { Printer = cmbPrinter.SelectedItem?.ToString() ?? ""; Copies = (int)numCopies.Value; };
-            var btnCancel = new Button { Text = "取消", Location = new Point(295, 90), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
-
-            Controls.AddRange(new Control[] { lblPrinter, cmbPrinter, lblCopies, numCopies, btnOk, btnCancel });
-        }
-
-        public void LoadSettings(string printer, int copies)
-        {
-            if (!string.IsNullOrEmpty(printer) && cmbPrinter.Items.Contains(printer)) cmbPrinter.SelectedItem = printer;
-            else if (cmbPrinter.Items.Count > 0) cmbPrinter.SelectedIndex = 0;
-            numCopies.Value = Math.Max(1, Math.Min(99, copies));
+            var ok = new Button { Text = "确定", Location = new Point(250, 305), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+            ok.Click += (s, e) => { SelectedSources = new List<DataSourceItem>(); for (int i = 0; i < _fields.Count; i++) if (_cbs[i].Checked) SelectedSources.Add(new DataSourceItem { Name = _names[i].Text?.Trim() ?? _fields[i], Field = _fields[i], Enabled = true }); };
+            var cancel = new Button { Text = "取消", Location = new Point(340, 305), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+            Controls.AddRange(new Control[] { lbl, panel, ok, cancel }); AcceptButton = ok; CancelButton = cancel;
         }
     }
 
