@@ -425,6 +425,11 @@ namespace BarTenderPrinter
 
         #region Settings & Log
 
+        private void btnRefreshPrinter_Click(object sender, EventArgs e)
+        {
+            LoadPrinters();
+        }
+
         private void btnSettings_Click(object sender, EventArgs e)
         {
             using (var dialog = new SettingsDialog())
