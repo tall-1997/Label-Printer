@@ -54,6 +54,7 @@
     <Compile Include="BarTenderService.cs" />
     <Compile Include="HistoryManager.cs" />
     <Compile Include="LoggerService.cs" />
+    <Compile Include="MiuiTheme.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
