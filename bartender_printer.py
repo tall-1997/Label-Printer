@@ -39,7 +39,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.4.9"
+    VERSION = "v2.5.0"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -563,7 +563,8 @@ WScript.Quit 0
                 self._update_status(output, "info")
             if error_output:
                 self._update_status(error_output, "error")
-            if result.returncode == 0:
+            output_lines = [line.strip() for line in output.splitlines()]
+            if result.returncode == 0 or "OK" in output_lines:
                 return True, ""
             return False, output or error_output or f"cscript 退出码 {result.returncode}"
         finally:
