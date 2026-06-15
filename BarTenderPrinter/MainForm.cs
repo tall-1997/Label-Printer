@@ -52,8 +52,8 @@ namespace BarTenderPrinter
         private void InitBarTender()
         {
             if (_btService.Connect())
-                SetStatus("BarTender 已连接");
-            else { SetStatus("BarTender 连接失败"); AddLog("BarTender 连接失败", "ERROR"); }
+                SetStatus($"BarTender 已连接");
+            else { SetStatus("BarTender 连接失败"); AddLog("BarTender 连接失败，请检查是否已安装", "ERROR"); }
         }
 
         #endregion

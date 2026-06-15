@@ -10,6 +10,8 @@ namespace BarTenderPrinter
     {
         private object _engine;
         private Type _engineType;
+        private object _comObject;
+        private bool _useCom;
         private bool _connected;
 
         public bool IsConnected => _connected;
@@ -19,10 +21,22 @@ namespace BarTenderPrinter
             try
             {
                 LoggerService.Info("正在加载 BarTender SDK...");
-                var asm = Assembly.Load("Seagull.BarTender.Print");
-                if (asm == null) { LoggerService.Error("Seagull.BarTender.Print 未找到"); return false; }
+
+                // Try to find Seagull.BarTender.Print.dll in common locations
+                var asm = TryLoadAssembly();
+                if (asm == null)
+                {
+                    LoggerService.Error("Seagull.BarTender.Print 程序集未找到，请确认 BarTender 已安装");
+                    return false;
+                }
+
                 _engineType = asm.GetType("Seagull.BarTender.Print.Engine");
-                if (_engineType == null) { LoggerService.Error("Engine 类型未找到"); return false; }
+                if (_engineType == null)
+                {
+                    LoggerService.Error("Engine 类型未找到");
+                    return false;
+                }
+
                 _engine = Activator.CreateInstance(_engineType, new object[] { true });
                 _connected = true;
                 LoggerService.Info("BarTender SDK 引擎已启动");
@@ -36,10 +50,133 @@ namespace BarTenderPrinter
             }
         }
 
+        private Assembly TryLoadAssembly()
+        {
+            // 1. Try default load (GAC or app directory)
+            try
+            {
+                var asm = Assembly.Load("Seagull.BarTender.Print");
+                if (asm != null) { LoggerService.Info("从 GAC 加载成功"); return asm; }
+            }
+            catch { }
+
+            // 2. Try loading from BarTender installation directory
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            var programFiles64 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var searchPaths = new[]
+            {
+                Path.Combine(programFiles, "BarTender"),
+                Path.Combine(programFiles64, "BarTender"),
+                @"C:\Program Files (x86)\BarTender",
+                @"C:\Program Files\BarTender",
+            };
+
+            foreach (var dir in searchPaths)
+            {
+                var dllPath = Path.Combine(dir, "Seagull.BarTender.Print.dll");
+                if (File.Exists(dllPath))
+                {
+                    try
+                    {
+                        var asm = Assembly.LoadFrom(dllPath);
+                        LoggerService.Info($"从 {dllPath} 加载成功");
+                        return asm;
+                    }
+                    catch (Exception ex)
+                    {
+                        LoggerService.Warn($"加载 {dllPath} 失败: {ex.Message}");
+                    }
+                }
+
+                // Also try subdirectories
+                if (Directory.Exists(dir))
+                {
+                    try
+                    {
+                        var files = Directory.GetFiles(dir, "Seagull.BarTender.Print.dll", SearchOption.AllDirectories);
+                        foreach (var f in files)
+                        {
+                            try
+                            {
+                                var asm = Assembly.LoadFrom(f);
+                                LoggerService.Info($"从 {f} 加载成功");
+                                return asm;
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            // 3. Try COM interop as fallback
+            try
+            {
+                var comType = Type.GetTypeFromProgID("BarTender.Application");
+                if (comType != null)
+                {
+                    LoggerService.Info("找到 BarTender COM 组件，尝试 COM 模式");
+                    // Use COM directly
+                    var comObj = Activator.CreateInstance(comType);
+                    if (comObj != null)
+                    {
+                        // Store COM object for direct use
+                        _comObject = comObj;
+                        _useCom = true;
+                        _connected = true;
+                        LoggerService.Info("BarTender COM 模式已连接");
+                        return null; // Will use COM path
+                    }
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
         public List<string> GetTemplateDataSources(string templatePath)
         {
             var result = new List<string>();
-            if (!_connected || _engine == null) return result;
+            if (!_connected) return result;
+
+            // COM mode
+            if (_useCom)
+            {
+                dynamic btFormat = null;
+                try
+                {
+                    dynamic btApp = _comObject;
+                    btFormat = btApp.Formats.Open(templatePath, false, "");
+                    var subStrings = btFormat.NamedSubStrings;
+                    // Try to enumerate sub strings
+                    try
+                    {
+                        var count = (int)subStrings.Count;
+                        for (int i = 1; i <= count; i++)
+                        {
+                            try
+                            {
+                                var sub = subStrings.Item(i);
+                                var name = (string)sub.Name;
+                                if (!string.IsNullOrEmpty(name))
+                                    result.Add(name);
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                    btFormat.Close();
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Error($"[COM] 获取模板数据源失败: {ex.Message}", ex);
+                    try { btFormat?.Close(); } catch { }
+                }
+                return result;
+            }
+
+            // SDK mode
+            if (_engine == null) return result;
             object doc = null;
             try
             {
@@ -110,7 +247,31 @@ namespace BarTenderPrinter
 
         public string ExportPreview(string templatePath, int dpi = 300)
         {
-            if (!_connected || _engine == null) return null;
+            if (!_connected) return null;
+
+            // COM mode
+            if (_useCom)
+            {
+                dynamic btFormat = null;
+                try
+                {
+                    dynamic btApp = _comObject;
+                    btFormat = btApp.Formats.Open(templatePath, false, "");
+                    var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
+                    btFormat.ExportImageToFile(tempPath, 3, 0, 0, dpi, dpi);
+                    btFormat.Close();
+                    return File.Exists(tempPath) ? tempPath : null;
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Error($"[COM] 预览导出失败: {ex.Message}", ex);
+                    try { btFormat?.Close(); } catch { }
+                    return null;
+                }
+            }
+
+            // SDK mode
+            if (_engine == null) return null;
             object doc = null;
             try
             {
@@ -150,8 +311,16 @@ namespace BarTenderPrinter
 
         public PrintResult Print(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
         {
-            if (!_connected || _engine == null)
+            if (!_connected)
                 return new PrintResult(false, "BarTender 未连接");
+
+            // Use COM mode if SDK not available
+            if (_useCom)
+                return PrintViaCom(templatePath, fieldValues, printer, copies);
+
+            if (_engine == null)
+                return new PrintResult(false, "BarTender 引擎未初始化");
+
             object doc = null;
             try
             {
@@ -183,8 +352,8 @@ namespace BarTenderPrinter
                         }
                         catch { missing.Add(kv.Key); }
                     }
-                if (missing.Count > 0)
-                    return new PrintResult(false, $"模板中未找到字段: {string.Join(", ", missing.Distinct())}");
+                    if (missing.Count > 0)
+                        return new PrintResult(false, $"模板中未找到字段: {string.Join(", ", missing.Distinct())}");
                 }
 
                 // Set printer and copies
@@ -203,10 +372,7 @@ namespace BarTenderPrinter
                         LoggerService.Info($"打印份数设置: {copies}");
                     }
                 }
-                catch (Exception ex)
-                {
-                    LoggerService.Warn($"设置打印机/份数失败: {ex.Message}");
-                }
+                catch (Exception ex) { LoggerService.Warn($"设置打印机/份数失败: {ex.Message}"); }
 
                 var printMethod = doc.GetType().GetMethod("Print", new[] { typeof(string), typeof(int) });
                 if (printMethod != null)
@@ -225,6 +391,43 @@ namespace BarTenderPrinter
                 LoggerService.Error($"打印失败: {ex.Message}", ex);
                 CloseDocument(doc);
                 return new PrintResult(false, $"{ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private PrintResult PrintViaCom(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
+        {
+            dynamic btFormat = null;
+            try
+            {
+                LoggerService.Info($"[COM] 准备打开模板: {templatePath}");
+                dynamic btApp = _comObject;
+                btFormat = btApp.Formats.Open(templatePath, false, "");
+                LoggerService.Info("[COM] 模板打开成功");
+
+                foreach (var kv in fieldValues)
+                {
+                    btFormat.SetNamedSubStringValue(kv.Key, kv.Value);
+                    LoggerService.Info($"[COM] 数据源设置: {kv.Key}={kv.Value}");
+                }
+
+                btFormat.Printer = printer;
+                LoggerService.Info($"[COM] 打印机设置: {printer}");
+
+                btFormat.PrintSetup.IdenticalCopiesOfLabel = copies;
+                LoggerService.Info($"[COM] 打印份数: {copies}");
+
+                btFormat.PrintOut(false, false);
+                LoggerService.Info("[COM] PrintOut 执行完成");
+
+                btFormat.Close();
+                LoggerService.Info("[COM] 打印完成");
+                return new PrintResult(true, "");
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error($"[COM] 打印失败: {ex.Message}", ex);
+                try { btFormat?.Close(); } catch { }
+                return new PrintResult(false, $"COM: {ex.Message}");
             }
         }
 
@@ -281,11 +484,18 @@ namespace BarTenderPrinter
         {
             try
             {
+                if (_useCom && _comObject != null)
+                {
+                    ((dynamic)_comObject).Quit(0);
+                    System.Runtime.InteropServices.Marshal.ReleaseComObject(_comObject);
+                    _comObject = null;
+                }
                 if (_engine != null)
                     _engineType?.GetMethod("Stop")?.Invoke(_engine, null);
             }
             catch { }
             _connected = false;
+            _useCom = false;
         }
         public void Dispose() => Disconnect();
     }
