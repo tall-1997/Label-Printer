@@ -130,7 +130,7 @@ jobs:
           # Write test values
           [IniHelper]::WritePrivateProfileString("General", "Printer", "Test Printer", $testFile)
           [IniHelper]::WritePrivateProfileString("General", "Copies", "3", $testFile)
-          [IniHelper]::WritePrivateProfileString("General", "TemplatesFolder", @"templates, $testFile)
+          [IniHelper]::WritePrivateProfileString("General", "TemplatesFolder", "templates", $testFile)
           
           # Read back
           $sb = New-Object System.Text.StringBuilder 2048
