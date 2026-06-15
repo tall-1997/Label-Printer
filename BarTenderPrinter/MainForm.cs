@@ -165,7 +165,7 @@ namespace BarTenderPrinter
         {
             if (!_btService.IsConnected)
             {
-                AddLog("离线模式：请手动配置数据源（点击"编辑数据源"）", "INFO");
+                AddLog("离线模式：请手动配置数据源（点击 编辑数据源 按钮）", "INFO");
                 return;
             }
             Task.Run(() =>
