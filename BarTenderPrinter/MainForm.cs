@@ -53,7 +53,22 @@ namespace BarTenderPrinter
         {
             if (_btService.Connect())
                 SetStatus($"BarTender 已连接");
-            else { SetStatus("BarTender 连接失败"); AddLog("BarTender 连接失败，请检查是否已安装", "ERROR"); }
+            else
+            {
+                if (_btService.IsOfflineMode)
+                {
+                    SetStatus("离线模式 - BarTender 未安装，打印功能不可用");
+                    AddLog("BarTender 未安装，进入离线模式。打印功能不可用，其他功能正常。", "WARNING");
+                    btnPrint.Enabled = false;
+                    btnPrint.Text = "打印（需要安装 BarTender）";
+                    lblStatus.ForeColor = Color.Orange;
+                }
+                else
+                {
+                    SetStatus("BarTender 连接失败");
+                    AddLog("BarTender 连接失败", "ERROR");
+                }
+            }
         }
 
         #endregion
@@ -117,6 +132,21 @@ namespace BarTenderPrinter
         {
             CleanupPreview(); pictureBoxPreview.Image = null;
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            if (!_btService.IsConnected)
+            {
+                // Offline mode: show placeholder
+                var bmp = new Bitmap(145, 50);
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.Clear(Color.WhiteSmoke);
+                    using (var font = new Font("Microsoft YaHei UI", 8F))
+                    using (var brush = new SolidBrush(Color.Gray))
+                    using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                        g.DrawString("预览需要 BarTender", font, brush, new RectangleF(0, 0, 145, 50), sf);
+                }
+                pictureBoxPreview.Image = bmp;
+                return;
+            }
             Task.Run(() =>
             {
                 var tmp = _btService.ExportPreview(path);
@@ -133,7 +163,11 @@ namespace BarTenderPrinter
 
         private void LoadTemplateDataSources(string path)
         {
-            if (!_btService.IsConnected) return;
+            if (!_btService.IsConnected)
+            {
+                AddLog("离线模式：请手动配置数据源（点击"编辑数据源"）", "INFO");
+                return;
+            }
             Task.Run(() =>
             {
                 var names = _btService.GetTemplateDataSources(path);
@@ -173,9 +207,41 @@ namespace BarTenderPrinter
             var fields = _dataSources.Select(d => d.Field).ToList();
             if (fields.Count == 0 && !string.IsNullOrEmpty(_selectedTemplatePath) && _btService.IsConnected)
                 fields = _btService.GetTemplateDataSources(_selectedTemplatePath);
-            if (fields.Count == 0) fields = new List<string> { "IMEI1" };
+            if (fields.Count == 0)
+            {
+                // Offline mode or no template: show manual input dialog
+                var result = PromptForManualDataSources();
+                if (result != null && result.Count > 0)
+                    fields = result;
+                else
+                    fields = new List<string> { "IMEI1" };
+            }
             var dlg = new DataSourceSelectDialog(fields, _dataSources);
             if (dlg.ShowDialog(this) == DialogResult.OK) { _dataSources = dlg.SelectedSources; RebuildInputFields(); }
+        }
+
+        private List<string> PromptForManualDataSources()
+        {
+            using (var f = new Form())
+            {
+                f.Text = "手动添加数据源";
+                f.Size = new Size(350, 250);
+                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                f.StartPosition = FormStartPosition.CenterParent;
+                f.MaximizeBox = false; f.MinimizeBox = false;
+
+                var lbl = new Label { Text = "输入数据源字段名（每行一个）：", Location = new Point(10, 10), Size = new Size(320, 20) };
+                var txt = new TextBox { Location = new Point(10, 35), Size = new Size(315, 150), Multiline = true, ScrollBars = ScrollBars.Vertical };
+                txt.Text = "IMEI1\nDS1";
+                var ok = new Button { Text = "确定", Location = new Point(170, 195), Size = new Size(75, 25), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(255, 195), Size = new Size(75, 25), DialogResult = DialogResult.Cancel };
+                f.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
+                f.AcceptButton = ok; f.CancelButton = cancel;
+
+                if (f.ShowDialog(this) == DialogResult.OK)
+                    return txt.Text.Split('\n').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
+                return null;
+            }
         }
 
         private void RebuildInputFields()
@@ -227,7 +293,14 @@ namespace BarTenderPrinter
         {
             if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath))
             { MessageBox.Show(this, "请先选择模板文件"); return; }
-            if (!_btService.IsConnected) { AddLog("BarTender 未连接", "ERROR"); return; }
+            if (!_btService.IsConnected)
+            {
+                if (_btService.IsOfflineMode)
+                    MessageBox.Show(this, "BarTender 未安装，打印功能不可用。\n\n请安装 BarTender 后重新启动程序。", "离线模式");
+                else
+                    AddLog("BarTender 未连接", "ERROR");
+                return;
+            }
             var printer = cmbPrinter.SelectedItem?.ToString();
             if (string.IsNullOrEmpty(printer)) { MessageBox.Show(this, "请选择打印机"); return; }
 

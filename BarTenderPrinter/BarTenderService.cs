@@ -13,8 +13,10 @@ namespace BarTenderPrinter
         private object _comObject;
         private bool _useCom;
         private bool _connected;
+        private bool _offlineMode;
 
         public bool IsConnected => _connected;
+        public bool IsOfflineMode => _offlineMode;
 
         public bool Connect()
         {
@@ -24,16 +26,26 @@ namespace BarTenderPrinter
 
                 // Try to find Seagull.BarTender.Print.dll in common locations
                 var asm = TryLoadAssembly();
-                if (asm == null)
+                if (asm == null && !_useCom)
                 {
-                    LoggerService.Error("Seagull.BarTender.Print 程序集未找到，请确认 BarTender 已安装");
+                    LoggerService.Warn("BarTender 未安装，进入离线模式");
+                    _offlineMode = true;
+                    _connected = false;
                     return false;
+                }
+
+                if (_useCom)
+                {
+                    _connected = true;
+                    return true;
                 }
 
                 _engineType = asm.GetType("Seagull.BarTender.Print.Engine");
                 if (_engineType == null)
                 {
-                    LoggerService.Error("Engine 类型未找到");
+                    LoggerService.Warn("Engine 类型未找到，进入离线模式");
+                    _offlineMode = true;
+                    _connected = false;
                     return false;
                 }
 
@@ -44,7 +56,8 @@ namespace BarTenderPrinter
             }
             catch (Exception ex)
             {
-                LoggerService.Error("BarTender SDK 加载失败", ex);
+                LoggerService.Warn($"BarTender 加载失败，进入离线模式: {ex.Message}");
+                _offlineMode = true;
                 _connected = false;
                 return false;
             }
