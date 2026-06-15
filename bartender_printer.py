@@ -39,7 +39,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.5.2"
+    VERSION = "v2.6.0"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -68,6 +68,7 @@ class BarTenderPrintApp:
             'excel_path': '',
             'excel_column': 'IMEI1',
             'printer': '',
+            'copies': 1,
             'verify_excel': True,
         }
 
@@ -81,7 +82,9 @@ class BarTenderPrintApp:
         self.excel_path_var = tk.StringVar(value=self._config['excel_path'])
         self.excel_column_var = tk.StringVar(value=self._config['excel_column'])
         self.printer_var = tk.StringVar(value=self._config['printer'])
+        self.copies_var = tk.IntVar(value=int(self._config.get('copies', 1) or 1))
         self.verify_excel_var = tk.BooleanVar(value=self._config['verify_excel'])
+        self.history_search_var = tk.StringVar(value="")
 
         # 创建UI
         self._create_ui()
@@ -104,12 +107,17 @@ class BarTenderPrintApp:
 
     def _save_config(self):
         try:
+            try:
+                copies = max(1, int(self.copies_var.get() or 1))
+            except Exception:
+                copies = 1
             self._config.update({
                 'template_path': self.template_path_var.get(),
                 'datasource': self.datasource_var.get(),
                 'excel_path': self.excel_path_var.get(),
                 'excel_column': self.excel_column_var.get(),
                 'printer': self.printer_var.get(),
+                'copies': copies,
                 'verify_excel': self.verify_excel_var.get(),
             })
             with open(self.config_file, 'w', encoding='utf-8') as f:
@@ -211,6 +219,8 @@ class BarTenderPrintApp:
         of = ttk.Frame(tab)
         of.pack(fill=tk.X, pady=(0, 10))
         ttk.Checkbutton(of, text="打印前校验 Excel 数据", variable=self.verify_excel_var).pack(side=tk.LEFT)
+        ttk.Label(of, text="打印份数：").pack(side=tk.LEFT, padx=(20, 5))
+        ttk.Spinbox(of, from_=1, to=99, textvariable=self.copies_var, width=6).pack(side=tk.LEFT)
 
         # 按钮
         bf = ttk.Frame(tab)
@@ -231,6 +241,14 @@ class BarTenderPrintApp:
         tab = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(tab, text="历史记录")
 
+        sf = ttk.Frame(tab)
+        sf.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(sf, text="搜索：").pack(side=tk.LEFT)
+        search_entry = ttk.Entry(sf, textvariable=self.history_search_var)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+        search_entry.bind('<KeyRelease>', lambda event: self.refresh_history())
+        ttk.Button(sf, text="清空搜索", command=self._clear_history_search).pack(side=tk.LEFT)
+
         hf = ttk.LabelFrame(tab, text="打印记录", padding="10")
         hf.pack(fill=tk.BOTH, expand=True)
         self.history_tree = ttk.Treeview(hf, columns=("imei", "time", "status"), show="headings")
@@ -242,6 +260,7 @@ class BarTenderPrintApp:
         bf = ttk.Frame(tab)
         bf.pack(fill=tk.X, pady=(10, 0))
         ttk.Button(bf, text="清空记录", command=self._clear_records).pack(side=tk.LEFT)
+        ttk.Button(bf, text="导出记录", command=self._export_records).pack(side=tk.LEFT, padx=(10, 0))
 
     def _create_stats_tab(self):
         tab = ttk.Frame(self.notebook, padding="10")
@@ -420,6 +439,12 @@ class BarTenderPrintApp:
             return
 
         datasource = self.datasource_var.get()
+        try:
+            copies = max(1, int(self.copies_var.get() or 1))
+        except Exception:
+            copies = 1
+            self.copies_var.set(1)
+        self._save_config()
 
         # 校验Excel
         if self.verify_excel_var.get() and self.excel_data:
@@ -460,13 +485,13 @@ class BarTenderPrintApp:
         if clear_status:
             self._clear_status()
         self._update_status(f"开始打印 {len(imei_list)} 个 IMEI...", "info")
-        self._do_print(imei_list, template_path, printer, datasource)
+        self._do_print(imei_list, template_path, printer, datasource, copies)
 
-    def _do_print(self, imei_list, template_path, printer, datasource):
+    def _do_print(self, imei_list, template_path, printer, datasource, copies):
         """实际打印逻辑"""
         ok = 0
         fail = 0
-        results = self._print_batch_vbs(imei_list, template_path, printer, datasource)
+        results = self._print_batch_vbs(imei_list, template_path, printer, datasource, copies)
         for imei in imei_list:
             success, error_msg = results.get(str(imei), (False, "未收到打印结果"))
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -505,7 +530,7 @@ class BarTenderPrintApp:
     def _vbs_string(self, value):
         return '"' + str(value).replace('"', '""') + '"'
 
-    def _print_batch_vbs(self, imei_list, template_path, printer, datasource):
+    def _print_batch_vbs(self, imei_list, template_path, printer, datasource, copies):
         template_path = os.path.abspath(template_path).replace('/', '\\')
         self._update_status(f"准备打开模板: {template_path}", "info")
         script_file = None
@@ -540,6 +565,11 @@ If Err.Number <> 0 Then
   btFormat.Close False
   btApp.Quit 0
   WScript.Quit 3
+End If
+Err.Clear
+btFormat.PrintSetup.IdenticalCopiesOfLabel = {int(copies)}
+If Err.Number <> 0 Then
+  Err.Clear
 End If
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set file = fso.OpenTextFile({self._vbs_string(data_file)}, 1, False, -1)
@@ -766,8 +796,43 @@ WScript.Quit 0
     def refresh_history(self):
         for item in self.history_tree.get_children():
             self.history_tree.delete(item)
+        keyword = self.history_search_var.get().strip().lower() if hasattr(self, 'history_search_var') else ""
         for r in reversed(self.print_records):
+            if keyword and keyword not in r.imei.lower() and keyword not in r.print_time.lower() and keyword not in r.status.lower():
+                continue
             self.history_tree.insert('', 0, values=(r.imei, r.print_time, r.status))
+
+    def _clear_history_search(self):
+        self.history_search_var.set("")
+        self.refresh_history()
+
+    def _export_records(self):
+        if not self.print_records:
+            messagebox.showinfo("提示", "没有可导出的历史记录")
+            return
+        path = filedialog.asksaveasfilename(
+            title="导出历史记录",
+            defaultextension=".csv",
+            filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")],
+            initialfile=f"print_records_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        )
+        if not path:
+            return
+        keyword = self.history_search_var.get().strip().lower()
+        rows = []
+        for r in self.print_records:
+            if keyword and keyword not in r.imei.lower() and keyword not in r.print_time.lower() and keyword not in r.status.lower():
+                continue
+            rows.append(r)
+        try:
+            with open(path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                writer.writerow(['imei', 'print_time', 'status'])
+                for r in rows:
+                    writer.writerow([r.imei, r.print_time, r.status])
+            messagebox.showinfo("导出成功", f"已导出 {len(rows)} 条记录")
+        except Exception as e:
+            messagebox.showerror("导出失败", str(e))
 
     def refresh_stats(self):
         today = datetime.now().strftime("%Y-%m-%d")
