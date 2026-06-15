@@ -21,6 +21,14 @@ try:
     import win32com.client.dynamic
     import pythoncom
     HAS_WIN32COM = True
+    # 清理可能损坏的 gen_py 缓存（EnsureDispatch 可能生成不兼容的缓存）
+    try:
+        import shutil
+        _gen_py = os.path.join(os.path.dirname(win32com.__file__), 'gen_py')
+        if os.path.exists(_gen_py):
+            shutil.rmtree(_gen_py, ignore_errors=True)
+    except Exception:
+        pass
 except ImportError:
     HAS_WIN32COM = False
 
@@ -288,7 +296,7 @@ class BarTenderPrintApp:
         try:
             pythoncom.CoInitialize()
             print("[DEBUG] 正在创建 BarTender.Application...")
-            self.bt_app = win32com.client.gencache.EnsureDispatch("BarTender.Application")
+            self.bt_app = win32com.client.Dispatch("BarTender.Application")
             print(f"[DEBUG] BarTender 对象: {self.bt_app}")
             self.bt_app.Visible = False
             print("[DEBUG] Visible 设置完成")
