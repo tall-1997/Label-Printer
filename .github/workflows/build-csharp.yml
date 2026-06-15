@@ -24,7 +24,7 @@ jobs:
         run: nuget restore BarTenderPrinter/BarTenderPrinter.csproj
 
       - name: Build
-        run: msbuild BarTenderPrinter/BarTenderPrinter.csproj /p:Configuration=Release /p:Platform="Any CPU"
+        run: msbuild BarTenderPrinter/BarTenderPrinter.csproj /p:Configuration=Release
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
