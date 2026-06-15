@@ -39,7 +39,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.6.0"
+    VERSION = "v2.6.1"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -485,10 +485,10 @@ class BarTenderPrintApp:
         if clear_status:
             self._clear_status()
         self._update_status(f"开始打印 {len(imei_list)} 个 IMEI...", "info")
-        self._do_print(imei_list, template_path, printer, datasource, copies)
+        threading.Thread(target=self._do_print, args=(imei_list, template_path, printer, datasource, copies), daemon=True).start()
 
     def _do_print(self, imei_list, template_path, printer, datasource, copies):
-        """实际打印逻辑"""
+        """实际打印逻辑（后台线程执行）"""
         ok = 0
         fail = 0
         results = self._print_batch_vbs(imei_list, template_path, printer, datasource, copies)
@@ -506,10 +506,10 @@ class BarTenderPrintApp:
 
         self._save_config()
         self._save_records()
-        self.refresh_history()
-        self.refresh_stats()
-        self._update_status(f"\n完成：成功 {ok}，失败 {fail}", "info")
-        self.status_var.set(f"完成：成功 {ok}，失败 {fail}")
+        self.root.after(0, self.refresh_history)
+        self.root.after(0, self.refresh_stats)
+        self.root.after(0, lambda: self._update_status(f"\n完成：成功 {ok}，失败 {fail}", "info"))
+        self.root.after(0, lambda: self.status_var.set(f"完成：成功 {ok}，失败 {fail}"))
 
     def _print_single(self, imei, template_path, printer, datasource):
         """打印单个IMEI"""
@@ -532,7 +532,7 @@ class BarTenderPrintApp:
 
     def _print_batch_vbs(self, imei_list, template_path, printer, datasource, copies):
         template_path = os.path.abspath(template_path).replace('/', '\\')
-        self._update_status(f"准备打开模板: {template_path}", "info")
+        self.root.after(0, lambda: self._update_status(f"准备打开模板: {template_path}", "info"))
         script_file = None
         data_file = None
         try:
@@ -611,14 +611,14 @@ WScript.Quit 0
                 ['cscript.exe', '//NoLogo', script_file],
                 capture_output=True,
                 text=True,
-                timeout=max(60, len(imei_list) * 20),
+                timeout=max(300, len(imei_list) * 60),
                 startupinfo=startupinfo,
                 creationflags=creationflags,
             )
             output = (result.stdout or '').strip()
             error_output = (result.stderr or '').strip()
             if error_output:
-                self._update_status(error_output, "error")
+                self.root.after(0, lambda msg=error_output: self._update_status(msg, "error"))
             results = {}
             for raw_line in output.splitlines():
                 line = raw_line.strip()
@@ -634,9 +634,9 @@ WScript.Quit 0
                     else:
                         results[parts[1]] = (False, parts[2])
                 elif len(parts) >= 3 and parts[0] == 'WARN':
-                    self._update_status(line, "info")
+                    self.root.after(0, lambda msg=line: self._update_status(msg, "info"))
                 else:
-                    self._update_status(line, "info")
+                    self.root.after(0, lambda msg=line: self._update_status(msg, "info"))
             if result.returncode != 0 and not results:
                 message = output or error_output or f"cscript 退出码 {result.returncode}"
                 for imei in imei_list:
