@@ -39,7 +39,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.5.1"
+    VERSION = "v2.5.2"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -354,7 +354,7 @@ class BarTenderPrintApp:
         main_frame = ttk.Frame(dialog, padding="20")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main_frame, text="输入要打印的 IMEI（每行一个）：").pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text="扫码或输入 IMEI：回车立即打印，窗口保持打开").pack(anchor=tk.W, pady=(0, 10))
 
         imei_text = tk.Text(main_frame, wrap=tk.WORD, height=3)
         imei_text.pack(fill=tk.X, pady=(0, 10))
@@ -381,10 +381,15 @@ class BarTenderPrintApp:
             if content:
                 lines = [l.strip() for l in content.split('\n') if l.strip()]
                 if len(lines) == 1:
-                    on_print()
+                    imei_text.delete("1.0", tk.END)
+                    imei_text.config(height=3)
+                    imei_text.focus_set()
+                    self._process_imei_list(lines, clear_status=False)
+                    return "break"
+            return None
 
         imei_text.bind('<Return>', on_enter)
-        ttk.Button(btn_frame, text="打印", command=on_print).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text="批量打印并关闭", command=on_print).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT)
 
     def _import_imei_file(self):
@@ -399,7 +404,7 @@ class BarTenderPrintApp:
             except Exception as e:
                 messagebox.showerror("错误", f"文件读取失败: {e}")
 
-    def _process_imei_list(self, imei_list):
+    def _process_imei_list(self, imei_list, clear_status=True):
         printer = self.printer_var.get()
         if not printer:
             self._update_status("错误：请选择打印机", "error")
@@ -452,7 +457,8 @@ class BarTenderPrintApp:
                     return
 
         # BarTender COM 对象必须在创建它的线程中使用。
-        self._clear_status()
+        if clear_status:
+            self._clear_status()
         self._update_status(f"开始打印 {len(imei_list)} 个 IMEI...", "info")
         self._do_print(imei_list, template_path, printer, datasource)
 
