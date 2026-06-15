@@ -9,6 +9,8 @@ import os
 import sys
 import csv
 import json
+import subprocess
+import tempfile
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
@@ -37,7 +39,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.4.8"
+    VERSION = "v2.4.9"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -479,40 +481,11 @@ class BarTenderPrintApp:
 
     def _print_single(self, imei, template_path, printer, datasource):
         """打印单个IMEI"""
-        bt_format = None
         try:
             debug_msg = f"准备打开模板: {template_path}"
             print(f"[DEBUG] {debug_msg}")
             self._update_status(debug_msg, "info")
-            
-            # 检查 bt_app
-            if not self.bt_app:
-                return False, "BarTender 未初始化"
-            
-            bt_format = self._open_template(template_path, printer)
-            print(f"[DEBUG] 模板打开成功")
-            
-            # 设置数据源
-            bt_format.SetNamedSubStringValue(datasource, str(imei))
-            print(f"[DEBUG] 数据源设置成功: {datasource}={imei}")
-            
-            # 设置打印机
-            bt_format.Printer = printer
-            print(f"[DEBUG] 打印机设置成功: {printer}")
-            
-            # 打印
-            try:
-                bt_format.PrintOut(False, False)
-                print(f"[DEBUG] PrintOut 执行完成")
-            except Exception as e:
-                print(f"[DEBUG] PrintOut 异常(通常可忽略): {e}")
-            
-            # 关闭模板
-            bt_format.Close()
-            print(f"[DEBUG] 模板关闭成功")
-            
-            return True, ""
-                
+            return self._print_single_vbs(imei, template_path, printer, datasource)
         except Exception as e:
             import traceback
             error_detail = traceback.format_exc()
@@ -520,12 +493,85 @@ class BarTenderPrintApp:
             print(f"[DEBUG] 打印失败: {error_msg}")
             print(f"[DEBUG] 详细错误:\n{error_detail}")
             self._update_status(f"打印失败: {error_msg}", "error")
-            if bt_format:
-                try:
-                    bt_format.Close()
-                except:
-                    pass
             return False, error_msg
+
+    def _vbs_string(self, value):
+        return '"' + str(value).replace('"', '""') + '"'
+
+    def _print_single_vbs(self, imei, template_path, printer, datasource):
+        template_path = os.path.abspath(template_path).replace('/', '\\')
+        script = f'''
+On Error Resume Next
+Dim btApp, btFormat
+Set btApp = CreateObject("BarTender.Application")
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR: CreateObject: " & Err.Number & " " & Err.Description
+  WScript.Quit 1
+End If
+btApp.Visible = False
+Err.Clear
+Set btFormat = btApp.Formats.Open({self._vbs_string(template_path)}, False, "")
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR: Formats.Open: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btApp.Quit 0
+  WScript.Quit 2
+End If
+Err.Clear
+btFormat.SetNamedSubStringValue {self._vbs_string(datasource)}, {self._vbs_string(imei)}
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR: SetNamedSubStringValue: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btFormat.Close False
+  btApp.Quit 0
+  WScript.Quit 3
+End If
+Err.Clear
+btFormat.Printer = {self._vbs_string(printer)}
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR: Printer: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btFormat.Close False
+  btApp.Quit 0
+  WScript.Quit 4
+End If
+Err.Clear
+btFormat.PrintOut False, False
+If Err.Number <> 0 Then
+  WScript.Echo "WARN: PrintOut: " & Err.Number & " " & Err.Description
+End If
+On Error Resume Next
+btFormat.Close False
+btApp.Quit 0
+WScript.Echo "OK"
+WScript.Quit 0
+'''
+        script_file = None
+        try:
+            with tempfile.NamedTemporaryFile('w', suffix='.vbs', delete=False, encoding='utf-16') as f:
+                script_file = f.name
+                f.write(script)
+            result = subprocess.run(
+                ['cscript.exe', '//NoLogo', script_file],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            output = (result.stdout or '').strip()
+            error_output = (result.stderr or '').strip()
+            if output:
+                self._update_status(output, "info")
+            if error_output:
+                self._update_status(error_output, "error")
+            if result.returncode == 0:
+                return True, ""
+            return False, output or error_output or f"cscript 退出码 {result.returncode}"
+        finally:
+            if script_file and os.path.exists(script_file):
+                try:
+                    os.remove(script_file)
+                except Exception:
+                    pass
 
     def _open_template(self, template_path, printer):
         template_path = os.path.abspath(template_path).replace('/', '\\')
