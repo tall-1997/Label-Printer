@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v4.0.0";
+        private readonly string _version = "v4.1.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private Panel[] _inputPanels = new Panel[0];
@@ -89,7 +89,7 @@ namespace BarTenderPrinter
             {
                 if (!string.IsNullOrEmpty(_templatesFolder) && Directory.Exists(_templatesFolder))
                     fbd.SelectedPath = _templatesFolder;
-                if (fbd.ShowDialog() == DialogResult.OK)
+                if (fbd.ShowDialog(this) == DialogResult.OK)
                 {
                     _templatesFolder = fbd.SelectedPath;
                     txtTemplateDir.Text = _templatesFolder;
@@ -119,7 +119,7 @@ namespace BarTenderPrinter
                 }
                 else cmbTemplate.SelectedIndex = 0;
             }
-            catch (Exception ex) { MessageBox.Show("读取模板文件夹出错: " + ex.Message); }
+            catch (Exception ex) { MessageBox.Show(this, "读取模板文件夹出错: " + ex.Message); }
         }
 
         private void cmbTemplate_SelectedIndexChanged(object sender, EventArgs e)
@@ -314,7 +314,7 @@ namespace BarTenderPrinter
         {
             if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath))
             {
-                MessageBox.Show("请先选择有效的模板文件 (.btw)");
+                MessageBox.Show(this, "请先选择有效的模板文件 (.btw)");
                 return;
             }
             if (!_btService.IsConnected) { AddLog("BarTender 未连接", "ERROR"); return; }
@@ -330,20 +330,34 @@ namespace BarTenderPrinter
                 var val = _inputTextBoxes[i]?.Text?.Trim() ?? "";
                 if (string.IsNullOrEmpty(val))
                 {
-                    MessageBox.Show($"\"{enabled[i].Name}\" 不能为空");
+                    MessageBox.Show(this, $"\"{enabled[i].Name}\" 不能为空");
                     _inputTextBoxes[i]?.Focus();
                     return;
                 }
                 fieldValues[enabled[i].Field] = val;
             }
 
-            // Duplicate check (first field)
-            var firstVal = fieldValues.Values.FirstOrDefault();
-            if (!string.IsNullOrEmpty(firstVal) && _history.IsPrinted(firstVal))
+            // Duplicate check - check all data source values
+            var duplicateValues = new List<string>();
+            foreach (var kv in fieldValues)
             {
-                if (MessageBox.Show($"\"{firstVal}\" 已打印过，是否继续？", "数据重复", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
-                    return;
+                if (_history.IsPrinted(kv.Value))
+                    duplicateValues.Add($"{kv.Key}={kv.Value}");
             }
+            if (duplicateValues.Count > 0)
+            {
+                var msg = $"以下数据源值已打印过：\n\n{string.Join("\n", duplicateValues)}\n\n是否继续打印？";
+                var result = MessageBox.Show(this, msg, "数据重复提醒", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (result != DialogResult.Yes)
+                {
+                    AddLog("用户取消打印（数据重复）", "WARNING");
+                    return;
+                }
+                AddLog("用户确认继续打印（数据重复）", "WARNING");
+            }
+
+            // Build display string for history
+            var historyKey = string.Join("|", fieldValues.Values);
 
             int copies = 1;
             try { copies = (int)GetCopiesValue(); } catch { }
@@ -362,14 +376,14 @@ namespace BarTenderPrinter
                     {
                         SetStatus("打印完成");
                         AddLog("打印完成", "SUCCESS");
-                        _history.Add(firstVal, "PASS");
+                        _history.Add(historyKey, "PASS");
                         ClearInputsAndFocusFirst();
                     }
                     else
                     {
                         SetStatus("打印失败");
                         AddLog($"打印失败: {result.ErrorMessage}", "ERROR");
-                        _history.Add(firstVal, "FAIL");
+                        _history.Add(historyKey, "FAIL");
                     }
                     SetInputsReadOnly(false);
                     btnPrint.Enabled = true;
@@ -396,18 +410,18 @@ namespace BarTenderPrinter
         private void btnClearSearch_Click(object sender, EventArgs e) { txtSearch.Text = ""; }
         private void btnClearHistory_Click(object sender, EventArgs e)
         {
-            if (MessageBox.Show("确定要清空所有记录吗？", "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            if (MessageBox.Show(this, "确定要清空所有记录吗？", "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
             { _history.Clear(); LoadHistory(); RefreshStats(); }
         }
         private void btnExportHistory_Click(object sender, EventArgs e)
         {
-            if (_history.Records.Count == 0) { MessageBox.Show("没有可导出的历史记录"); return; }
+            if (_history.Records.Count == 0) { MessageBox.Show(this, "没有可导出的历史记录"); return; }
             using (var sfd = new SaveFileDialog { Filter = "CSV|*.csv", FileName = $"print_records_{DateTime.Now:yyyyMMdd_HHmmss}.csv" })
             {
-                if (sfd.ShowDialog() == DialogResult.OK)
+                if (sfd.ShowDialog(this) == DialogResult.OK)
                 {
-                    try { _history.Export(sfd.FileName, txtSearch?.Text?.Trim() ?? ""); MessageBox.Show($"已导出到:\n{sfd.FileName}"); }
-                    catch (Exception ex) { MessageBox.Show($"导出失败: {ex.Message}"); }
+                    try { _history.Export(sfd.FileName, txtSearch?.Text?.Trim() ?? ""); MessageBox.Show(this, $"已导出到:\n{sfd.FileName}"); }
+                    catch (Exception ex) { MessageBox.Show(this, $"导出失败: {ex.Message}"); }
                 }
             }
         }
@@ -443,7 +457,7 @@ namespace BarTenderPrinter
         {
             SaveConfig(_configFile);
             AddLog($"配置已保存", "SUCCESS");
-            MessageBox.Show("配置已保存");
+            MessageBox.Show(this, "配置已保存");
         }
 
         private void btnLoadConfig_Click(object sender, EventArgs e)
@@ -454,9 +468,9 @@ namespace BarTenderPrinter
                 PopulateTemplateList(_templatesFolder);
                 RebuildInputFields();
                 AddLog("配置已加载", "SUCCESS");
-                MessageBox.Show("配置已加载");
+                MessageBox.Show(this, "配置已加载");
             }
-            else { MessageBox.Show("未找到配置文件"); }
+            else { MessageBox.Show(this, "未找到配置文件"); }
         }
 
         private void SaveConfig(string path)
@@ -527,13 +541,13 @@ namespace BarTenderPrinter
 
         private void btnExportLog_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(txtLog.Text)) { MessageBox.Show("日志为空"); return; }
+            if (string.IsNullOrWhiteSpace(txtLog.Text)) { MessageBox.Show(this, "日志为空"); return; }
             using (var sfd = new SaveFileDialog { Filter = "文本|*.txt|日志|*.log", FileName = $"log_{DateTime.Now:yyyyMMdd_HHmmss}.log" })
             {
-                if (sfd.ShowDialog() == DialogResult.OK)
+                if (sfd.ShowDialog(this) == DialogResult.OK)
                 {
                     try { File.WriteAllText(sfd.FileName, txtLog.Text, Encoding.UTF8); AddLog($"日志已导出", "SUCCESS"); }
-                    catch (Exception ex) { MessageBox.Show($"导出失败: {ex.Message}"); }
+                    catch (Exception ex) { MessageBox.Show(this, $"导出失败: {ex.Message}"); }
                 }
             }
         }
