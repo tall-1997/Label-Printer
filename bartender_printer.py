@@ -11,6 +11,7 @@ import csv
 import json
 import subprocess
 import tempfile
+import logging
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
@@ -47,7 +48,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.6.4"
+    VERSION = "v2.6.5"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -58,6 +59,17 @@ class BarTenderPrintApp:
         # 配置路径
         self.app_dir = os.path.join(os.path.expanduser("~"), ".bartender-printer")
         os.makedirs(self.app_dir, exist_ok=True)
+
+        # 日志文件
+        self.log_file = os.path.join(self.app_dir, "bartender-printer.log")
+        logging.basicConfig(
+            filename=self.log_file,
+            level=logging.DEBUG,
+            format='%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            encoding='utf-8',
+        )
+        self._log(f"=== BarTender 标签打印工具 {self.VERSION} 启动 ===")
         self.config_file = os.path.join(self.app_dir, "bt_config.json")
         self.records_file = os.path.join(self.app_dir, "print_records.csv")
 
@@ -163,6 +175,7 @@ class BarTenderPrintApp:
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(fill=tk.X, pady=(0, 10))
         ttk.Label(title_frame, text="BarTender 标签打印工具", font=("微软雅黑", 16, "bold")).pack(side=tk.LEFT)
+        ttk.Button(title_frame, text="导出日志", command=self._export_log).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(title_frame, text="设置", command=self._open_settings).pack(side=tk.RIGHT)
 
         # 选项卡
@@ -801,7 +814,16 @@ WScript.Quit 0
         self.print_status.delete("1.0", tk.END)
         self.print_status.config(state=tk.DISABLED)
 
+    def _log(self, msg, level="info"):
+        if level == "error":
+            logging.error(msg)
+        elif level == "success":
+            logging.info(msg)
+        else:
+            logging.info(msg)
+
     def _update_status(self, msg, level="info"):
+        self._log(msg, level)
         self.print_status.config(state=tk.NORMAL)
         self.print_status.tag_configure("success", foreground="green")
         self.print_status.tag_configure("error", foreground="red")
@@ -849,6 +871,25 @@ WScript.Quit 0
                 for r in rows:
                     writer.writerow([r.imei, r.print_time, r.status])
             messagebox.showinfo("导出成功", f"已导出 {len(rows)} 条记录")
+        except Exception as e:
+            messagebox.showerror("导出失败", str(e))
+
+    def _export_log(self):
+        if not os.path.exists(self.log_file):
+            messagebox.showinfo("提示", "日志文件不存在")
+            return
+        path = filedialog.asksaveasfilename(
+            title="导出运行日志",
+            defaultextension=".log",
+            filetypes=[("日志文件", "*.log"), ("文本文件", "*.txt"), ("所有文件", "*.*")],
+            initialfile=f"bartender-printer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+        )
+        if not path:
+            return
+        try:
+            import shutil
+            shutil.copy2(self.log_file, path)
+            messagebox.showinfo("导出成功", f"日志已导出到:\n{path}")
         except Exception as e:
             messagebox.showerror("导出失败", str(e))
 
