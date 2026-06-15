@@ -183,8 +183,29 @@ namespace BarTenderPrinter
                         }
                         catch { missing.Add(kv.Key); }
                     }
-                    if (missing.Count > 0)
-                        return new PrintResult(false, $"模板中未找到字段: {string.Join(", ", missing.Distinct())}");
+                if (missing.Count > 0)
+                    return new PrintResult(false, $"模板中未找到字段: {string.Join(", ", missing.Distinct())}");
+                }
+
+                // Set printer and copies
+                try
+                {
+                    var printSetupProp = doc.GetType().GetProperty("PrintSetup");
+                    var printSetup = printSetupProp?.GetValue(doc);
+                    if (printSetup != null)
+                    {
+                        var printerProp = printSetup.GetType().GetProperty("Printer");
+                        printerProp?.SetValue(printSetup, printer);
+                        LoggerService.Info($"打印机设置: {printer}");
+
+                        var copiesProp = printSetup.GetType().GetProperty("IdenticalCopiesOfLabel");
+                        copiesProp?.SetValue(printSetup, copies);
+                        LoggerService.Info($"打印份数设置: {copies}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Warn($"设置打印机/份数失败: {ex.Message}");
                 }
 
                 var printMethod = doc.GetType().GetMethod("Print", new[] { typeof(string), typeof(int) });
