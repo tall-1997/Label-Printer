@@ -37,7 +37,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.4.5"
+    VERSION = "v2.4.6"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -540,24 +540,23 @@ class BarTenderPrintApp:
                 print(f"[DEBUG] {error_msg}")
                 return None
 
-        formats = getattr(self.bt_app, "Formats", None)
-        if formats is not None:
-            for label, opener in (
-                ("Formats.Open(path, False)", lambda: formats.Open(template_path, False)),
-                ("Formats.Open(path)", lambda: formats.Open(template_path)),
-                ("Formats.Open(path, False, '')", lambda: formats.Open(template_path, False, "")),
-                ("Formats.Open(path, False, 0)", lambda: formats.Open(template_path, False, 0)),
-            ):
-                opened = try_open(label, opener)
-                if opened is not None:
-                    return opened
-
         documents = getattr(self.bt_app, "Documents", None)
         if documents is not None:
             for label, opener in (
                 ("Documents.Open(path)", lambda: documents.Open(template_path)),
                 ("Documents.Open(path, False)", lambda: documents.Open(template_path, False)),
-                ("Documents.Open(path, False, '')", lambda: documents.Open(template_path, False, "")),
+                ("Documents.Open(path, False, 0)", lambda: documents.Open(template_path, False, 0)),
+            ):
+                opened = try_open(label, opener)
+                if opened is not None:
+                    return opened
+
+        formats = getattr(self.bt_app, "Formats", None)
+        if formats is not None:
+            for label, opener in (
+                ("Formats.Open(path, False)", lambda: formats.Open(template_path, False)),
+                ("Formats.Open(path)", lambda: formats.Open(template_path)),
+                ("Formats.Open(path, False, 0)", lambda: formats.Open(template_path, False, 0)),
             ):
                 opened = try_open(label, opener)
                 if opened is not None:
