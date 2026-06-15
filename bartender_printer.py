@@ -39,7 +39,7 @@ class PrintRecord:
 
 
 class BarTenderPrintApp:
-    VERSION = "v2.5.0"
+    VERSION = "v2.5.1"
 
     def __init__(self):
         self.root = tk.Tk()
@@ -460,8 +460,9 @@ class BarTenderPrintApp:
         """实际打印逻辑"""
         ok = 0
         fail = 0
+        results = self._print_batch_vbs(imei_list, template_path, printer, datasource)
         for imei in imei_list:
-            success, error_msg = self._print_single(imei, template_path, printer, datasource)
+            success, error_msg = results.get(str(imei), (False, "未收到打印结果"))
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if success:
                 self.print_records.append(PrintRecord(imei, now, "PASS"))
@@ -497,6 +498,124 @@ class BarTenderPrintApp:
 
     def _vbs_string(self, value):
         return '"' + str(value).replace('"', '""') + '"'
+
+    def _print_batch_vbs(self, imei_list, template_path, printer, datasource):
+        template_path = os.path.abspath(template_path).replace('/', '\\')
+        self._update_status(f"准备打开模板: {template_path}", "info")
+        script_file = None
+        data_file = None
+        try:
+            with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                data_file = f.name
+                for imei in imei_list:
+                    f.write(str(imei).replace('\r', '').replace('\n', '') + '\n')
+            script = f'''
+On Error Resume Next
+Dim btApp, btFormat, fso, file, line
+Set btApp = CreateObject("BarTender.Application")
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR|ALL|CreateObject: " & Err.Number & " " & Err.Description
+  WScript.Quit 1
+End If
+btApp.Visible = False
+Err.Clear
+Set btFormat = btApp.Formats.Open({self._vbs_string(template_path)}, False, "")
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR|ALL|Formats.Open: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btApp.Quit 0
+  WScript.Quit 2
+End If
+Err.Clear
+btFormat.Printer = {self._vbs_string(printer)}
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR|ALL|Printer: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btFormat.Close False
+  btApp.Quit 0
+  WScript.Quit 3
+End If
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set file = fso.OpenTextFile({self._vbs_string(data_file)}, 1, False, -1)
+Do Until file.AtEndOfStream
+  line = Trim(file.ReadLine)
+  If line <> "" Then
+    Err.Clear
+    btFormat.SetNamedSubStringValue {self._vbs_string(datasource)}, line
+    If Err.Number <> 0 Then
+      WScript.Echo "FAIL|" & line & "|SetNamedSubStringValue: " & Err.Number & " " & Err.Description
+    Else
+      Err.Clear
+      btFormat.PrintOut False, False
+      If Err.Number <> 0 Then
+        WScript.Echo "WARN|" & line & "|PrintOut: " & Err.Number & " " & Err.Description
+        WScript.Echo "PASS|" & line
+      Else
+        WScript.Echo "PASS|" & line
+      End If
+    End If
+  End If
+Loop
+file.Close
+On Error Resume Next
+btFormat.Close False
+btApp.Quit 0
+WScript.Quit 0
+'''
+            with tempfile.NamedTemporaryFile('w', suffix='.vbs', delete=False, encoding='utf-16') as f:
+                script_file = f.name
+                f.write(script)
+            startupinfo = None
+            creationflags = 0
+            if sys.platform == 'win32':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            result = subprocess.run(
+                ['cscript.exe', '//NoLogo', script_file],
+                capture_output=True,
+                text=True,
+                timeout=max(60, len(imei_list) * 20),
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+            )
+            output = (result.stdout or '').strip()
+            error_output = (result.stderr or '').strip()
+            if error_output:
+                self._update_status(error_output, "error")
+            results = {}
+            for raw_line in output.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                parts = line.split('|', 2)
+                if len(parts) >= 2 and parts[0] == 'PASS':
+                    results[parts[1]] = (True, "")
+                elif len(parts) >= 3 and parts[0] in ('FAIL', 'ERROR'):
+                    if parts[1] == 'ALL':
+                        for imei in imei_list:
+                            results[str(imei)] = (False, parts[2])
+                    else:
+                        results[parts[1]] = (False, parts[2])
+                elif len(parts) >= 3 and parts[0] == 'WARN':
+                    self._update_status(line, "info")
+                else:
+                    self._update_status(line, "info")
+            if result.returncode != 0 and not results:
+                message = output or error_output or f"cscript 退出码 {result.returncode}"
+                for imei in imei_list:
+                    results[str(imei)] = (False, message)
+            return results
+        except Exception as e:
+            message = f"{type(e).__name__}: {e}"
+            return {str(imei): (False, message) for imei in imei_list}
+        finally:
+            for path in (script_file, data_file):
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
 
     def _print_single_vbs(self, imei, template_path, printer, datasource):
         template_path = os.path.abspath(template_path).replace('/', '\\')
