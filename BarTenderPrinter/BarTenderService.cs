@@ -109,18 +109,69 @@ namespace BarTenderPrinter
                 btFormat = _btApp.Formats.Open(templatePath, false, "");
                 var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
 
-                try
+                // Try multiple parameter combinations
+                bool exported = false;
+
+                // Try 1: Full parameters (ImageType=3 PNG, ColorDepth=0, Resolution=300, Overwrite=1)
+                if (!exported)
                 {
-                    btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300, 1);
+                    try
+                    {
+                        btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300, 1);
+                        exported = true;
+                        LoggerService.Info("预览导出成功 (方式1)");
+                    }
+                    catch { }
                 }
-                catch
+
+                // Try 2: Without OverwriteOptions
+                if (!exported)
                 {
-                    try { btFormat.ExportImageToFile(tempPath); }
-                    catch (Exception ex) { LoggerService.Warn($"预览导出失败: {ex.Message}"); }
+                    try
+                    {
+                        btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300);
+                        exported = true;
+                        LoggerService.Info("预览导出成功 (方式2)");
+                    }
+                    catch { }
+                }
+
+                // Try 3: Just filename
+                if (!exported)
+                {
+                    try
+                    {
+                        btFormat.ExportImageToFile(tempPath);
+                        exported = true;
+                        LoggerService.Info("预览导出成功 (方式3)");
+                    }
+                    catch { }
+                }
+
+                // Try 4: BMP format
+                if (!exported)
+                {
+                    try
+                    {
+                        var bmpPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.bmp");
+                        btFormat.ExportImageToFile(bmpPath, 2, 0, 300, 300, 1);
+                        if (File.Exists(bmpPath))
+                        {
+                            tempPath = bmpPath;
+                            exported = true;
+                            LoggerService.Info("预览导出成功 (方式4-BMP)");
+                        }
+                    }
+                    catch { }
                 }
 
                 CloseFormat(btFormat);
-                return File.Exists(tempPath) ? tempPath : null;
+
+                if (exported && File.Exists(tempPath))
+                    return tempPath;
+
+                LoggerService.Warn("预览导出失败：所有方式都失败");
+                return null;
             }
             catch (Exception ex)
             {

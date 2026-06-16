@@ -146,6 +146,7 @@ namespace BarTenderPrinter
                 return;
             }
 
+            AddLog("正在生成预览...", "INFO");
             Task.Run(() =>
             {
                 var tmp = _btService.ExportPreview(path);
@@ -160,16 +161,19 @@ namespace BarTenderPrinter
                             {
                                 pictureBoxPreview.Image = Image.FromStream(fs);
                             }
+                            AddLog("预览图加载成功", "SUCCESS");
                         }
                         catch (Exception ex)
                         {
                             LoggerService.Error($"加载预览图失败: {ex.Message}");
                             ShowPreviewPlaceholder("预览加载失败");
+                            AddLog($"预览加载失败: {ex.Message}", "ERROR");
                         }
                     }
                     else
                     {
                         ShowPreviewPlaceholder("预览生成失败");
+                        AddLog("预览生成失败", "WARNING");
                     }
                 }));
             });
