@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.1.0";
+        private readonly string _version = "v5.2.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -722,28 +722,56 @@ namespace BarTenderPrinter
     {
         public List<DataSourceItem> SelectedSources { get; private set; }
         private CheckBox[] _cbs; private TextBox[] _names;
-        private readonly List<string> _fields; private readonly List<DataSourceItem> _current;
+        private readonly List<string> _fields;
+        private CheckBox chkSelectAll;
 
         public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current)
         {
-            _fields = fields; _current = current;
-            Text = "选择数据源"; Size = new Size(440, 380);
+            _fields = fields;
+            Text = "选择数据源"; Size = new Size(440, 420);
             FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false;
-            var lbl = new Label { Text = "勾选需要的数据源并设置显示名称：", Location = new Point(10, 10), Size = new Size(400, 20) };
-            var panel = new Panel { Location = new Point(10, 35), Size = new Size(405, 260), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
+
+            var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，勾选需要使用的：", Location = new Point(10, 10), Size = new Size(400, 20) };
+
+            // Select all checkbox
+            chkSelectAll = new CheckBox { Text = "全选/全不选", Location = new Point(10, 32), Size = new Size(100, 20), Checked = true };
+            chkSelectAll.CheckedChanged += (s, e) =>
+            {
+                foreach (var cb in _cbs) cb.Checked = chkSelectAll.Checked;
+            };
+
+            var panel = new Panel { Location = new Point(10, 55), Size = new Size(405, 270), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
             _cbs = new CheckBox[fields.Count]; _names = new TextBox[fields.Count];
+
             for (int i = 0; i < fields.Count; i++)
             {
-                int y = i * 30 + 5; var ex = current.FirstOrDefault(d => d.Field == fields[i]);
-                _cbs[i] = new CheckBox { Text = fields[i], Location = new Point(5, y + 2), Size = new Size(115, 20), Checked = ex?.Enabled ?? false };
-                _names[i] = new TextBox { Location = new Point(125, y), Size = new Size(265, 25), Text = ex?.Name ?? fields[i] };
+                int y = i * 30 + 5;
+                var existing = current.FirstOrDefault(d => d.Field == fields[i]);
+                // Pre-select if: exists in current, or current is empty (first time)
+                bool isChecked = existing != null ? existing.Enabled : (current.Count == 0 ? true : false);
+                _cbs[i] = new CheckBox { Text = fields[i], Location = new Point(5, y + 2), Size = new Size(115, 20), Checked = isChecked };
+                _names[i] = new TextBox { Location = new Point(125, y), Size = new Size(265, 25), Text = existing?.Name ?? fields[i] };
                 panel.Controls.Add(_cbs[i]); panel.Controls.Add(_names[i]);
             }
-            var ok = new Button { Text = "确定", Location = new Point(250, 305), Size = new Size(75, 28), DialogResult = DialogResult.OK };
-            ok.Click += (s, e) => { SelectedSources = new List<DataSourceItem>(); for (int i = 0; i < _fields.Count; i++) if (_cbs[i].Checked) SelectedSources.Add(new DataSourceItem { Name = _names[i].Text?.Trim() ?? _fields[i], Field = _fields[i], Enabled = true }); };
-            var cancel = new Button { Text = "取消", Location = new Point(340, 305), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
-            Controls.AddRange(new Control[] { lbl, panel, ok, cancel }); AcceptButton = ok; CancelButton = cancel;
+
+            var btnSelectAll = new Button { Text = "全选", Location = new Point(10, 335), Size = new Size(50, 25) };
+            btnSelectAll.Click += (s, e) => { foreach (var cb in _cbs) cb.Checked = true; };
+            var btnSelectNone = new Button { Text = "全不选", Location = new Point(65, 335), Size = new Size(55, 25) };
+            btnSelectNone.Click += (s, e) => { foreach (var cb in _cbs) cb.Checked = false; };
+
+            var ok = new Button { Text = "确定", Location = new Point(250, 365), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+            ok.Click += (s, e) =>
+            {
+                SelectedSources = new List<DataSourceItem>();
+                for (int i = 0; i < _fields.Count; i++)
+                    if (_cbs[i].Checked)
+                        SelectedSources.Add(new DataSourceItem { Name = _names[i].Text?.Trim() ?? _fields[i], Field = _fields[i], Enabled = true });
+            };
+            var cancel = new Button { Text = "取消", Location = new Point(340, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+
+            Controls.AddRange(new Control[] { lbl, chkSelectAll, panel, btnSelectAll, btnSelectNone, ok, cancel });
+            AcceptButton = ok; CancelButton = cancel;
         }
     }
 
