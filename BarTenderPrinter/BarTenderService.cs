@@ -109,60 +109,72 @@ namespace BarTenderPrinter
                 btFormat = _btApp.Formats.Open(templatePath, false, "");
                 var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
 
-                // Try multiple parameter combinations
+                // Try multiple approaches for ExportImageToFile
                 bool exported = false;
 
-                // Try 1: Full parameters (ImageType=3 PNG, ColorDepth=0, Resolution=300, Overwrite=1)
+                // Approach 1: Use ExportImageToFile with numeric enum values
                 if (!exported)
                 {
                     try
                     {
+                        // ImageType: PNG=3, BMP=2, JPEG=1
+                        // ColorDepth: ColorDepth256=0, ColorDepth24bit=1
+                        // OverwriteOptions: Overwrite=1, DoNotOverwrite=0
                         btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300, 1);
-                        exported = true;
-                        LoggerService.Info("预览导出成功 (方式1)");
+                        if (File.Exists(tempPath)) { exported = true; LoggerService.Info("预览成功 (方式1)"); }
                     }
-                    catch { }
+                    catch (Exception ex) { LoggerService.Debug($"方式1失败: {ex.Message}"); }
                 }
 
-                // Try 2: Without OverwriteOptions
+                // Approach 2: Try with different parameter count
                 if (!exported)
                 {
                     try
                     {
                         btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300);
-                        exported = true;
-                        LoggerService.Info("预览导出成功 (方式2)");
+                        if (File.Exists(tempPath)) { exported = true; LoggerService.Info("预览成功 (方式2)"); }
                     }
-                    catch { }
+                    catch (Exception ex) { LoggerService.Debug($"方式2失败: {ex.Message}"); }
                 }
 
-                // Try 3: Just filename
+                // Approach 3: Try minimal parameters
                 if (!exported)
                 {
                     try
                     {
                         btFormat.ExportImageToFile(tempPath);
-                        exported = true;
-                        LoggerService.Info("预览导出成功 (方式3)");
+                        if (File.Exists(tempPath)) { exported = true; LoggerService.Info("预览成功 (方式3)"); }
                     }
-                    catch { }
+                    catch (Exception ex) { LoggerService.Debug($"方式3失败: {ex.Message}"); }
                 }
 
-                // Try 4: BMP format
+                // Approach 4: Try BMP format
                 if (!exported)
                 {
                     try
                     {
                         var bmpPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.bmp");
                         btFormat.ExportImageToFile(bmpPath, 2, 0, 300, 300, 1);
-                        if (File.Exists(bmpPath))
+                        if (File.Exists(bmpPath)) { tempPath = bmpPath; exported = true; LoggerService.Info("预览成功 (方式4-BMP)"); }
+                    }
+                    catch (Exception ex) { LoggerService.Debug($"方式4失败: {ex.Message}"); }
+                }
+
+                // Approach 5: Try ExportImageToClipboard
+                if (!exported)
+                {
+                    try
+                    {
+                        btFormat.ExportImageToClipboard(300, 300);
+                        if (Clipboard.ContainsImage())
                         {
-                            tempPath = bmpPath;
+                            var img = Clipboard.GetImage();
+                            img.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
                             exported = true;
-                            LoggerService.Info("预览导出成功 (方式4-BMP)");
+                            LoggerService.Info("预览成功 (方式5-Clipboard)");
                         }
                     }
-                    catch { }
+                    catch (Exception ex) { LoggerService.Debug($"方式5失败: {ex.Message}"); }
                 }
 
                 CloseFormat(btFormat);

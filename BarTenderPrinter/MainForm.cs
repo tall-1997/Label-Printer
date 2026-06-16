@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v4.9.0";
+        private readonly string _version = "v5.1.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -41,13 +41,13 @@ namespace BarTenderPrinter
         private void MainForm_Load(object sender, EventArgs e)
         {
             LoadConfig(_configFile);
+            InitBarTender();
             PopulateTemplateList(_templatesFolder);
             RebuildInputFields();
             _history.Load();
             LoadHistory();
             RefreshPrinters();
             RefreshStats();
-            InitBarTender();
             AddLog("系统启动完成", "INFO");
         }
 

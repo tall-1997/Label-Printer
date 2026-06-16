@@ -21,6 +21,11 @@ namespace BarTenderPrinter
             Write("INFO", message);
         }
 
+        public static void Debug(string message)
+        {
+            Write("DEBUG", message);
+        }
+
         public static void Error(string message)
         {
             Write("ERROR", message);
