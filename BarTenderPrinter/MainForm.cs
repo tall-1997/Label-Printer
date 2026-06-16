@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.4.0";
+        private readonly string _version = "v5.5.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -329,10 +329,16 @@ namespace BarTenderPrinter
                 if (i < _inputTextBoxes.Length && _inputTextBoxes[i] != null)
                 {
                     if (!enabled[i].AutoIncrement)
+                    {
+                        // Clear and enable non-auto-increment fields
                         _inputTextBoxes[i].Text = "";
+                        _inputTextBoxes[i].ReadOnly = false;
+                        _inputTextBoxes[i].BackColor = MiuiTheme.InputBackground;
+                    }
+                    // Auto-increment fields stay locked with their values
                 }
             }
-            // Focus first non-auto-increment field, or first field if all are auto-increment
+            // Focus first non-auto-increment field
             for (int i = 0; i < enabled.Count; i++)
             {
                 if (i < _inputTextBoxes.Length && !enabled[i].AutoIncrement)
@@ -342,6 +348,7 @@ namespace BarTenderPrinter
                     return;
                 }
             }
+            // If all fields are auto-increment, focus first field
             if (_inputTextBoxes.Length > 0) { _inputTextBoxes[0].Focus(); _inputTextBoxes[0].SelectAll(); }
         }
 
@@ -355,6 +362,11 @@ namespace BarTenderPrinter
                     var step = enabled[i].AutoStep;
                     var newVal = IncrementValue(currentVal, step);
                     _inputTextBoxes[i].Text = newVal;
+
+                    // Lock auto-increment fields after first print
+                    _inputTextBoxes[i].ReadOnly = true;
+                    _inputTextBoxes[i].BackColor = SystemColors.Control;
+
                     AddLog($"增序: {enabled[i].Name} {currentVal} -> {newVal}", "INFO");
                 }
             }
