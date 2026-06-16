@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v4.8.0";
+        private readonly string _version = "v4.9.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -55,33 +55,32 @@ namespace BarTenderPrinter
 
         private void InitBarTender()
         {
+            SetStatus("正在连接 BarTender...");
+            AddLog("正在连接 BarTender...", "INFO");
+
             if (_btService.Connect())
             {
                 SetStatus("BarTender 已连接");
                 AddLog("BarTender 已连接", "SUCCESS");
                 btnPrint.Enabled = true;
                 btnPrint.Text = "打印";
+
+                // Load preview if template selected
+                if (!string.IsNullOrEmpty(_selectedTemplatePath) && File.Exists(_selectedTemplatePath))
+                    LoadTemplatePreview(_selectedTemplatePath);
             }
             else
             {
-                if (_btService.IsOfflineMode)
-                {
-                    SetStatus("离线模式 - BarTender 未安装");
-                    AddLog("BarTender 未安装，进入离线模式", "WARNING");
-                    btnPrint.Enabled = false;
-                    btnPrint.Text = "打印（需要安装 BarTender）";
-                }
-                else
-                {
-                    SetStatus("BarTender 连接失败");
-                    AddLog("BarTender 连接失败", "ERROR");
-                }
+                SetStatus("离线模式 - BarTender 未安装");
+                AddLog("BarTender 未安装，进入离线模式", "WARNING");
+                btnPrint.Enabled = false;
+                btnPrint.Text = "打印（需要安装 BarTender）";
             }
         }
 
         #endregion
 
-        #region Printer & Copies
+        #region Printer
 
         private void RefreshPrinters()
         {
@@ -140,21 +139,13 @@ namespace BarTenderPrinter
         {
             CleanupPreview(); pictureBoxPreview.Image = null;
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+
             if (!_btService.IsConnected)
             {
-                // Offline mode: show placeholder
-                var bmp = new Bitmap(145, 50);
-                using (var g = Graphics.FromImage(bmp))
-                {
-                    g.Clear(Color.WhiteSmoke);
-                    using (var font = new Font("Microsoft YaHei UI", 8F))
-                    using (var brush = new SolidBrush(Color.Gray))
-                    using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                        g.DrawString("预览需要 BarTender", font, brush, new RectangleF(0, 0, 145, 50), sf);
-                }
-                pictureBoxPreview.Image = bmp;
+                ShowPreviewPlaceholder("预览需要 BarTender");
                 return;
             }
+
             Task.Run(() =>
             {
                 var tmp = _btService.ExportPreview(path);
@@ -162,18 +153,47 @@ namespace BarTenderPrinter
                 {
                     if (tmp != null && File.Exists(tmp))
                     {
-                        try { _previewTempFile = tmp; pictureBoxPreview.Image = Image.FromFile(tmp); }
-                        catch { }
+                        try
+                        {
+                            _previewTempFile = tmp;
+                            using (var fs = new FileStream(tmp, FileMode.Open, FileAccess.Read))
+                            {
+                                pictureBoxPreview.Image = Image.FromStream(fs);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            LoggerService.Error($"加载预览图失败: {ex.Message}");
+                            ShowPreviewPlaceholder("预览加载失败");
+                        }
+                    }
+                    else
+                    {
+                        ShowPreviewPlaceholder("预览生成失败");
                     }
                 }));
             });
+        }
+
+        private void ShowPreviewPlaceholder(string text)
+        {
+            var bmp = new Bitmap(pictureBoxPreview.Width, pictureBoxPreview.Height);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.Clear(Color.WhiteSmoke);
+                using (var font = new Font("Microsoft YaHei UI", 8F))
+                using (var brush = new SolidBrush(Color.Gray))
+                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                    g.DrawString(text, font, brush, new RectangleF(0, 0, bmp.Width, bmp.Height), sf);
+            }
+            pictureBoxPreview.Image = bmp;
         }
 
         private void LoadTemplateDataSources(string path)
         {
             if (!_btService.IsConnected)
             {
-                AddLog("离线模式：请手动配置数据源（点击 编辑数据源 按钮）", "INFO");
+                AddLog("离线模式：请手动配置数据源", "INFO");
                 return;
             }
             Task.Run(() =>
@@ -217,12 +237,9 @@ namespace BarTenderPrinter
                 fields = _btService.GetTemplateDataSources(_selectedTemplatePath);
             if (fields.Count == 0)
             {
-                // Offline mode or no template: show manual input dialog
                 var result = PromptForManualDataSources();
-                if (result != null && result.Count > 0)
-                    fields = result;
-                else
-                    fields = new List<string> { "IMEI1" };
+                if (result != null && result.Count > 0) fields = result;
+                else fields = new List<string> { "IMEI1" };
             }
             var dlg = new DataSourceSelectDialog(fields, _dataSources);
             if (dlg.ShowDialog(this) == DialogResult.OK) { _dataSources = dlg.SelectedSources; RebuildInputFields(); }
@@ -237,7 +254,6 @@ namespace BarTenderPrinter
                 f.FormBorderStyle = FormBorderStyle.FixedDialog;
                 f.StartPosition = FormStartPosition.CenterParent;
                 f.MaximizeBox = false; f.MinimizeBox = false;
-
                 var lbl = new Label { Text = "输入数据源字段名（每行一个）：", Location = new Point(10, 10), Size = new Size(320, 20) };
                 var txt = new TextBox { Location = new Point(10, 35), Size = new Size(315, 150), Multiline = true, ScrollBars = ScrollBars.Vertical };
                 txt.Text = "IMEI1\nDS1";
@@ -245,12 +261,13 @@ namespace BarTenderPrinter
                 var cancel = new Button { Text = "取消", Location = new Point(255, 195), Size = new Size(75, 25), DialogResult = DialogResult.Cancel };
                 f.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
                 f.AcceptButton = ok; f.CancelButton = cancel;
-
-                if (f.ShowDialog(this) == DialogResult.OK)
-                    return txt.Text.Split('\n').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
-                return null;
+                return f.ShowDialog(this) == DialogResult.OK ? txt.Text.Split('\n').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList() : null;
             }
         }
+
+        #endregion
+
+        #region Dynamic Input Fields
 
         private void RebuildInputFields()
         {
@@ -267,6 +284,17 @@ namespace BarTenderPrinter
                 inputPanel.Controls.Add(lbl); inputPanel.Controls.Add(txt);
                 _inputTextBoxes[i] = txt; y += 32;
             }
+
+            // Auto-resize input panel based on content
+            int panelHeight = Math.Max(40, y + 8);
+            inputPanel.Height = panelHeight;
+
+            // Reposition print button below input panel
+            btnPrint.Top = inputPanel.Bottom + 8;
+
+            // Reposition bottom tabs
+            tabBottom.Top = btnPrint.Bottom + 8;
+            tabBottom.Height = groupBoxLog.Top - tabBottom.Top - 8;
         }
 
         private void Input_KeyDown(object sender, KeyEventArgs e)
@@ -304,17 +332,11 @@ namespace BarTenderPrinter
                     try
                     {
                         var ext = Path.GetExtension(ofd.FileName).ToLower();
-                        if (ext == ".csv")
-                            LoadCsvData(ofd.FileName);
-                        else if (ext == ".xlsx" || ext == ".xls")
-                            LoadExcelData(ofd.FileName);
-                        else
-                            LoadTextData(ofd.FileName);
+                        if (ext == ".csv") LoadCsvData(ofd.FileName);
+                        else if (ext == ".xlsx" || ext == ".xls") LoadExcelData(ofd.FileName);
+                        else LoadTextData(ofd.FileName);
                     }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show(this, $"加载失败: {ex.Message}");
-                    }
+                    catch (Exception ex) { MessageBox.Show(this, $"加载失败: {ex.Message}"); }
                 }
             }
         }
@@ -322,30 +344,14 @@ namespace BarTenderPrinter
         private void LoadCsvData(string path)
         {
             var lines = File.ReadAllLines(path);
-            if (lines.Length < 2) { MessageBox.Show(this, "CSV 文件为空或无数据行"); return; }
-
+            if (lines.Length < 2) { MessageBox.Show(this, "CSV 文件为空"); return; }
             var headers = ParseCsvLine(lines[0]);
-            if (headers.Count <= 1)
+            int colIdx = 0;
+            if (headers.Count > 1)
             {
-                // Single column, load directly
-                _localData.Clear();
-                foreach (var line in lines.Skip(1))
-                {
-                    var val = line.Trim();
-                    if (!string.IsNullOrEmpty(val)) _localData.Add(val);
-                }
-                _localDataPath = path;
-                _useLocalDataValidation = true;
-                chkUseLocalData.Checked = true;
-                lblLocalData.Text = $"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})";
-                AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
-                return;
+                colIdx = PromptForColumnSelection(headers, Path.GetFileName(path));
+                if (colIdx < 0) return;
             }
-
-            // Multiple columns - show column selection
-            var colIdx = PromptForColumnSelection(headers, Path.GetFileName(path));
-            if (colIdx < 0) return;
-
             _localData.Clear();
             foreach (var line in lines.Skip(1))
             {
@@ -353,11 +359,9 @@ namespace BarTenderPrinter
                 if (colIdx < cols.Count && !string.IsNullOrWhiteSpace(cols[colIdx]))
                     _localData.Add(cols[colIdx].Trim());
             }
-            _localDataPath = path;
-            _useLocalDataValidation = true;
-            chkUseLocalData.Checked = true;
+            _localDataPath = path; _useLocalDataValidation = true; chkUseLocalData.Checked = true;
             lblLocalData.Text = $"已加载: {_localData.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})";
-            AddLog($"加载本地数据: {_localData.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
+            AddLog($"加载 CSV: {_localData.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
         }
 
         private void LoadExcelData(string path)
@@ -396,23 +400,14 @@ namespace BarTenderPrinter
                             return;
                         }
 
-                        // Read all data at once using Value2 (much faster)
                         dynamic allData = usedRange.Value2;
-
-                        // Read headers from first row
                         var headers = new List<string>();
                         for (int c = 1; c <= cols; c++)
-                        {
-                            var val = allData[1, c]?.ToString()?.Trim() ?? $"列{c}";
-                            headers.Add(val);
-                        }
+                            headers.Add(allData[1, c]?.ToString()?.Trim() ?? $"列{c}");
 
                         int colIdx = 0;
                         if (headers.Count > 1)
                         {
-                            // Need to show column selection on UI thread
-                            colIdx = -1;
-                            // Show column selection dialog synchronously
                             var selectedCol = -1;
                             var evt = new System.Threading.ManualResetEvent(false);
                             BeginInvoke((Action)(() =>
@@ -422,11 +417,9 @@ namespace BarTenderPrinter
                             }));
                             evt.WaitOne();
                             colIdx = selectedCol;
-
                             if (colIdx < 0) { wb.Close(false); excel.Quit(); return; }
                         }
 
-                        // Read data from selected column
                         var data = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                         for (int r = 2; r <= rows; r++)
                         {
@@ -434,8 +427,7 @@ namespace BarTenderPrinter
                             if (!string.IsNullOrEmpty(val)) data.Add(val);
                         }
 
-                        wb.Close(false);
-                        excel.Quit();
+                        wb.Close(false); excel.Quit();
 
                         BeginInvoke((Action)(() =>
                         {
@@ -457,11 +449,7 @@ namespace BarTenderPrinter
                 }
                 catch (Exception ex)
                 {
-                    BeginInvoke((Action)(() =>
-                    {
-                        MessageBox.Show(this, $"读取 Excel 失败: {ex.Message}\n\n请保存为 CSV 格式后加载");
-                        SetStatus("就绪");
-                    }));
+                    BeginInvoke((Action)(() => { MessageBox.Show(this, $"读取 Excel 失败: {ex.Message}"); SetStatus("就绪"); }));
                 }
             });
         }
@@ -470,13 +458,8 @@ namespace BarTenderPrinter
         {
             _localData.Clear();
             foreach (var line in File.ReadAllLines(path))
-            {
-                var val = line.Trim();
-                if (!string.IsNullOrEmpty(val)) _localData.Add(val);
-            }
-            _localDataPath = path;
-            _useLocalDataValidation = true;
-            chkUseLocalData.Checked = true;
+            { var val = line.Trim(); if (!string.IsNullOrEmpty(val)) _localData.Add(val); }
+            _localDataPath = path; _useLocalDataValidation = true; chkUseLocalData.Checked = true;
             lblLocalData.Text = $"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})";
             AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
         }
@@ -490,17 +473,14 @@ namespace BarTenderPrinter
                 f.FormBorderStyle = FormBorderStyle.FixedDialog;
                 f.StartPosition = FormStartPosition.CenterParent;
                 f.MaximizeBox = false; f.MinimizeBox = false;
-
                 var lbl = new Label { Text = $"文件: {fileName}\n选择用于校验的列：", Location = new Point(10, 10), Size = new Size(320, 40) };
                 var lst = new ListBox { Location = new Point(10, 55), Size = new Size(315, 130) };
                 foreach (var col in columns) lst.Items.Add(col);
                 if (lst.Items.Count > 0) lst.SelectedIndex = 0;
-
                 var ok = new Button { Text = "确定", Location = new Point(170, 195), Size = new Size(75, 25), DialogResult = DialogResult.OK };
                 var cancel = new Button { Text = "取消", Location = new Point(255, 195), Size = new Size(75, 25), DialogResult = DialogResult.Cancel };
                 f.Controls.AddRange(new Control[] { lbl, lst, ok, cancel });
                 f.AcceptButton = ok; f.CancelButton = cancel;
-
                 return f.ShowDialog(this) == DialogResult.OK ? lst.SelectedIndex : -1;
             }
         }
@@ -529,14 +509,12 @@ namespace BarTenderPrinter
         private bool ValidateLocalData(Dictionary<string, string> fieldValues)
         {
             if (!_useLocalDataValidation || _localData.Count == 0) return true;
-
             var notInLocal = new List<string>();
             foreach (var kv in fieldValues)
             {
                 if (!_localData.Contains(kv.Value))
                     notInLocal.Add($"{kv.Key}={kv.Value}");
             }
-
             if (notInLocal.Count > 0)
             {
                 var msg = $"以下数据不在本地数据文件中：\n{string.Join("\n", notInLocal)}\n\n是否继续打印？";
@@ -557,10 +535,7 @@ namespace BarTenderPrinter
             { MessageBox.Show(this, "请先选择模板文件"); return; }
             if (!_btService.IsConnected)
             {
-                if (_btService.IsOfflineMode)
-                    MessageBox.Show(this, "BarTender 未安装，打印功能不可用。\n\n请安装 BarTender 后重新启动程序。", "离线模式");
-                else
-                    AddLog("BarTender 未连接", "ERROR");
+                MessageBox.Show(this, "BarTender 未连接，请确认已安装 BarTender");
                 return;
             }
             var printer = cmbPrinter.SelectedItem?.ToString();
@@ -589,10 +564,7 @@ namespace BarTenderPrinter
 
             // Local data validation
             if (!ValidateLocalData(fieldValues))
-            {
-                AddLog("用户取消（本地数据校验失败）", "WARNING");
-                return;
-            }
+            { AddLog("用户取消（本地数据校验失败）", "WARNING"); return; }
 
             int copies = (int)numCopies.Value;
             var historyKey = string.Join("|", fieldValues.Values);
@@ -605,10 +577,20 @@ namespace BarTenderPrinter
                 BeginInvoke((Action)(() =>
                 {
                     if (result.Success)
-                    { SetStatus("打印完成"); AddLog("打印完成", "SUCCESS"); _history.Add(historyKey, "PASS"); ClearInputs(); }
+                    {
+                        SetStatus("打印完成");
+                        AddLog("打印完成", "SUCCESS");
+                        _history.Add(historyKey, "PASS");
+                        ClearInputs();
+                    }
                     else
-                    { SetStatus("打印失败"); AddLog($"失败: {result.ErrorMessage}", "ERROR"); _history.Add(historyKey, "FAIL"); }
-                    SetInputsReadOnly(false); btnPrint.Enabled = true; RefreshStats();
+                    {
+                        SetStatus("打印失败");
+                        AddLog($"失败: {result.ErrorMessage}", "ERROR");
+                        _history.Add(historyKey, "FAIL");
+                    }
+                    SetInputsReadOnly(false); btnPrint.Enabled = true;
+                    LoadHistory(); RefreshStats();
                 }));
             });
         }
@@ -744,7 +726,6 @@ namespace BarTenderPrinter
             Text = "选择数据源"; Size = new Size(440, 380);
             FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false;
-
             var lbl = new Label { Text = "勾选需要的数据源并设置显示名称：", Location = new Point(10, 10), Size = new Size(400, 20) };
             var panel = new Panel { Location = new Point(10, 35), Size = new Size(405, 260), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
             _cbs = new CheckBox[fields.Count]; _names = new TextBox[fields.Count];

@@ -1,13 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 
 namespace BarTenderPrinter
 {
     public class BarTenderService : IDisposable
     {
-        private object _btApp;
+        private dynamic _btApp;
         private bool _connected;
         private bool _offlineMode;
 
@@ -18,39 +17,51 @@ namespace BarTenderPrinter
         {
             LoggerService.Info("正在连接 BarTender...");
 
-            // Try COM first (most reliable for printing)
-            if (TryConnectViaCom())
-            {
-                _connected = true;
-                _offlineMode = false;
-                LoggerService.Info("BarTender COM 模式已连接");
-                return true;
-            }
-
-            // Offline mode
-            _connected = false;
-            _offlineMode = true;
-            LoggerService.Warn("BarTender 未安装，进入离线模式");
-            return false;
-        }
-
-        private bool TryConnectViaCom()
-        {
             try
             {
+                // Step 1: Check if COM is registered
                 var comType = Type.GetTypeFromProgID("BarTender.Application");
-                if (comType == null) return false;
+                if (comType == null)
+                {
+                    LoggerService.Warn("BarTender COM 未注册 (GetTypeFromProgID 返回 null)");
+                    _offlineMode = true;
+                    _connected = false;
+                    return false;
+                }
+                LoggerService.Info("BarTender COM 已注册");
 
-                LoggerService.Info("找到 BarTender COM 组件");
+                // Step 2: Create COM instance
                 _btApp = Activator.CreateInstance(comType);
-                if (_btApp == null) return false;
+                if (_btApp == null)
+                {
+                    LoggerService.Warn("BarTender COM 创建失败");
+                    _offlineMode = true;
+                    _connected = false;
+                    return false;
+                }
+                LoggerService.Info("BarTender COM 实例创建成功");
 
-                try { ((dynamic)_btApp).Visible = false; } catch { }
+                // Step 3: Set visible
+                try
+                {
+                    _btApp.Visible = false;
+                    LoggerService.Info("BarTender Visible=False 设置成功");
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Warn($"设置 Visible 失败: {ex.Message}");
+                }
+
+                _connected = true;
+                _offlineMode = false;
+                LoggerService.Info("BarTender 连接成功");
                 return true;
             }
             catch (Exception ex)
             {
-                LoggerService.Warn($"COM 连接失败: {ex.Message}");
+                LoggerService.Error($"BarTender 连接失败: {ex.Message}");
+                _offlineMode = true;
+                _connected = false;
                 _btApp = null;
                 return false;
             }
@@ -64,27 +75,20 @@ namespace BarTenderPrinter
             dynamic btFormat = null;
             try
             {
-                dynamic btApp = _btApp;
-                btFormat = btApp.Formats.Open(templatePath, false, "");
-
-                try
+                btFormat = _btApp.Formats.Open(templatePath, false, "");
+                var subStrings = btFormat.NamedSubStrings;
+                var count = (int)subStrings.Count;
+                for (int i = 1; i <= count; i++)
                 {
-                    var subStrings = btFormat.NamedSubStrings;
-                    var count = (int)subStrings.Count;
-                    for (int i = 1; i <= count; i++)
+                    try
                     {
-                        try
-                        {
-                            var sub = subStrings.Item(i);
-                            var name = (string)sub.Name;
-                            if (!string.IsNullOrEmpty(name))
-                                result.Add(name);
-                        }
-                        catch { }
+                        var sub = subStrings.Item(i);
+                        var name = (string)sub.Name;
+                        if (!string.IsNullOrEmpty(name))
+                            result.Add(name);
                     }
+                    catch { }
                 }
-                catch { }
-
                 CloseFormat(btFormat);
             }
             catch (Exception ex)
@@ -95,25 +99,24 @@ namespace BarTenderPrinter
             return result;
         }
 
-        public string ExportPreview(string templatePath, int dpi = 300)
+        public string ExportPreview(string templatePath)
         {
             if (!_connected || _btApp == null) return null;
 
             dynamic btFormat = null;
             try
             {
-                dynamic btApp = _btApp;
-                btFormat = btApp.Formats.Open(templatePath, false, "");
+                btFormat = _btApp.Formats.Open(templatePath, false, "");
                 var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
 
                 try
                 {
-                    btFormat.ExportImageToFile(tempPath, 3, 0, dpi, dpi, 1);
+                    btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300, 1);
                 }
                 catch
                 {
-                    try { btFormat.ExportImageToFile(tempPath, 3, 0, 0, dpi, dpi); }
-                    catch { try { btFormat.ExportImageToFile(tempPath); } catch { } }
+                    try { btFormat.ExportImageToFile(tempPath); }
+                    catch (Exception ex) { LoggerService.Warn($"预览导出失败: {ex.Message}"); }
                 }
 
                 CloseFormat(btFormat);
@@ -136,8 +139,7 @@ namespace BarTenderPrinter
             try
             {
                 LoggerService.Info($"打开模板: {templatePath}");
-                dynamic btApp = _btApp;
-                btFormat = btApp.Formats.Open(templatePath, false, "");
+                btFormat = _btApp.Formats.Open(templatePath, false, "");
                 LoggerService.Info("模板打开成功");
 
                 var missing = new List<string>();
@@ -173,35 +175,14 @@ namespace BarTenderPrinter
             {
                 LoggerService.Error($"打印失败: {ex.Message}");
                 CloseFormat(btFormat);
-                return new PrintResult(false, $"COM: {ex.Message}");
+                return new PrintResult(false, ex.Message);
             }
         }
 
         private void CloseFormat(dynamic btFormat)
         {
             if (btFormat == null) return;
-            try
-            {
-                // Try Close(false) - don't save changes
-                btFormat.Close(false);
-            }
-            catch
-            {
-                try
-                {
-                    // Try Close(0) - btDoNotSaveChanges
-                    btFormat.Close(0);
-                }
-                catch
-                {
-                    try
-                    {
-                        // Try Close() without parameters
-                        btFormat.Close();
-                    }
-                    catch { }
-                }
-            }
+            try { btFormat.Close(false); } catch { }
         }
 
         public string[] GetAvailableTemplates(string directory)
@@ -227,7 +208,7 @@ namespace BarTenderPrinter
             {
                 if (_btApp != null)
                 {
-                    try { ((dynamic)_btApp).Quit(0); } catch { }
+                    try { _btApp.Quit(0); } catch { }
                     try { System.Runtime.InteropServices.Marshal.ReleaseComObject(_btApp); } catch { }
                     _btApp = null;
                 }
