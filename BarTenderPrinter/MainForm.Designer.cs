@@ -17,7 +17,7 @@ namespace BarTenderPrinter
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.titlePanel.Height = 38;
             this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v4.2.0";
+            this.titleLabel.Text = "BarTender 标签打印工具 v4.6.0";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
             this.titleLabel.Location = new System.Drawing.Point(10, 7);
@@ -38,9 +38,15 @@ namespace BarTenderPrinter
             this.btnLoadConfig.Click += new System.EventHandler(this.btnLoadConfig_Click);
             this.btnEditDataSources = new System.Windows.Forms.Button { Text = "编辑数据源", Location = new System.Drawing.Point(162, 42), Size = new System.Drawing.Size(80, 24) };
             this.btnEditDataSources.Click += new System.EventHandler(this.btnEditDataSources_Click);
+            this.btnLoadLocalData = new System.Windows.Forms.Button { Text = "加载校验数据", Location = new System.Drawing.Point(248, 42), Size = new System.Drawing.Size(90, 24) };
+            this.btnLoadLocalData.Click += new System.EventHandler(this.btnLoadLocalData_Click);
+            this.lblLocalData = new System.Windows.Forms.Label { Text = "未加载校验数据", Location = new System.Drawing.Point(345, 45), Size = new System.Drawing.Size(150, 18) };
+            this.lblLocalData.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             MiuiTheme.StyleButton(this.btnSaveConfig);
             MiuiTheme.StyleButton(this.btnLoadConfig);
             MiuiTheme.StyleButton(this.btnEditDataSources);
+            MiuiTheme.StyleButton(this.btnLoadLocalData);
+            MiuiTheme.StyleLabel(this.lblLocalData, true);
 
             // === Template Row ===
             this.lblTemplateDir = new System.Windows.Forms.Label { Text = "模板目录：", Location = new System.Drawing.Point(10, 75), Size = new System.Drawing.Size(65, 18) };
@@ -145,6 +151,8 @@ namespace BarTenderPrinter
             this.Controls.Add(this.txtTemplateDir);
             this.Controls.Add(this.lblTemplateDir);
             this.Controls.Add(this.btnEditDataSources);
+            this.Controls.Add(this.btnLoadLocalData);
+            this.Controls.Add(this.lblLocalData);
             this.Controls.Add(this.btnLoadConfig);
             this.Controls.Add(this.btnSaveConfig);
             this.Controls.Add(this.groupBoxLog);
@@ -155,14 +163,15 @@ namespace BarTenderPrinter
             this.ClientSize = new System.Drawing.Size(520, 560);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.MinimumSize = new System.Drawing.Size(480, 500);
-            this.Text = "BarTender 标签打印工具 v4.2.0";
+            this.Text = "BarTender 标签打印工具 v4.6.0";
             this.ResumeLayout(false); this.PerformLayout();
         }
 
         private System.Windows.Forms.Panel titlePanel;
         private System.Windows.Forms.Label titleLabel;
         private System.Windows.Forms.Button btnExportLog;
-        private System.Windows.Forms.Button btnSaveConfig, btnLoadConfig, btnEditDataSources;
+        private System.Windows.Forms.Button btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData;
+        private System.Windows.Forms.Label lblLocalData;
         private System.Windows.Forms.Label lblTemplateDir;
         private System.Windows.Forms.TextBox txtTemplateDir;
         private System.Windows.Forms.Button btnBrowseDir;

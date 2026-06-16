@@ -15,13 +15,15 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v4.5.0";
+        private readonly string _version = "v4.6.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
         private string _templatesFolder = "";
         private string _selectedTemplatePath = "";
         private string _previewTempFile = null;
+        private HashSet<string> _localData = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private string _localDataPath = "";
 
         public MainForm()
         {
@@ -41,6 +43,7 @@ namespace BarTenderPrinter
             PopulateTemplateList(_templatesFolder);
             RebuildInputFields();
             _history.Load();
+            LoadHistory();
             RefreshPrinters();
             RefreshStats();
             InitBarTender();
@@ -285,6 +288,57 @@ namespace BarTenderPrinter
 
         #endregion
 
+        #region Local Data Validation
+
+        private void btnLoadLocalData_Click(object sender, EventArgs e)
+        {
+            using (var ofd = new OpenFileDialog { Filter = "CSV|*.csv|文本|*.txt|所有|*.*" })
+            {
+                if (ofd.ShowDialog(this) == DialogResult.OK)
+                {
+                    try
+                    {
+                        var lines = File.ReadAllLines(ofd.FileName);
+                        _localData.Clear();
+                        foreach (var line in lines)
+                        {
+                            var val = line.Trim();
+                            if (!string.IsNullOrEmpty(val))
+                                _localData.Add(val);
+                        }
+                        _localDataPath = ofd.FileName;
+                        lblLocalData.Text = $"已加载: {_localData.Count} 条 ({Path.GetFileName(ofd.FileName)})";
+                        AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(this, $"加载失败: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        private bool ValidateLocalData(Dictionary<string, string> fieldValues)
+        {
+            if (_localData.Count == 0) return true;
+
+            var notInLocal = new List<string>();
+            foreach (var kv in fieldValues)
+            {
+                if (!_localData.Contains(kv.Value))
+                    notInLocal.Add($"{kv.Key}={kv.Value}");
+            }
+
+            if (notInLocal.Count > 0)
+            {
+                var msg = $"以下数据不在本地数据文件中：\n{string.Join("\n", notInLocal)}\n\n是否继续打印？";
+                return MessageBox.Show(this, msg, "数据校验", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
+            }
+            return true;
+        }
+
+        #endregion
+
         #region Print
 
         private void btnPrint_Click(object sender, EventArgs e) => DoPrint();
@@ -323,6 +377,13 @@ namespace BarTenderPrinter
                 if (MessageBox.Show(this, $"以下数据已打印过：\n{string.Join("\n", duplicates)}\n\n是否继续？", "数据重复",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 { AddLog("用户取消（数据重复）", "WARNING"); return; }
+            }
+
+            // Local data validation
+            if (!ValidateLocalData(fieldValues))
+            {
+                AddLog("用户取消（本地数据校验失败）", "WARNING");
+                return;
             }
 
             int copies = (int)numCopies.Value;
