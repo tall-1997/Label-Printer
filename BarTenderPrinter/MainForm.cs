@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v4.7.0";
+        private readonly string _version = "v4.8.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -24,6 +24,7 @@ namespace BarTenderPrinter
         private string _previewTempFile = null;
         private HashSet<string> _localData = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string _localDataPath = "";
+        private bool _useLocalDataValidation = false;
 
         public MainForm()
         {
@@ -55,16 +56,20 @@ namespace BarTenderPrinter
         private void InitBarTender()
         {
             if (_btService.Connect())
-                SetStatus($"BarTender 已连接");
+            {
+                SetStatus("BarTender 已连接");
+                AddLog("BarTender 已连接", "SUCCESS");
+                btnPrint.Enabled = true;
+                btnPrint.Text = "打印";
+            }
             else
             {
                 if (_btService.IsOfflineMode)
                 {
-                    SetStatus("离线模式 - BarTender 未安装，打印功能不可用");
-                    AddLog("BarTender 未安装，进入离线模式。打印功能不可用，其他功能正常。", "WARNING");
+                    SetStatus("离线模式 - BarTender 未安装");
+                    AddLog("BarTender 未安装，进入离线模式", "WARNING");
                     btnPrint.Enabled = false;
                     btnPrint.Text = "打印（需要安装 BarTender）";
-                    lblStatus.ForeColor = Color.Orange;
                 }
                 else
                 {
@@ -330,6 +335,8 @@ namespace BarTenderPrinter
                     if (!string.IsNullOrEmpty(val)) _localData.Add(val);
                 }
                 _localDataPath = path;
+                _useLocalDataValidation = true;
+                chkUseLocalData.Checked = true;
                 lblLocalData.Text = $"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})";
                 AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
                 return;
@@ -347,66 +354,121 @@ namespace BarTenderPrinter
                     _localData.Add(cols[colIdx].Trim());
             }
             _localDataPath = path;
+            _useLocalDataValidation = true;
+            chkUseLocalData.Checked = true;
             lblLocalData.Text = $"已加载: {_localData.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})";
             AddLog($"加载本地数据: {_localData.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
         }
 
         private void LoadExcelData(string path)
         {
-            // Try to read Excel using COM interop
-            try
+            SetStatus("正在加载 Excel...");
+            AddLog("正在加载 Excel 数据...", "INFO");
+
+            Task.Run(() =>
             {
-                var excelType = Type.GetTypeFromProgID("Excel.Application");
-                if (excelType == null)
+                try
                 {
-                    MessageBox.Show(this, "未安装 Excel，无法读取 .xlsx 文件。\n请将数据保存为 CSV 格式后重新加载。");
-                    return;
+                    var excelType = Type.GetTypeFromProgID("Excel.Application");
+                    if (excelType == null)
+                    {
+                        BeginInvoke((Action)(() => MessageBox.Show(this, "未安装 Excel，请保存为 CSV 格式后加载")));
+                        return;
+                    }
+
+                    dynamic excel = null;
+                    dynamic wb = null;
+                    try
+                    {
+                        excel = Activator.CreateInstance(excelType);
+                        excel.Visible = false;
+                        excel.DisplayAlerts = false;
+                        wb = excel.Workbooks.Open(path, ReadOnly: true);
+                        dynamic ws = wb.ActiveSheet;
+                        dynamic usedRange = ws.UsedRange;
+                        int rows = usedRange.Rows.Count;
+                        int cols = usedRange.Columns.Count;
+
+                        if (rows < 2 || cols < 1)
+                        {
+                            BeginInvoke((Action)(() => MessageBox.Show(this, "Excel 文件为空")));
+                            wb.Close(false); excel.Quit();
+                            return;
+                        }
+
+                        // Read all data at once using Value2 (much faster)
+                        dynamic allData = usedRange.Value2;
+
+                        // Read headers from first row
+                        var headers = new List<string>();
+                        for (int c = 1; c <= cols; c++)
+                        {
+                            var val = allData[1, c]?.ToString()?.Trim() ?? $"列{c}";
+                            headers.Add(val);
+                        }
+
+                        int colIdx = 0;
+                        if (headers.Count > 1)
+                        {
+                            // Need to show column selection on UI thread
+                            colIdx = -1;
+                            BeginInvoke((Action)(() =>
+                            {
+                                // This will be handled by the caller
+                            })).Invoke();
+
+                            // Show column selection dialog synchronously
+                            var selectedCol = -1;
+                            var evt = new System.Threading.ManualResetEvent(false);
+                            BeginInvoke((Action)(() =>
+                            {
+                                selectedCol = PromptForColumnSelection(headers, Path.GetFileName(path));
+                                evt.Set();
+                            }));
+                            evt.WaitOne();
+                            colIdx = selectedCol;
+
+                            if (colIdx < 0) { wb.Close(false); excel.Quit(); return; }
+                        }
+
+                        // Read data from selected column
+                        var data = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        for (int r = 2; r <= rows; r++)
+                        {
+                            var val = allData[r, colIdx + 1]?.ToString()?.Trim();
+                            if (!string.IsNullOrEmpty(val)) data.Add(val);
+                        }
+
+                        wb.Close(false);
+                        excel.Quit();
+
+                        BeginInvoke((Action)(() =>
+                        {
+                            _localData = data;
+                            _localDataPath = path;
+                            _useLocalDataValidation = true;
+                            chkUseLocalData.Checked = true;
+                            lblLocalData.Text = $"已加载: {data.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})";
+                            AddLog($"加载 Excel: {data.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
+                            SetStatus("就绪");
+                        }));
+                    }
+                    finally
+                    {
+                        try { wb?.Close(false); } catch { }
+                        try { excel?.Quit(); } catch { }
+                        try { if (excel != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(excel); } catch { }
+                    }
                 }
-
-                dynamic excel = Activator.CreateInstance(excelType);
-                excel.Visible = false;
-                dynamic wb = excel.Workbooks.Open(path);
-                dynamic ws = wb.ActiveSheet;
-                dynamic usedRange = ws.UsedRange;
-                int rows = usedRange.Rows.Count;
-                int cols = usedRange.Columns.Count;
-
-                if (rows < 2 || cols < 1) { wb.Close(false); excel.Quit(); return; }
-
-                // Read headers
-                var headers = new List<string>();
-                for (int c = 1; c <= cols; c++)
+                catch (Exception ex)
                 {
-                    var val = ws.Cells[1, c].Value?.ToString()?.Trim() ?? $"列{c}";
-                    headers.Add(val);
+                    BeginInvoke((Action)(() =>
+                    {
+                        MessageBox.Show(this, $"读取 Excel 失败: {ex.Message}\n\n请保存为 CSV 格式后加载");
+                        SetStatus("就绪");
+                    }));
                 }
-
-                int colIdx = 0;
-                if (headers.Count > 1)
-                {
-                    colIdx = PromptForColumnSelection(headers, Path.GetFileName(path));
-                    if (colIdx < 0) { wb.Close(false); excel.Quit(); return; }
-                }
-
-                _localData.Clear();
-                for (int r = 2; r <= rows; r++)
-                {
-                    var val = ws.Cells[r, colIdx + 1].Value?.ToString()?.Trim();
-                    if (!string.IsNullOrEmpty(val)) _localData.Add(val);
-                }
-
-                wb.Close(false);
-                excel.Quit();
-                System.Runtime.InteropServices.Marshal.ReleaseComObject(excel);
-
-                _localDataPath = path;
-                lblLocalData.Text = $"已加载: {_localData.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})";
-                AddLog($"加载 Excel 数据: {_localData.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, $"读取 Excel 失败: {ex.Message}\n\n请将数据保存为 CSV 格式后重新加载。");
-            }
+            });
         }
 
         private void LoadTextData(string path)
@@ -418,6 +480,8 @@ namespace BarTenderPrinter
                 if (!string.IsNullOrEmpty(val)) _localData.Add(val);
             }
             _localDataPath = path;
+            _useLocalDataValidation = true;
+            chkUseLocalData.Checked = true;
             lblLocalData.Text = $"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})";
             AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
         }
@@ -462,9 +526,14 @@ namespace BarTenderPrinter
             return result;
         }
 
+        private void chkUseLocalData_CheckedChanged(object sender, EventArgs e)
+        {
+            _useLocalDataValidation = chkUseLocalData.Checked;
+        }
+
         private bool ValidateLocalData(Dictionary<string, string> fieldValues)
         {
-            if (_localData.Count == 0) return true;
+            if (!_useLocalDataValidation || _localData.Count == 0) return true;
 
             var notInLocal = new List<string>();
             foreach (var kv in fieldValues)

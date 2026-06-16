@@ -17,7 +17,7 @@ namespace BarTenderPrinter
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.titlePanel.Height = 38;
             this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v4.7.0";
+            this.titleLabel.Text = "BarTender 标签打印工具 v4.8.0";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
             this.titleLabel.Location = new System.Drawing.Point(10, 7);
@@ -40,7 +40,9 @@ namespace BarTenderPrinter
             this.btnEditDataSources.Click += new System.EventHandler(this.btnEditDataSources_Click);
             this.btnLoadLocalData = new System.Windows.Forms.Button { Text = "加载校验数据", Location = new System.Drawing.Point(248, 42), Size = new System.Drawing.Size(90, 24) };
             this.btnLoadLocalData.Click += new System.EventHandler(this.btnLoadLocalData_Click);
-            this.lblLocalData = new System.Windows.Forms.Label { Text = "未加载校验数据", Location = new System.Drawing.Point(345, 45), Size = new System.Drawing.Size(150, 18) };
+            this.chkUseLocalData = new System.Windows.Forms.CheckBox { Text = "启用校验", Location = new System.Drawing.Point(345, 44), Size = new System.Drawing.Size(80, 20), Checked = false };
+            this.chkUseLocalData.CheckedChanged += new System.EventHandler(this.chkUseLocalData_CheckedChanged);
+            this.lblLocalData = new System.Windows.Forms.Label { Text = "未加载校验数据", Location = new System.Drawing.Point(430, 45), Size = new System.Drawing.Size(120, 18) };
             this.lblLocalData.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             MiuiTheme.StyleButton(this.btnSaveConfig);
             MiuiTheme.StyleButton(this.btnLoadConfig);
@@ -152,6 +154,7 @@ namespace BarTenderPrinter
             this.Controls.Add(this.lblTemplateDir);
             this.Controls.Add(this.btnEditDataSources);
             this.Controls.Add(this.btnLoadLocalData);
+            this.Controls.Add(this.chkUseLocalData);
             this.Controls.Add(this.lblLocalData);
             this.Controls.Add(this.btnLoadConfig);
             this.Controls.Add(this.btnSaveConfig);
@@ -163,7 +166,7 @@ namespace BarTenderPrinter
             this.ClientSize = new System.Drawing.Size(520, 560);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.MinimumSize = new System.Drawing.Size(480, 500);
-            this.Text = "BarTender 标签打印工具 v4.7.0";
+            this.Text = "BarTender 标签打印工具 v4.8.0";
             this.ResumeLayout(false); this.PerformLayout();
         }
 
@@ -171,6 +174,7 @@ namespace BarTenderPrinter
         private System.Windows.Forms.Label titleLabel;
         private System.Windows.Forms.Button btnExportLog;
         private System.Windows.Forms.Button btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData;
+        private System.Windows.Forms.CheckBox chkUseLocalData;
         private System.Windows.Forms.Label lblLocalData;
         private System.Windows.Forms.Label lblTemplateDir;
         private System.Windows.Forms.TextBox txtTemplateDir;
