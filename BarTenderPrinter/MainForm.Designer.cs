@@ -17,7 +17,7 @@ namespace BarTenderPrinter
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.titlePanel.Height = 38;
             this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v5.3.0";
+            this.titleLabel.Text = "BarTender 标签打印工具 v5.4.0";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
             this.titleLabel.Location = new System.Drawing.Point(10, 7);
@@ -164,7 +164,7 @@ namespace BarTenderPrinter
             this.ClientSize = new System.Drawing.Size(520, 580);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.MinimumSize = new System.Drawing.Size(480, 520);
-            this.Text = "BarTender 标签打印工具 v5.3.0";
+            this.Text = "BarTender 标签打印工具 v5.4.0";
             this.ResumeLayout(false); this.PerformLayout();
         }
 

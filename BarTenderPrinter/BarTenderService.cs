@@ -109,79 +109,49 @@ namespace BarTenderPrinter
                 btFormat = _btApp.Formats.Open(templatePath, false, "");
                 var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
 
-                // Try multiple approaches for ExportImageToFile
-                bool exported = false;
-
-                // Approach 1: Use ExportImageToFile with numeric enum values
-                if (!exported)
+                // Method 1: ExportImageToClipboard (most reliable in COM mode)
+                try
                 {
-                    try
+                    btFormat.ExportImageToClipboard(300, 300);
+                    var img = System.Windows.Forms.Clipboard.GetImage();
+                    if (img != null)
                     {
-                        // ImageType: PNG=3, BMP=2, JPEG=1
-                        // ColorDepth: ColorDepth256=0, ColorDepth24bit=1
-                        // OverwriteOptions: Overwrite=1, DoNotOverwrite=0
-                        btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300, 1);
-                        if (File.Exists(tempPath)) { exported = true; LoggerService.Info("预览成功 (方式1)"); }
+                        img.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
+                        img.Dispose();
+                        LoggerService.Info("预览成功 (剪贴板方式)");
+                        CloseFormat(btFormat);
+                        return File.Exists(tempPath) ? tempPath : null;
                     }
-                    catch (Exception ex) { LoggerService.Debug($"方式1失败: {ex.Message}"); }
                 }
+                catch (Exception ex) { LoggerService.Debug($"剪贴板方式失败: {ex.Message}"); }
 
-                // Approach 2: Try with different parameter count
-                if (!exported)
+                // Method 2: ExportImageToFile with various parameters
+                var methods = new (string name, Action tryFunc)[]
+                {
+                    ("ExportImageToFile(path)", () => btFormat.ExportImageToFile(tempPath)),
+                    ("ExportImageToFile(path, 3)", () => btFormat.ExportImageToFile(tempPath, 3)),
+                    ("ExportImageToFile(path, 3, 0)", () => btFormat.ExportImageToFile(tempPath, 3, 0)),
+                    ("ExportImageToFile(path, 3, 0, 300)", () => btFormat.ExportImageToFile(tempPath, 3, 0, 300)),
+                    ("ExportImageToFile(path, 3, 0, 300, 300)", () => btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300)),
+                    ("ExportImageToFile(path, 3, 0, 300, 300, 1)", () => btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300, 1)),
+                };
+
+                foreach (var (name, tryFunc) in methods)
                 {
                     try
                     {
-                        btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300);
-                        if (File.Exists(tempPath)) { exported = true; LoggerService.Info("预览成功 (方式2)"); }
-                    }
-                    catch (Exception ex) { LoggerService.Debug($"方式2失败: {ex.Message}"); }
-                }
-
-                // Approach 3: Try minimal parameters
-                if (!exported)
-                {
-                    try
-                    {
-                        btFormat.ExportImageToFile(tempPath);
-                        if (File.Exists(tempPath)) { exported = true; LoggerService.Info("预览成功 (方式3)"); }
-                    }
-                    catch (Exception ex) { LoggerService.Debug($"方式3失败: {ex.Message}"); }
-                }
-
-                // Approach 4: Try BMP format
-                if (!exported)
-                {
-                    try
-                    {
-                        var bmpPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.bmp");
-                        btFormat.ExportImageToFile(bmpPath, 2, 0, 300, 300, 1);
-                        if (File.Exists(bmpPath)) { tempPath = bmpPath; exported = true; LoggerService.Info("预览成功 (方式4-BMP)"); }
-                    }
-                    catch (Exception ex) { LoggerService.Debug($"方式4失败: {ex.Message}"); }
-                }
-
-                // Approach 5: Try ExportImageToClipboard
-                if (!exported)
-                {
-                    try
-                    {
-                        btFormat.ExportImageToClipboard(300, 300);
-                        if (System.Windows.Forms.Clipboard.ContainsImage())
+                        tryFunc();
+                        if (File.Exists(tempPath))
                         {
-                            var img = System.Windows.Forms.Clipboard.GetImage();
-                            img.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
-                            exported = true;
-                            LoggerService.Info("预览成功 (方式5-Clipboard)");
+                            LoggerService.Info($"预览成功 ({name})");
+                            CloseFormat(btFormat);
+                            return tempPath;
                         }
                     }
-                    catch (Exception ex) { LoggerService.Debug($"方式5失败: {ex.Message}"); }
+                    catch (Exception ex) { LoggerService.Debug($"{name} 失败: {ex.Message}"); }
                 }
 
                 CloseFormat(btFormat);
-
-                if (exported && File.Exists(tempPath))
-                    return tempPath;
-
                 LoggerService.Warn("预览导出失败：所有方式都失败");
                 return null;
             }
