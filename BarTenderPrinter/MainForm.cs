@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v4.6.0";
+        private readonly string _version = "v4.7.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -292,23 +292,19 @@ namespace BarTenderPrinter
 
         private void btnLoadLocalData_Click(object sender, EventArgs e)
         {
-            using (var ofd = new OpenFileDialog { Filter = "CSV|*.csv|文本|*.txt|所有|*.*" })
+            using (var ofd = new OpenFileDialog { Filter = "CSV|*.csv|Excel|*.xlsx;*.xls|文本|*.txt|所有|*.*" })
             {
                 if (ofd.ShowDialog(this) == DialogResult.OK)
                 {
                     try
                     {
-                        var lines = File.ReadAllLines(ofd.FileName);
-                        _localData.Clear();
-                        foreach (var line in lines)
-                        {
-                            var val = line.Trim();
-                            if (!string.IsNullOrEmpty(val))
-                                _localData.Add(val);
-                        }
-                        _localDataPath = ofd.FileName;
-                        lblLocalData.Text = $"已加载: {_localData.Count} 条 ({Path.GetFileName(ofd.FileName)})";
-                        AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
+                        var ext = Path.GetExtension(ofd.FileName).ToLower();
+                        if (ext == ".csv")
+                            LoadCsvData(ofd.FileName);
+                        else if (ext == ".xlsx" || ext == ".xls")
+                            LoadExcelData(ofd.FileName);
+                        else
+                            LoadTextData(ofd.FileName);
                     }
                     catch (Exception ex)
                     {
@@ -316,6 +312,154 @@ namespace BarTenderPrinter
                     }
                 }
             }
+        }
+
+        private void LoadCsvData(string path)
+        {
+            var lines = File.ReadAllLines(path);
+            if (lines.Length < 2) { MessageBox.Show(this, "CSV 文件为空或无数据行"); return; }
+
+            var headers = ParseCsvLine(lines[0]);
+            if (headers.Count <= 1)
+            {
+                // Single column, load directly
+                _localData.Clear();
+                foreach (var line in lines.Skip(1))
+                {
+                    var val = line.Trim();
+                    if (!string.IsNullOrEmpty(val)) _localData.Add(val);
+                }
+                _localDataPath = path;
+                lblLocalData.Text = $"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})";
+                AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
+                return;
+            }
+
+            // Multiple columns - show column selection
+            var colIdx = PromptForColumnSelection(headers, Path.GetFileName(path));
+            if (colIdx < 0) return;
+
+            _localData.Clear();
+            foreach (var line in lines.Skip(1))
+            {
+                var cols = ParseCsvLine(line);
+                if (colIdx < cols.Count && !string.IsNullOrWhiteSpace(cols[colIdx]))
+                    _localData.Add(cols[colIdx].Trim());
+            }
+            _localDataPath = path;
+            lblLocalData.Text = $"已加载: {_localData.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})";
+            AddLog($"加载本地数据: {_localData.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
+        }
+
+        private void LoadExcelData(string path)
+        {
+            // Try to read Excel using COM interop
+            try
+            {
+                var excelType = Type.GetTypeFromProgID("Excel.Application");
+                if (excelType == null)
+                {
+                    MessageBox.Show(this, "未安装 Excel，无法读取 .xlsx 文件。\n请将数据保存为 CSV 格式后重新加载。");
+                    return;
+                }
+
+                dynamic excel = Activator.CreateInstance(excelType);
+                excel.Visible = false;
+                dynamic wb = excel.Workbooks.Open(path);
+                dynamic ws = wb.ActiveSheet;
+                dynamic usedRange = ws.UsedRange;
+                int rows = usedRange.Rows.Count;
+                int cols = usedRange.Columns.Count;
+
+                if (rows < 2 || cols < 1) { wb.Close(false); excel.Quit(); return; }
+
+                // Read headers
+                var headers = new List<string>();
+                for (int c = 1; c <= cols; c++)
+                {
+                    var val = ws.Cells[1, c].Value?.ToString()?.Trim() ?? $"列{c}";
+                    headers.Add(val);
+                }
+
+                int colIdx = 0;
+                if (headers.Count > 1)
+                {
+                    colIdx = PromptForColumnSelection(headers, Path.GetFileName(path));
+                    if (colIdx < 0) { wb.Close(false); excel.Quit(); return; }
+                }
+
+                _localData.Clear();
+                for (int r = 2; r <= rows; r++)
+                {
+                    var val = ws.Cells[r, colIdx + 1].Value?.ToString()?.Trim();
+                    if (!string.IsNullOrEmpty(val)) _localData.Add(val);
+                }
+
+                wb.Close(false);
+                excel.Quit();
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(excel);
+
+                _localDataPath = path;
+                lblLocalData.Text = $"已加载: {_localData.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})";
+                AddLog($"加载 Excel 数据: {_localData.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"读取 Excel 失败: {ex.Message}\n\n请将数据保存为 CSV 格式后重新加载。");
+            }
+        }
+
+        private void LoadTextData(string path)
+        {
+            _localData.Clear();
+            foreach (var line in File.ReadAllLines(path))
+            {
+                var val = line.Trim();
+                if (!string.IsNullOrEmpty(val)) _localData.Add(val);
+            }
+            _localDataPath = path;
+            lblLocalData.Text = $"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})";
+            AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
+        }
+
+        private int PromptForColumnSelection(List<string> columns, string fileName)
+        {
+            using (var f = new Form())
+            {
+                f.Text = "选择校验列";
+                f.Size = new Size(350, 250);
+                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                f.StartPosition = FormStartPosition.CenterParent;
+                f.MaximizeBox = false; f.MinimizeBox = false;
+
+                var lbl = new Label { Text = $"文件: {fileName}\n选择用于校验的列：", Location = new Point(10, 10), Size = new Size(320, 40) };
+                var lst = new ListBox { Location = new Point(10, 55), Size = new Size(315, 130) };
+                foreach (var col in columns) lst.Items.Add(col);
+                if (lst.Items.Count > 0) lst.SelectedIndex = 0;
+
+                var ok = new Button { Text = "确定", Location = new Point(170, 195), Size = new Size(75, 25), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(255, 195), Size = new Size(75, 25), DialogResult = DialogResult.Cancel };
+                f.Controls.AddRange(new Control[] { lbl, lst, ok, cancel });
+                f.AcceptButton = ok; f.CancelButton = cancel;
+
+                return f.ShowDialog(this) == DialogResult.OK ? lst.SelectedIndex : -1;
+            }
+        }
+
+        private List<string> ParseCsvLine(string line)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrEmpty(line)) return result;
+            var current = new System.Text.StringBuilder();
+            bool inQuotes = false;
+            foreach (var c in line)
+            {
+                if (c == '"') inQuotes = !inQuotes;
+                else if (c == ',' && !inQuotes) { result.Add(current.ToString()); current.Clear(); }
+                else current.Append(c);
+            }
+            result.Add(current.ToString());
+            return result;
         }
 
         private bool ValidateLocalData(Dictionary<string, string> fieldValues)
