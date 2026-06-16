@@ -166,9 +166,9 @@ namespace BarTenderPrinter
                     try
                     {
                         btFormat.ExportImageToClipboard(300, 300);
-                        if (Clipboard.ContainsImage())
+                        if (System.Windows.Forms.Clipboard.ContainsImage())
                         {
-                            var img = Clipboard.GetImage();
+                            var img = System.Windows.Forms.Clipboard.GetImage();
                             img.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
                             exported = true;
                             LoggerService.Info("预览成功 (方式5-Clipboard)");
