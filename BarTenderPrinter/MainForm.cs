@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.2.0";
+        private readonly string _version = "v5.3.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -317,6 +317,70 @@ namespace BarTenderPrinter
             if (_inputTextBoxes.Length > 0) { _inputTextBoxes[0].Focus(); _inputTextBoxes[0].SelectAll(); }
         }
 
+        private void ClearNonAutoIncrementInputs(List<DataSourceItem> enabled)
+        {
+            for (int i = 0; i < enabled.Count; i++)
+            {
+                if (i < _inputTextBoxes.Length && _inputTextBoxes[i] != null)
+                {
+                    if (!enabled[i].AutoIncrement)
+                        _inputTextBoxes[i].Text = "";
+                }
+            }
+            // Focus first non-auto-increment field, or first field if all are auto-increment
+            for (int i = 0; i < enabled.Count; i++)
+            {
+                if (i < _inputTextBoxes.Length && !enabled[i].AutoIncrement)
+                {
+                    _inputTextBoxes[i].Focus();
+                    _inputTextBoxes[i].SelectAll();
+                    return;
+                }
+            }
+            if (_inputTextBoxes.Length > 0) { _inputTextBoxes[0].Focus(); _inputTextBoxes[0].SelectAll(); }
+        }
+
+        private void AutoIncrementFields(List<DataSourceItem> enabled)
+        {
+            for (int i = 0; i < enabled.Count; i++)
+            {
+                if (i < _inputTextBoxes.Length && _inputTextBoxes[i] != null && enabled[i].AutoIncrement)
+                {
+                    var currentVal = _inputTextBoxes[i].Text.Trim();
+                    var step = enabled[i].AutoStep;
+                    var newVal = IncrementValue(currentVal, step);
+                    _inputTextBoxes[i].Text = newVal;
+                    AddLog($"增序: {enabled[i].Name} {currentVal} -> {newVal}", "INFO");
+                }
+            }
+        }
+
+        private string IncrementValue(string value, int step)
+        {
+            if (string.IsNullOrEmpty(value)) return value;
+
+            // Find the numeric part at the end of the string
+            int i = value.Length - 1;
+            while (i >= 0 && char.IsDigit(value[i])) i--;
+            i++;
+
+            if (i == value.Length) return value; // No numeric part
+
+            string prefix = value.Substring(0, i);
+            string numStr = value.Substring(i);
+
+            if (long.TryParse(numStr, out long num))
+            {
+                num += step;
+                if (num < 0) num = 0;
+                // Preserve leading zeros
+                string newNumStr = num.ToString().PadLeft(numStr.Length, '0');
+                return prefix + newNumStr;
+            }
+
+            return value;
+        }
+
         private void SetInputsReadOnly(bool ro)
         {
             foreach (var tb in _inputTextBoxes)
@@ -585,7 +649,12 @@ namespace BarTenderPrinter
                         SetStatus("打印完成");
                         AddLog("打印完成", "SUCCESS");
                         _history.Add(historyKey, "PASS");
-                        ClearInputs();
+
+                        // Auto-increment enabled fields
+                        AutoIncrementFields(enabled);
+
+                        // Clear non-auto-increment fields
+                        ClearNonAutoIncrementInputs(enabled);
                     }
                     else
                     {
@@ -659,6 +728,8 @@ namespace BarTenderPrinter
                 IniWriteValue($"DS{i}", "Name", _dataSources[i].Name, _configFile);
                 IniWriteValue($"DS{i}", "Field", _dataSources[i].Field, _configFile);
                 IniWriteValue($"DS{i}", "Enabled", _dataSources[i].Enabled.ToString(), _configFile);
+                IniWriteValue($"DS{i}", "AutoIncrement", _dataSources[i].AutoIncrement.ToString(), _configFile);
+                IniWriteValue($"DS{i}", "AutoStep", _dataSources[i].AutoStep.ToString(), _configFile);
             }
         }
 
@@ -673,7 +744,16 @@ namespace BarTenderPrinter
             for (int i = 0; i < count; i++)
             {
                 var en = true; bool.TryParse(IniReadValue($"DS{i}", "Enabled", path), out en);
-                _dataSources.Add(new DataSourceItem { Name = IniReadValue($"DS{i}", "Name", path), Field = IniReadValue($"DS{i}", "Field", path), Enabled = en });
+                var autoInc = false; bool.TryParse(IniReadValue($"DS{i}", "AutoIncrement", path), out autoInc);
+                var autoStep = 1; int.TryParse(IniReadValue($"DS{i}", "AutoStep", path), out autoStep);
+                _dataSources.Add(new DataSourceItem
+                {
+                    Name = IniReadValue($"DS{i}", "Name", path),
+                    Field = IniReadValue($"DS{i}", "Field", path),
+                    Enabled = en,
+                    AutoIncrement = autoInc,
+                    AutoStep = autoStep
+                });
             }
             if (_dataSources.Count == 0) _dataSources.Add(new DataSourceItem { Name = "IMEI", Field = "IMEI1", Enabled = true });
         }
@@ -722,17 +802,18 @@ namespace BarTenderPrinter
     {
         public List<DataSourceItem> SelectedSources { get; private set; }
         private CheckBox[] _cbs; private TextBox[] _names;
+        private CheckBox[] _autoInc; private NumericUpDown[] _autoStep;
         private readonly List<string> _fields;
         private CheckBox chkSelectAll;
 
         public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current)
         {
             _fields = fields;
-            Text = "选择数据源"; Size = new Size(440, 420);
+            Text = "选择数据源"; Size = new Size(550, 420);
             FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false;
 
-            var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，勾选需要使用的：", Location = new Point(10, 10), Size = new Size(400, 20) };
+            var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，勾选需要使用的：", Location = new Point(10, 10), Size = new Size(520, 20) };
 
             // Select all checkbox
             chkSelectAll = new CheckBox { Text = "全选/全不选", Location = new Point(10, 32), Size = new Size(100, 20), Checked = true };
@@ -741,36 +822,57 @@ namespace BarTenderPrinter
                 foreach (var cb in _cbs) cb.Checked = chkSelectAll.Checked;
             };
 
-            var panel = new Panel { Location = new Point(10, 55), Size = new Size(405, 270), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
+            // Column headers
+            var hdrName = new Label { Text = "字段名", Location = new Point(15, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrDisplay = new Label { Text = "显示名称", Location = new Point(130, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrAuto = new Label { Text = "增序", Location = new Point(320, 55), Size = new Size(30, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrStep = new Label { Text = "步长", Location = new Point(360, 55), Size = new Size(60, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+
+            var panel = new Panel { Location = new Point(10, 75), Size = new Size(520, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
             _cbs = new CheckBox[fields.Count]; _names = new TextBox[fields.Count];
+            _autoInc = new CheckBox[fields.Count]; _autoStep = new NumericUpDown[fields.Count];
 
             for (int i = 0; i < fields.Count; i++)
             {
-                int y = i * 30 + 5;
+                int y = i * 28 + 5;
                 var existing = current.FirstOrDefault(d => d.Field == fields[i]);
-                // Pre-select if: exists in current, or current is empty (first time)
                 bool isChecked = existing != null ? existing.Enabled : (current.Count == 0 ? true : false);
+
                 _cbs[i] = new CheckBox { Text = fields[i], Location = new Point(5, y + 2), Size = new Size(115, 20), Checked = isChecked };
-                _names[i] = new TextBox { Location = new Point(125, y), Size = new Size(265, 25), Text = existing?.Name ?? fields[i] };
+                _names[i] = new TextBox { Location = new Point(125, y), Size = new Size(185, 25), Text = existing?.Name ?? fields[i] };
+                _autoInc[i] = new CheckBox { Location = new Point(325, y + 2), Size = new Size(20, 20), Checked = existing?.AutoIncrement ?? false };
+                _autoStep[i] = new NumericUpDown { Location = new Point(355, y), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = existing?.AutoStep ?? 1 };
+
                 panel.Controls.Add(_cbs[i]); panel.Controls.Add(_names[i]);
+                panel.Controls.Add(_autoInc[i]); panel.Controls.Add(_autoStep[i]);
             }
 
-            var btnSelectAll = new Button { Text = "全选", Location = new Point(10, 335), Size = new Size(50, 25) };
+            // Info label
+            var infoLbl = new Label { Text = "增序示例：AC20260616 → AC20260617（自动识别数字部分）", Location = new Point(10, 335), Size = new Size(400, 16), ForeColor = Color.Gray };
+
+            var btnSelectAll = new Button { Text = "全选", Location = new Point(10, 360), Size = new Size(50, 25) };
             btnSelectAll.Click += (s, e) => { foreach (var cb in _cbs) cb.Checked = true; };
-            var btnSelectNone = new Button { Text = "全不选", Location = new Point(65, 335), Size = new Size(55, 25) };
+            var btnSelectNone = new Button { Text = "全不选", Location = new Point(65, 360), Size = new Size(55, 25) };
             btnSelectNone.Click += (s, e) => { foreach (var cb in _cbs) cb.Checked = false; };
 
-            var ok = new Button { Text = "确定", Location = new Point(250, 365), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+            var ok = new Button { Text = "确定", Location = new Point(360, 360), Size = new Size(75, 28), DialogResult = DialogResult.OK };
             ok.Click += (s, e) =>
             {
                 SelectedSources = new List<DataSourceItem>();
                 for (int i = 0; i < _fields.Count; i++)
                     if (_cbs[i].Checked)
-                        SelectedSources.Add(new DataSourceItem { Name = _names[i].Text?.Trim() ?? _fields[i], Field = _fields[i], Enabled = true });
+                        SelectedSources.Add(new DataSourceItem
+                        {
+                            Name = _names[i].Text?.Trim() ?? _fields[i],
+                            Field = _fields[i],
+                            Enabled = true,
+                            AutoIncrement = _autoInc[i].Checked,
+                            AutoStep = (int)_autoStep[i].Value
+                        });
             };
-            var cancel = new Button { Text = "取消", Location = new Point(340, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+            var cancel = new Button { Text = "取消", Location = new Point(445, 360), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
 
-            Controls.AddRange(new Control[] { lbl, chkSelectAll, panel, btnSelectAll, btnSelectNone, ok, cancel });
+            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrName, hdrDisplay, hdrAuto, hdrStep, panel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
             AcceptButton = ok; CancelButton = cancel;
         }
     }
@@ -780,5 +882,7 @@ namespace BarTenderPrinter
         public string Name { get; set; }
         public string Field { get; set; }
         public bool Enabled { get; set; }
+        public bool AutoIncrement { get; set; }
+        public int AutoStep { get; set; } = 1; // +1 for increment, -1 for decrement
     }
 }
