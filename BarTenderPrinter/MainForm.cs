@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.5.0";
+        private readonly string _version = "v5.6.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -25,6 +25,7 @@ namespace BarTenderPrinter
         private HashSet<string> _localData = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string _localDataPath = "";
         private bool _useLocalDataValidation = false;
+        private bool _allowDuplicatePrint = false;
 
         public MainForm()
         {
@@ -591,6 +592,11 @@ namespace BarTenderPrinter
             _useLocalDataValidation = chkUseLocalData.Checked;
         }
 
+        private void chkAllowDuplicate_CheckedChanged(object sender, EventArgs e)
+        {
+            _allowDuplicatePrint = chkAllowDuplicate.Checked;
+        }
+
         private bool ValidateLocalData(Dictionary<string, string> fieldValues)
         {
             if (!_useLocalDataValidation || _localData.Count == 0) return true;
@@ -638,18 +644,24 @@ namespace BarTenderPrinter
                 fieldValues[enabled[i].Field] = val;
             }
 
-            // Duplicate check
-            var duplicates = fieldValues.Where(kv => _history.IsPrinted(kv.Value)).Select(kv => $"{kv.Key}={kv.Value}").ToList();
-            if (duplicates.Count > 0)
+            // Duplicate check - only if not allowed
+            if (!_allowDuplicatePrint)
             {
-                if (MessageBox.Show(this, $"以下数据已打印过：\n{string.Join("\n", duplicates)}\n\n是否继续？", "数据重复",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
-                { AddLog("用户取消（数据重复）", "WARNING"); return; }
+                var duplicates = fieldValues.Where(kv => _history.IsPrinted(kv.Value)).Select(kv => $"{kv.Key}={kv.Value}").ToList();
+                if (duplicates.Count > 0)
+                {
+                    if (MessageBox.Show(this, $"以下数据已打印过：\n{string.Join("\n", duplicates)}\n\n是否继续？", "数据重复",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                    { AddLog("用户取消（数据重复）", "WARNING"); return; }
+                }
             }
 
-            // Local data validation
-            if (!ValidateLocalData(fieldValues))
-            { AddLog("用户取消（本地数据校验失败）", "WARNING"); return; }
+            // Local data validation - only if enabled
+            if (_useLocalDataValidation)
+            {
+                if (!ValidateLocalData(fieldValues))
+                { AddLog("用户取消（本地数据校验失败）", "WARNING"); return; }
+            }
 
             int copies = (int)numCopies.Value;
             var historyKey = string.Join("|", fieldValues.Values);

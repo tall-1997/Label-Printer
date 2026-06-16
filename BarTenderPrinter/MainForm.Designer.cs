@@ -17,7 +17,7 @@ namespace BarTenderPrinter
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.titlePanel.Height = 38;
             this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v5.5.0";
+            this.titleLabel.Text = "BarTender 标签打印工具 v5.6.0";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
             this.titleLabel.Location = new System.Drawing.Point(10, 7);
@@ -42,7 +42,9 @@ namespace BarTenderPrinter
             this.btnLoadLocalData.Click += new System.EventHandler(this.btnLoadLocalData_Click);
             this.chkUseLocalData = new System.Windows.Forms.CheckBox { Text = "启用校验", Location = new System.Drawing.Point(345, 44), Size = new System.Drawing.Size(80, 20), Checked = false };
             this.chkUseLocalData.CheckedChanged += new System.EventHandler(this.chkUseLocalData_CheckedChanged);
-            this.lblLocalData = new System.Windows.Forms.Label { Text = "", Location = new System.Drawing.Point(430, 45), Size = new System.Drawing.Size(200, 18) };
+            this.chkAllowDuplicate = new System.Windows.Forms.CheckBox { Text = "允许重复打印", Location = new System.Drawing.Point(430, 44), Size = new System.Drawing.Size(95, 20), Checked = false };
+            this.chkAllowDuplicate.CheckedChanged += new System.EventHandler(this.chkAllowDuplicate_CheckedChanged);
+            this.lblLocalData = new System.Windows.Forms.Label { Text = "", Location = new System.Drawing.Point(530, 45), Size = new System.Drawing.Size(200, 18) };
             this.lblLocalData.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             MiuiTheme.StyleButton(this.btnSaveConfig);
             MiuiTheme.StyleButton(this.btnLoadConfig);
@@ -52,48 +54,48 @@ namespace BarTenderPrinter
 
             // === Template Row ===
             this.lblTemplateDir = new System.Windows.Forms.Label { Text = "模板目录：", Location = new System.Drawing.Point(10, 75), Size = new System.Drawing.Size(65, 18) };
-            this.txtTemplateDir = new System.Windows.Forms.TextBox { Location = new System.Drawing.Point(78, 72), Size = new System.Drawing.Size(320, 25), ReadOnly = true };
+            this.txtTemplateDir = new System.Windows.Forms.TextBox { Location = new System.Drawing.Point(78, 72), Size = new System.Drawing.Size(360, 25), ReadOnly = true };
             this.txtTemplateDir.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-            this.btnBrowseDir = new System.Windows.Forms.Button { Text = "浏览", Location = new System.Drawing.Point(405, 71), Size = new System.Drawing.Size(50, 25) };
+            this.btnBrowseDir = new System.Windows.Forms.Button { Text = "浏览", Location = new System.Drawing.Point(445, 71), Size = new System.Drawing.Size(50, 25) };
             this.btnBrowseDir.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             this.btnBrowseDir.Click += new System.EventHandler(this.btnBrowseDir_Click);
             MiuiTheme.StyleLabel(this.lblTemplateDir); MiuiTheme.StyleTextBox(this.txtTemplateDir); MiuiTheme.StyleButton(this.btnBrowseDir);
 
             // === Template Combo + Preview ===
-            this.cmbTemplate = new System.Windows.Forms.ComboBox { Location = new System.Drawing.Point(10, 102), Size = new System.Drawing.Size(300, 25), DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList };
+            this.cmbTemplate = new System.Windows.Forms.ComboBox { Location = new System.Drawing.Point(10, 102), Size = new System.Drawing.Size(340, 25), DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList };
             this.cmbTemplate.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left;
             this.cmbTemplate.SelectedIndexChanged += new System.EventHandler(this.cmbTemplate_SelectedIndexChanged);
             this.lblSelectedTemplate = new System.Windows.Forms.Label { Text = "未选择模板", Location = new System.Drawing.Point(10, 132), Size = new System.Drawing.Size(250, 18) };
             MiuiTheme.StyleLabel(this.lblSelectedTemplate, true);
-            this.pictureBoxPreview = new System.Windows.Forms.PictureBox { Location = new System.Drawing.Point(320, 98), Size = new System.Drawing.Size(145, 55), SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom, BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle, BackColor = System.Drawing.Color.White };
+            this.pictureBoxPreview = new System.Windows.Forms.PictureBox { Location = new System.Drawing.Point(360, 98), Size = new System.Drawing.Size(135, 55), SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom, BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle, BackColor = System.Drawing.Color.White };
             this.pictureBoxPreview.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
 
             // === Printer + Copies Row ===
             this.lblPrinter = new System.Windows.Forms.Label { Text = "打印机：", Location = new System.Drawing.Point(10, 160), Size = new System.Drawing.Size(55, 18) };
-            this.cmbPrinter = new System.Windows.Forms.ComboBox { Location = new System.Drawing.Point(68, 157), Size = new System.Drawing.Size(280, 25), DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList };
+            this.cmbPrinter = new System.Windows.Forms.ComboBox { Location = new System.Drawing.Point(68, 157), Size = new System.Drawing.Size(320, 25), DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList };
             this.cmbPrinter.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-            this.btnRefreshPrinter = new System.Windows.Forms.Button { Text = "刷新", Location = new System.Drawing.Point(355, 156), Size = new System.Drawing.Size(45, 25) };
+            this.btnRefreshPrinter = new System.Windows.Forms.Button { Text = "刷新", Location = new System.Drawing.Point(395, 156), Size = new System.Drawing.Size(45, 25) };
             this.btnRefreshPrinter.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             this.btnRefreshPrinter.Click += new System.EventHandler(this.btnRefreshPrinter_Click);
-            this.lblCopies = new System.Windows.Forms.Label { Text = "份数：", Location = new System.Drawing.Point(410, 160), Size = new System.Drawing.Size(35, 18) };
+            this.lblCopies = new System.Windows.Forms.Label { Text = "份数：", Location = new System.Drawing.Point(450, 160), Size = new System.Drawing.Size(35, 18) };
             this.lblCopies.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
-            this.numCopies = new System.Windows.Forms.NumericUpDown { Location = new System.Drawing.Point(448, 157), Size = new System.Drawing.Size(50, 25), Minimum = 1, Maximum = 99, Value = 1 };
+            this.numCopies = new System.Windows.Forms.NumericUpDown { Location = new System.Drawing.Point(488, 157), Size = new System.Drawing.Size(50, 25), Minimum = 1, Maximum = 99, Value = 1 };
             this.numCopies.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             MiuiTheme.StyleLabel(this.lblPrinter); MiuiTheme.StyleLabel(this.lblCopies); MiuiTheme.StyleButton(this.btnRefreshPrinter);
 
             // === Input Panel ===
-            this.inputPanel = new System.Windows.Forms.Panel { Location = new System.Drawing.Point(10, 190), Size = new System.Drawing.Size(490, 40), AutoScroll = true, AutoScrollMinSize = new System.Drawing.Size(0, 40), BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle };
+            this.inputPanel = new System.Windows.Forms.Panel { Location = new System.Drawing.Point(10, 190), Size = new System.Drawing.Size(530, 40), AutoScroll = true, AutoScrollMinSize = new System.Drawing.Size(0, 40), BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle };
             this.inputPanel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             MiuiTheme.StyleCard(this.inputPanel);
 
             // === Print Button ===
-            this.btnPrint = new System.Windows.Forms.Button { Text = "打印", Location = new System.Drawing.Point(10, 238), Size = new System.Drawing.Size(490, 32), Font = new System.Drawing.Font("Microsoft YaHei UI", 10F, System.Drawing.FontStyle.Bold) };
+            this.btnPrint = new System.Windows.Forms.Button { Text = "打印", Location = new System.Drawing.Point(10, 238), Size = new System.Drawing.Size(530, 32), Font = new System.Drawing.Font("Microsoft YaHei UI", 10F, System.Drawing.FontStyle.Bold) };
             this.btnPrint.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             this.btnPrint.Click += new System.EventHandler(this.btnPrint_Click);
             MiuiTheme.StyleButton(this.btnPrint, true);
 
             // === Bottom Tabs ===
-            this.tabBottom = new System.Windows.Forms.TabControl { Location = new System.Drawing.Point(10, 278), Size = new System.Drawing.Size(490, 160) };
+            this.tabBottom = new System.Windows.Forms.TabControl { Location = new System.Drawing.Point(10, 278), Size = new System.Drawing.Size(530, 280) };
             this.tabBottom.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             this.tabHistory = new System.Windows.Forms.TabPage { Text = "历史记录" };
             this.tabStats = new System.Windows.Forms.TabPage { Text = "统计" };
@@ -151,6 +153,7 @@ namespace BarTenderPrinter
             this.Controls.Add(this.txtTemplateDir);
             this.Controls.Add(this.lblTemplateDir);
             this.Controls.Add(this.lblLocalData);
+            this.Controls.Add(this.chkAllowDuplicate);
             this.Controls.Add(this.chkUseLocalData);
             this.Controls.Add(this.btnLoadLocalData);
             this.Controls.Add(this.btnEditDataSources);
@@ -161,10 +164,10 @@ namespace BarTenderPrinter
             this.Controls.Add(this.titlePanel);
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 17F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(520, 580);
+            this.ClientSize = new System.Drawing.Size(560, 700);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
-            this.MinimumSize = new System.Drawing.Size(480, 520);
-            this.Text = "BarTender 标签打印工具 v5.5.0";
+            this.MinimumSize = new System.Drawing.Size(520, 650);
+            this.Text = "BarTender 标签打印工具 v5.6.0";
             this.ResumeLayout(false); this.PerformLayout();
         }
 
@@ -172,7 +175,7 @@ namespace BarTenderPrinter
         private System.Windows.Forms.Label titleLabel;
         private System.Windows.Forms.Button btnExportLog;
         private System.Windows.Forms.Button btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData;
-        private System.Windows.Forms.CheckBox chkUseLocalData;
+        private System.Windows.Forms.CheckBox chkUseLocalData, chkAllowDuplicate;
         private System.Windows.Forms.Label lblLocalData;
         private System.Windows.Forms.Label lblTemplateDir;
         private System.Windows.Forms.TextBox txtTemplateDir;

@@ -6,8 +6,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>BarTenderPrinter</RootNamespace>
     <AssemblyName>BarTenderPrinter</AssemblyName>
-    <Version>4.5.0</Version>
-    <ApplicationIcon></ApplicationIcon>
+    <Version>5.6.0</Version>
+    <ApplicationIcon>icon.png</ApplicationIcon>
 
     <!-- Self-contained single file -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
