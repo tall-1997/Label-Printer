@@ -412,11 +412,6 @@ namespace BarTenderPrinter
                         {
                             // Need to show column selection on UI thread
                             colIdx = -1;
-                            BeginInvoke((Action)(() =>
-                            {
-                                // This will be handled by the caller
-                            })).Invoke();
-
                             // Show column selection dialog synchronously
                             var selectedCol = -1;
                             var evt = new System.Threading.ManualResetEvent(false);
