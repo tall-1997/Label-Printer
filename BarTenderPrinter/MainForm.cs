@@ -283,15 +283,20 @@ namespace BarTenderPrinter
             {
                 var lbl = new Label { Text = enabled[i].Name + "：", Location = new Point(8, y + 3), Size = new Size(85, 20), TextAlign = ContentAlignment.MiddleRight };
                 MiuiTheme.StyleLabel(lbl);
-                var txt = new TextBox { Location = new Point(98, y), Size = new Size(inputPanel.Width - 110, 25), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+                var txt = new TextBox { Location = new Point(98, y), Size = new Size(inputPanel.Width - 125, 25), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
                 MiuiTheme.StyleTextBox(txt); txt.Tag = i; txt.KeyDown += Input_KeyDown;
                 inputPanel.Controls.Add(lbl); inputPanel.Controls.Add(txt);
                 _inputTextBoxes[i] = txt; y += 32;
             }
 
-            // Auto-resize input panel based on content
-            int panelHeight = Math.Max(40, y + 8);
-            inputPanel.Height = panelHeight;
+            // Calculate required height
+            int requiredHeight = Math.Max(40, y + 8);
+
+            // Set max height for input panel (about 5 rows visible)
+            int maxHeight = 180;
+            inputPanel.Height = Math.Min(requiredHeight, maxHeight);
+            inputPanel.AutoScroll = true;
+            inputPanel.AutoScrollMinSize = new Size(0, requiredHeight);
 
             // Reposition print button below input panel
             btnPrint.Top = inputPanel.Bottom + 8;

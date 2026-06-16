@@ -82,7 +82,7 @@ namespace BarTenderPrinter
             MiuiTheme.StyleLabel(this.lblPrinter); MiuiTheme.StyleLabel(this.lblCopies); MiuiTheme.StyleButton(this.btnRefreshPrinter);
 
             // === Input Panel ===
-            this.inputPanel = new System.Windows.Forms.Panel { Location = new System.Drawing.Point(10, 190), Size = new System.Drawing.Size(490, 40), AutoScroll = true, BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle };
+            this.inputPanel = new System.Windows.Forms.Panel { Location = new System.Drawing.Point(10, 190), Size = new System.Drawing.Size(490, 40), AutoScroll = true, AutoScrollMinSize = new System.Drawing.Size(0, 40), BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle };
             this.inputPanel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             MiuiTheme.StyleCard(this.inputPanel);
 
