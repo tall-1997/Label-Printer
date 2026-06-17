@@ -7,7 +7,7 @@
     <RootNamespace>BarTenderPrinter</RootNamespace>
     <AssemblyName>BarTenderPrinter</AssemblyName>
     <Version>5.6.0</Version>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
 
     <!-- Self-contained single file -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
