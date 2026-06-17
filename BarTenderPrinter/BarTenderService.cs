@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace BarTenderPrinter
 {
@@ -9,6 +11,11 @@ namespace BarTenderPrinter
         private dynamic _btApp;
         private bool _connected;
         private bool _offlineMode;
+        private readonly SemaphoreSlim _operationLock = new SemaphoreSlim(1, 1);
+        private DateTime _lastOperationTime = DateTime.MinValue;
+        private const int MinOperationIntervalMs = 2000;
+        private const int MaxRetries = 3;
+        private const int RetryDelayMs = 3000;
 
         public bool IsConnected => _connected;
         public bool IsOfflineMode => _offlineMode;
@@ -103,13 +110,44 @@ namespace BarTenderPrinter
         {
             if (!_connected || _btApp == null) return null;
 
+            for (int retry = 0; retry < MaxRetries; retry++)
+            {
+                if (retry > 0)
+                {
+                    LoggerService.Info($"预览重试 {retry}/{MaxRetries - 1}，等待 {RetryDelayMs}ms...");
+                    Thread.Sleep(RetryDelayMs);
+                }
+
+                _operationLock.Wait();
+                try
+                {
+                    EnsureOperationInterval();
+                    var result = ExportPreviewInternal(templatePath);
+                    if (result != null) return result;
+                }
+                catch (Exception ex) when (IsComBusyError(ex))
+                {
+                    LoggerService.Warn($"BarTender 忙碌，将在 {RetryDelayMs}ms 后重试: {ex.Message}");
+                    continue;
+                }
+                finally
+                {
+                    _operationLock.Release();
+                }
+            }
+
+            LoggerService.Error("预览失败：已达到最大重试次数");
+            return null;
+        }
+
+        private string ExportPreviewInternal(string templatePath)
+        {
             dynamic btFormat = null;
             try
             {
                 btFormat = _btApp.Formats.Open(templatePath, false, "");
                 var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
 
-                // Try ExportImageToClipboard first (most reliable in COM mode)
                 try
                 {
                     btFormat.ExportImageToClipboard(300, 300);
@@ -125,7 +163,6 @@ namespace BarTenderPrinter
                 }
                 catch (Exception ex) { LoggerService.Debug($"剪贴板方式失败: {ex.Message}"); }
 
-                // Try ExportImageToFile with various parameters
                 var methods = new (string name, Action tryFunc)[]
                 {
                     ("ExportImageToFile(path)", () => btFormat.ExportImageToFile(tempPath)),
@@ -159,7 +196,7 @@ namespace BarTenderPrinter
             {
                 LoggerService.Error($"预览失败: {ex.Message}");
                 CloseFormat(btFormat);
-                return null;
+                throw;
             }
         }
 
@@ -168,6 +205,36 @@ namespace BarTenderPrinter
             if (!_connected || _btApp == null)
                 return new PrintResult(false, "BarTender 未连接");
 
+            for (int retry = 0; retry < MaxRetries; retry++)
+            {
+                if (retry > 0)
+                {
+                    LoggerService.Info($"打印重试 {retry}/{MaxRetries - 1}，等待 {RetryDelayMs}ms...");
+                    Thread.Sleep(RetryDelayMs);
+                }
+
+                _operationLock.Wait();
+                try
+                {
+                    EnsureOperationInterval();
+                    return PrintInternal(templatePath, fieldValues, printer, copies);
+                }
+                catch (Exception ex) when (IsComBusyError(ex))
+                {
+                    LoggerService.Warn($"BarTender 忙碌，将在 {RetryDelayMs}ms 后重试: {ex.Message}");
+                    continue;
+                }
+                finally
+                {
+                    _operationLock.Release();
+                }
+            }
+
+            return new PrintResult(false, "打印失败：BarTender 持续忙碌，请稍后重试");
+        }
+
+        private PrintResult PrintInternal(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
+        {
             dynamic btFormat = null;
             try
             {
@@ -208,8 +275,32 @@ namespace BarTenderPrinter
             {
                 LoggerService.Error($"打印失败: {ex.Message}");
                 CloseFormat(btFormat);
-                return new PrintResult(false, ex.Message);
+                throw;
             }
+        }
+
+        private void EnsureOperationInterval()
+        {
+            var elapsed = (DateTime.Now - _lastOperationTime).TotalMilliseconds;
+            if (elapsed < MinOperationIntervalMs)
+            {
+                var delay = (int)(MinOperationIntervalMs - elapsed);
+                LoggerService.Debug($"操作间隔等待 {delay}ms");
+                Thread.Sleep(delay);
+            }
+            _lastOperationTime = DateTime.Now;
+        }
+
+        private static bool IsComBusyError(Exception ex)
+        {
+            var message = ex.Message?.ToLower() ?? "";
+            return message.Contains("正在打印") ||
+                   message.Contains("当前正在") ||
+                   message.Contains("busy") ||
+                   message.Contains("0x80010105") ||
+                   message.Contains("rpc_e_serverfault") ||
+                   message.Contains("0x80010001") ||
+                   message.Contains("rpc_e_call_rejected");
         }
 
         private void CloseFormat(dynamic btFormat)
@@ -237,6 +328,7 @@ namespace BarTenderPrinter
 
         public void Disconnect()
         {
+            _operationLock.Wait();
             try
             {
                 if (_btApp != null)
@@ -247,11 +339,19 @@ namespace BarTenderPrinter
                 }
             }
             catch { }
-            _connected = false;
-            _offlineMode = false;
+            finally
+            {
+                _connected = false;
+                _offlineMode = false;
+                _operationLock.Release();
+            }
         }
 
-        public void Dispose() => Disconnect();
+        public void Dispose()
+        {
+            Disconnect();
+            _operationLock?.Dispose();
+        }
     }
 
     public class PrintResult
