@@ -1,0 +1,39 @@
+name: Release C# BarTender Printer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish self-contained single file
+        run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+
+      - name: Create zip package
+        run: Compress-Archive -Path publish/BarTenderPrinter.exe -DestinationPath "BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.zip"
+          generate_release_notes: true
+          draft: false
+          prerelease: false
