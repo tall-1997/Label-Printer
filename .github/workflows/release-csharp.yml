@@ -27,13 +27,42 @@ jobs:
         id: version
         run: echo "VERSION=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
 
-      - name: Create zip package
-        run: Compress-Archive -Path publish/BarTenderPrinter.exe -DestinationPath "BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.zip"
+      - name: Rename exe with version
+        run: Rename-Item -Path "publish/BarTenderPrinter.exe" -NewName "BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.zip"
-          generate_release_notes: true
+          files: "publish/BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe"
+          body: |
+            ## BarTender 标签打印工具 ${{ steps.version.outputs.VERSION }}
+
+            ### 更新内容
+
+            #### 修复
+            - 修复 BarTender 并发打印冲突：添加互斥锁机制，防止多个打印任务同时执行
+            - 修复 COM 服务器错误 (RPC_E_SERVERFAULT)：识别 COM 忙碌状态并自动重试
+            - 修复预览生成失败：优化预览导出方式，优先使用 ExportImageToFile 直接导出
+
+            #### 改进
+            - 添加操作间隔控制：确保 BarTender 操作之间至少间隔 2 秒
+            - 添加自动重试机制：打印和预览操作最多重试 3 次，每次间隔 3 秒
+            - 优化错误处理：区分可重试错误和致命错误，提高稳定性
+
+            ### 系统要求
+            - Windows 10/11 x64
+            - .NET 8.0 运行时（已内置，无需额外安装）
+            - BarTender 2022 R2 Enterprise 或更高版本
+
+            ### 安装说明
+            1. 下载 `BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe`
+            2. 直接运行即可，无需安装
+            3. 首次运行需要配置 BarTender 模板和打印机
+
+            ### 文件信息
+            - 文件名: BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe
+            - 架构: win-x64
+            - 类型: 自包含单文件（无需 .NET 运行时）
+          generate_release_notes: false
           draft: false
           prerelease: false
