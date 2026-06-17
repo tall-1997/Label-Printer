@@ -109,7 +109,7 @@ namespace BarTenderPrinter
                 btFormat = _btApp.Formats.Open(templatePath, false, "");
                 var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
 
-                // Method 1: ExportImageToClipboard (most reliable in COM mode)
+                // Try ExportImageToClipboard first (most reliable in COM mode)
                 try
                 {
                     btFormat.ExportImageToClipboard(300, 300);
@@ -125,7 +125,7 @@ namespace BarTenderPrinter
                 }
                 catch (Exception ex) { LoggerService.Debug($"剪贴板方式失败: {ex.Message}"); }
 
-                // Method 2: ExportImageToFile with various parameters
+                // Try ExportImageToFile with various parameters
                 var methods = new (string name, Action tryFunc)[]
                 {
                     ("ExportImageToFile(path)", () => btFormat.ExportImageToFile(tempPath)),

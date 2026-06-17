@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.6.0";
+        private readonly string _version = "v5.7.0";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -446,7 +446,7 @@ namespace BarTenderPrinter
                     _localData.Add(cols[colIdx].Trim());
             }
             _localDataPath = path; _useLocalDataValidation = true; chkUseLocalData.Checked = true;
-            lblLocalData.Text = $"已加载: {_localData.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})";
+            UpdateLocalDataLabel($"已加载: {_localData.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})");
             AddLog($"加载 CSV: {_localData.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
         }
 
@@ -521,7 +521,7 @@ namespace BarTenderPrinter
                             _localDataPath = path;
                             _useLocalDataValidation = true;
                             chkUseLocalData.Checked = true;
-                            lblLocalData.Text = $"已加载: {data.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})";
+                            UpdateLocalDataLabel($"已加载: {data.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})");
                             AddLog($"加载 Excel: {data.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
                             SetStatus("就绪");
                         }));
@@ -546,7 +546,7 @@ namespace BarTenderPrinter
             foreach (var line in File.ReadAllLines(path))
             { var val = line.Trim(); if (!string.IsNullOrEmpty(val)) _localData.Add(val); }
             _localDataPath = path; _useLocalDataValidation = true; chkUseLocalData.Checked = true;
-            lblLocalData.Text = $"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})";
+            UpdateLocalDataLabel($"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})");
             AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
         }
 
@@ -595,6 +595,17 @@ namespace BarTenderPrinter
         private void chkAllowDuplicate_CheckedChanged(object sender, EventArgs e)
         {
             _allowDuplicatePrint = chkAllowDuplicate.Checked;
+        }
+
+        private void UpdateLocalDataLabel(string text)
+        {
+            // Truncate text if too long
+            if (text.Length > 30)
+                text = text.Substring(0, 27) + "...";
+            if (lblLocalData.InvokeRequired)
+                lblLocalData.Invoke((Action)(() => lblLocalData.Text = text));
+            else
+                lblLocalData.Text = text;
         }
 
         private bool ValidateLocalData(Dictionary<string, string> fieldValues)
@@ -690,8 +701,9 @@ namespace BarTenderPrinter
                         SetStatus("打印失败");
                         AddLog($"失败: {result.ErrorMessage}", "ERROR");
                         _history.Add(historyKey, "FAIL");
+                        SetInputsReadOnly(false);
                     }
-                    SetInputsReadOnly(false); btnPrint.Enabled = true;
+                    btnPrint.Enabled = true;
                     LoadHistory(); RefreshStats();
                 }));
             });
@@ -725,9 +737,26 @@ namespace BarTenderPrinter
             foreach (var r in _history.Records.AsEnumerable().Reverse())
             {
                 if (!string.IsNullOrEmpty(kw) && !r.Imei.ToLower().Contains(kw) && !r.PrintTime.ToLower().Contains(kw) && !r.Status.ToLower().Contains(kw)) continue;
-                dt.Rows.Add(r.Imei, r.PrintTime, r.Status);
+                var status = r.Status == "PASS" ? "PASS" : "FAIL";
+                dt.Rows.Add(r.Imei, r.PrintTime, status);
             }
             dgvHistory.DataSource = dt;
+
+            // Apply color formatting to status column
+            foreach (DataGridViewRow row in dgvHistory.Rows)
+            {
+                var statusCell = row.Cells["状态"];
+                if (statusCell?.Value?.ToString() == "PASS")
+                {
+                    statusCell.Style.ForeColor = Color.Green;
+                    statusCell.Style.Font = new Font(dgvHistory.Font, FontStyle.Bold);
+                }
+                else if (statusCell?.Value?.ToString() == "FAIL")
+                {
+                    statusCell.Style.ForeColor = Color.Red;
+                    statusCell.Style.Font = new Font(dgvHistory.Font, FontStyle.Bold);
+                }
+            }
         }
         private void RefreshStats()
         {
