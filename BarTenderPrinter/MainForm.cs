@@ -174,7 +174,8 @@ namespace BarTenderPrinter
                     else
                     {
                         ShowPreviewPlaceholder("预览生成失败");
-                        AddLog("预览生成失败", "WARNING");
+                        AddLog("预览生成失败，请查看日志文件获取详细信息", "WARNING");
+                        AddLog($"日志文件: {LoggerService.GetLogFile()}", "INFO");
                     }
                 }));
             });

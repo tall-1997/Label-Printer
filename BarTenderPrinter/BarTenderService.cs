@@ -150,7 +150,9 @@ namespace BarTenderPrinter
             dynamic btFormat = null;
             try
             {
+                LoggerService.Info($"打开模板: {templatePath}");
                 btFormat = _btApp.Formats.Open(templatePath, false, "");
+                LoggerService.Info("模板打开成功");
                 var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
 
                 // 优先使用 ExportImageToFile 直接导出（避免剪贴板问题）
@@ -168,35 +170,52 @@ namespace BarTenderPrinter
                 {
                     try
                     {
+                        LoggerService.Debug($"尝试 {name}");
                         tryFunc();
-                        if (File.Exists(tempPath) && new FileInfo(tempPath).Length > 0)
+                        var fileInfo = new FileInfo(tempPath);
+                        if (File.Exists(tempPath) && fileInfo.Length > 0)
                         {
-                            LoggerService.Info($"预览成功 ({name})");
+                            LoggerService.Info($"预览成功 ({name})，文件大小: {fileInfo.Length} bytes");
                             CloseFormat(btFormat);
                             return tempPath;
                         }
+                        else
+                        {
+                            LoggerService.Debug($"{name} 失败: 文件{(File.Exists(tempPath) ? "大小为0" : "不存在")}");
+                        }
                     }
-                    catch (Exception ex) { LoggerService.Debug($"{name} 失败: {ex.Message}"); }
+                    catch (Exception ex) 
+                    { 
+                        LoggerService.Debug($"{name} 异常: {ex.Message}");
+                        // 清理可能创建的空文件
+                        try { if (File.Exists(tempPath) && new FileInfo(tempPath).Length == 0) File.Delete(tempPath); } catch { }
+                    }
                 }
 
                 // 剪贴板方式作为后备
                 try
                 {
+                    LoggerService.Debug("尝试剪贴板方式");
                     btFormat.ExportImageToClipboard(300, 300);
                     var img = System.Windows.Forms.Clipboard.GetImage();
                     if (img != null)
                     {
                         img.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
                         img.Dispose();
-                        if (File.Exists(tempPath) && new FileInfo(tempPath).Length > 0)
+                        var fileInfo = new FileInfo(tempPath);
+                        if (File.Exists(tempPath) && fileInfo.Length > 0)
                         {
-                            LoggerService.Info("预览成功 (剪贴板方式)");
+                            LoggerService.Info($"预览成功 (剪贴板方式)，文件大小: {fileInfo.Length} bytes");
                             CloseFormat(btFormat);
                             return tempPath;
                         }
                     }
+                    else
+                    {
+                        LoggerService.Debug("剪贴板方式失败: 无法获取图像");
+                    }
                 }
-                catch (Exception ex) { LoggerService.Debug($"剪贴板方式失败: {ex.Message}"); }
+                catch (Exception ex) { LoggerService.Debug($"剪贴板方式异常: {ex.Message}"); }
 
                 CloseFormat(btFormat);
                 LoggerService.Warn("预览导出失败：所有方式都失败");
