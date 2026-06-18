@@ -6,7 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>BarTenderPrinter</RootNamespace>
     <AssemblyName>BarTenderPrinter</AssemblyName>
-    <Version>5.7.1</Version>
+    <Version>5.7.2</Version>
     <ApplicationIcon>icon.ico</ApplicationIcon>
 
     <!-- Self-contained single file -->
