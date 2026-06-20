@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.0";
+        private readonly string _version = "v5.7.2";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -77,6 +77,26 @@ namespace BarTenderPrinter
                 btnPrint.Enabled = false;
                 btnPrint.Text = "打印（需要安装 BarTender）";
             }
+        }
+
+        private void btnDiagnostics_Click(object sender, EventArgs e)
+        {
+            if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath))
+            {
+                AddLog("请先选择一个模板文件", "WARNING");
+                return;
+            }
+
+            AddLog("开始运行 BarTender 诊断...", "INFO");
+            Task.Run(() =>
+            {
+                _btService.RunDiagnostics(_selectedTemplatePath);
+                BeginInvoke((Action)(() =>
+                {
+                    AddLog("诊断完成，请查看日志文件获取详细信息", "INFO");
+                    AddLog($"日志文件: {LoggerService.GetLogFile()}", "INFO");
+                }));
+            });
         }
 
         #endregion

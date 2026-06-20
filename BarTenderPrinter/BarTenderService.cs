@@ -145,6 +145,177 @@ namespace BarTenderPrinter
             return null;
         }
 
+        public void RunDiagnostics(string templatePath)
+        {
+            LoggerService.Info("========== BarTender 诊断开始 ==========");
+            
+            // 1. 检查连接状态
+            LoggerService.Info($"[诊断] 连接状态: {(_connected ? "已连接" : "未连接")}");
+            LoggerService.Info($"[诊断] COM 对象: {(_btApp != null ? "已创建" : "未创建")}");
+            
+            if (!_connected || _btApp == null)
+            {
+                LoggerService.Error("[诊断] BarTender 未连接，无法进行诊断");
+                return;
+            }
+
+            // 2. 检查模板文件
+            LoggerService.Info($"[诊断] 模板路径: {templatePath}");
+            LoggerService.Info($"[诊断] 模板存在: {File.Exists(templatePath)}");
+            
+            if (!File.Exists(templatePath))
+            {
+                LoggerService.Error("[诊断] 模板文件不存在");
+                return;
+            }
+
+            // 3. 尝试打开模板
+            dynamic btFormat = null;
+            try
+            {
+                LoggerService.Info("[诊断] 尝试打开模板...");
+                btFormat = _btApp.Formats.Open(templatePath, false, "");
+                LoggerService.Info("[诊断] 模板打开成功");
+                
+                // 4. 检查模板属性
+                try
+                {
+                    LoggerService.Info($"[诊断] 模板名称: {btFormat.Name}");
+                    LoggerService.Info($"[诊断] 模板文件名: {btFormat.FileName}");
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Warn($"[诊断] 获取模板属性失败: {ex.Message}");
+                }
+
+                // 5. 检查数据源
+                try
+                {
+                    var subStrings = btFormat.NamedSubStrings;
+                    var count = (int)subStrings.Count;
+                    LoggerService.Info($"[诊断] 数据源数量: {count}");
+                    for (int i = 1; i <= Math.Min(count, 5); i++)
+                    {
+                        try
+                        {
+                            var sub = subStrings.Item(i);
+                            LoggerService.Info($"[诊断] 数据源 {i}: {sub.Name}");
+                        }
+                        catch (Exception ex)
+                        {
+                            LoggerService.Warn($"[诊断] 获取数据源 {i} 失败: {ex.Message}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Warn($"[诊断] 获取数据源列表失败: {ex.Message}");
+                }
+
+                // 6. 检查打印机
+                try
+                {
+                    LoggerService.Info($"[诊断] 默认打印机: {btFormat.Printer}");
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Warn($"[诊断] 获取打印机失败: {ex.Message}");
+                }
+
+                // 7. 尝试导出预览
+                var tempPath = Path.Combine(Path.GetTempPath(), $"bt_diagnostic_{Guid.NewGuid():N}.png");
+                
+                // 7.1 尝试 ExportImageToFile
+                LoggerService.Info("[诊断] 尝试 ExportImageToFile...");
+                try
+                {
+                    btFormat.ExportImageToFile(tempPath);
+                    if (File.Exists(tempPath))
+                    {
+                        var fileInfo = new FileInfo(tempPath);
+                        LoggerService.Info($"[诊断] ExportImageToFile 成功，文件大小: {fileInfo.Length} bytes");
+                        if (fileInfo.Length > 0)
+                        {
+                            LoggerService.Info("[诊断] 预览导出功能正常");
+                        }
+                        else
+                        {
+                            LoggerService.Warn("[诊断] 导出的文件大小为 0");
+                        }
+                        try { File.Delete(tempPath); } catch { }
+                    }
+                    else
+                    {
+                        LoggerService.Warn("[诊断] ExportImageToFile 未创建文件");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Error($"[诊断] ExportImageToFile 失败: {ex.Message}");
+                    LoggerService.Error($"[诊断] 异常类型: {ex.GetType().Name}");
+                    if (ex.InnerException != null)
+                    {
+                        LoggerService.Error($"[诊断] 内部异常: {ex.InnerException.Message}");
+                    }
+                }
+
+                // 7.2 尝试 ExportImageToClipboard
+                LoggerService.Info("[诊断] 尝试 ExportImageToClipboard...");
+                try
+                {
+                    btFormat.ExportImageToClipboard(300, 300);
+                    var img = System.Windows.Forms.Clipboard.GetImage();
+                    if (img != null)
+                    {
+                        LoggerService.Info($"[诊断] ExportImageToClipboard 成功，图像尺寸: {img.Width}x{img.Height}");
+                        img.Dispose();
+                    }
+                    else
+                    {
+                        LoggerService.Warn("[诊断] ExportImageToClipboard 未获取到图像");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Error($"[诊断] ExportImageToClipboard 失败: {ex.Message}");
+                }
+
+                // 8. 检查 BarTender 版本
+                try
+                {
+                    LoggerService.Info($"[诊断] BarTender 版本: {_btApp.Version}");
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Warn($"[诊断] 获取版本失败: {ex.Message}");
+                }
+
+                // 9. 检查许可
+                try
+                {
+                    LoggerService.Info($"[诊断] 许可状态: {_btApp.LicenseStatus}");
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Warn($"[诊断] 获取许可状态失败: {ex.Message}");
+                }
+
+                CloseFormat(btFormat);
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error($"[诊断] 打开模板失败: {ex.Message}");
+                LoggerService.Error($"[诊断] 异常类型: {ex.GetType().Name}");
+                if (ex.InnerException != null)
+                {
+                    LoggerService.Error($"[诊断] 内部异常: {ex.InnerException.Message}");
+                }
+                CloseFormat(btFormat);
+            }
+            
+            LoggerService.Info("========== BarTender 诊断结束 ==========");
+        }
+
         private string ExportPreviewInternal(string templatePath)
         {
             dynamic btFormat = null;

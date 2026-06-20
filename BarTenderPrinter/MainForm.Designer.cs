@@ -40,16 +40,19 @@ namespace BarTenderPrinter
             this.btnEditDataSources.Click += new System.EventHandler(this.btnEditDataSources_Click);
             this.btnLoadLocalData = new System.Windows.Forms.Button { Text = "加载校验数据", Location = new System.Drawing.Point(248, 42), Size = new System.Drawing.Size(90, 24) };
             this.btnLoadLocalData.Click += new System.EventHandler(this.btnLoadLocalData_Click);
-            this.chkUseLocalData = new System.Windows.Forms.CheckBox { Text = "启用校验", Location = new System.Drawing.Point(345, 44), Size = new System.Drawing.Size(80, 20), Checked = false };
+            this.btnDiagnostics = new System.Windows.Forms.Button { Text = "诊断", Location = new System.Drawing.Point(345, 42), Size = new System.Drawing.Size(50, 24) };
+            this.btnDiagnostics.Click += new System.EventHandler(this.btnDiagnostics_Click);
+            this.chkUseLocalData = new System.Windows.Forms.CheckBox { Text = "启用校验", Location = new System.Drawing.Point(402, 44), Size = new System.Drawing.Size(80, 20), Checked = false };
             this.chkUseLocalData.CheckedChanged += new System.EventHandler(this.chkUseLocalData_CheckedChanged);
-            this.chkAllowDuplicate = new System.Windows.Forms.CheckBox { Text = "允许重复打印", Location = new System.Drawing.Point(430, 44), Size = new System.Drawing.Size(95, 20), Checked = false };
+            this.chkAllowDuplicate = new System.Windows.Forms.CheckBox { Text = "允许重复打印", Location = new System.Drawing.Point(487, 44), Size = new System.Drawing.Size(95, 20), Checked = false };
             this.chkAllowDuplicate.CheckedChanged += new System.EventHandler(this.chkAllowDuplicate_CheckedChanged);
-            this.lblLocalData = new System.Windows.Forms.Label { Text = "", Location = new System.Drawing.Point(530, 45), Size = new System.Drawing.Size(200, 18) };
+            this.lblLocalData = new System.Windows.Forms.Label { Text = "", Location = new System.Drawing.Point(587, 45), Size = new System.Drawing.Size(200, 18) };
             this.lblLocalData.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             MiuiTheme.StyleButton(this.btnSaveConfig);
             MiuiTheme.StyleButton(this.btnLoadConfig);
             MiuiTheme.StyleButton(this.btnEditDataSources);
             MiuiTheme.StyleButton(this.btnLoadLocalData);
+            MiuiTheme.StyleButton(this.btnDiagnostics);
             MiuiTheme.StyleLabel(this.lblLocalData, true);
 
             // === Template Row ===
@@ -174,7 +177,7 @@ namespace BarTenderPrinter
         private System.Windows.Forms.Panel titlePanel;
         private System.Windows.Forms.Label titleLabel;
         private System.Windows.Forms.Button btnExportLog;
-        private System.Windows.Forms.Button btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData;
+        private System.Windows.Forms.Button btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData, btnDiagnostics;
         private System.Windows.Forms.CheckBox chkUseLocalData, chkAllowDuplicate;
         private System.Windows.Forms.Label lblLocalData;
         private System.Windows.Forms.Label lblTemplateDir;
