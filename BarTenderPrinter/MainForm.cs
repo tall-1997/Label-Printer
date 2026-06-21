@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.6";
+        private readonly string _version = "v5.7.7";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -26,6 +26,7 @@ namespace BarTenderPrinter
         private string _localDataPath = "";
         private bool _useLocalDataValidation = false;
         private bool _allowDuplicatePrint = false;
+        private bool _isInitializing = true;
 
         public MainForm()
         {
@@ -34,6 +35,7 @@ namespace BarTenderPrinter
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".bartender-printer", "config.ini");
             Text = $"BarTender 标签打印工具 {_version}";
+            titleLabel.Text = $"BarTender 标签打印工具 {_version}";
             MiuiTheme.ApplyTheme(this);
             Load += MainForm_Load;
             FormClosing += (s, e) => { CleanupPreview(); _btService.Dispose(); };
@@ -49,6 +51,14 @@ namespace BarTenderPrinter
             LoadHistory();
             RefreshPrinters();
             RefreshStats();
+            _isInitializing = false;
+
+            if (!string.IsNullOrEmpty(_selectedTemplatePath) && File.Exists(_selectedTemplatePath) && _btService.IsConnected)
+            {
+                LoadTemplatePreview(_selectedTemplatePath);
+                LoadTemplateDataSources(_selectedTemplatePath);
+            }
+
             AddLog("系统启动完成", "INFO");
         }
 
@@ -65,10 +75,6 @@ namespace BarTenderPrinter
                 AddLog("BarTender 已连接", "SUCCESS");
                 btnPrint.Enabled = true;
                 btnPrint.Text = "打印";
-
-                // Load preview if template selected
-                if (!string.IsNullOrEmpty(_selectedTemplatePath) && File.Exists(_selectedTemplatePath))
-                    LoadTemplatePreview(_selectedTemplatePath);
             }
             else
             {
@@ -152,6 +158,9 @@ namespace BarTenderPrinter
             if (item == null) return;
             _selectedTemplatePath = item.FullPath;
             lblSelectedTemplate.Text = item.Name;
+
+            if (_isInitializing) return;
+
             LoadTemplatePreview(_selectedTemplatePath);
             LoadTemplateDataSources(_selectedTemplatePath);
         }
