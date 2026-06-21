@@ -2,11 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Runtime.InteropServices;
 
 namespace BarTenderPrinter
 {
     public class BarTenderService : IDisposable
     {
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, ref System.Drawing.Rectangle lpRect);
+        
         private dynamic _btApp;
         private bool _connected;
         private bool _offlineMode;
@@ -412,41 +416,103 @@ namespace BarTenderPrinter
                 }
                 catch (Exception ex) { LoggerService.Debug($"PrintOut 异常: {ex.Message}"); }
 
-                // 方式4: 尝试使用 Application 的 Visible 属性显示预览窗口，然后截取屏幕
+                // 方式4: 尝试使用 Application 的 Visible 属性显示预览窗口，然后截取窗口
                 try
                 {
-                    LoggerService.Debug("尝试显示 BarTender 窗口并截取屏幕");
+                    LoggerService.Debug("尝试显示 BarTender 窗口并截取窗口");
                     
                     // 显示 BarTender 窗口
                     _btApp.Visible = true;
-                    System.Threading.Thread.Sleep(1000); // 等待窗口显示
+                    System.Threading.Thread.Sleep(1500); // 等待窗口显示和渲染
                     
-                    // 截取屏幕
-                    var screenBitmap = new System.Drawing.Bitmap(
-                        System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width,
-                        System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
-                    using (var g = System.Drawing.Graphics.FromImage(screenBitmap))
+                    // 获取 BarTender 窗口句柄
+                    IntPtr hWnd = IntPtr.Zero;
+                    try
                     {
-                        g.CopyFromScreen(0, 0, 0, 0, screenBitmap.Size);
+                        // 尝试通过 COM 获取窗口句柄
+                        hWnd = (IntPtr)_btApp.hWnd;
+                        LoggerService.Debug($"获取到 BarTender 窗口句柄: {hWnd}");
+                    }
+                    catch (Exception ex)
+                    {
+                        LoggerService.Debug($"获取窗口句柄失败: {ex.Message}");
                     }
                     
-                    // 保存为文件
-                    screenBitmap.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
-                    screenBitmap.Dispose();
+                    // 如果获取到窗口句柄，截取该窗口
+                    if (hWnd != IntPtr.Zero)
+                    {
+                        // 使用 Windows API 获取窗口位置
+                        var rect = new System.Drawing.Rectangle();
+                        GetWindowRect(hWnd, ref rect);
+                        
+                        // 截取窗口区域
+                        int width = rect.Right - rect.Left;
+                        int height = rect.Bottom - rect.Top;
+                        
+                        if (width > 0 && height > 0)
+                        {
+                            var windowBitmap = new System.Drawing.Bitmap(width, height);
+                            using (var g = System.Drawing.Graphics.FromImage(windowBitmap))
+                            {
+                                g.CopyFromScreen(rect.Left, rect.Top, 0, 0, new System.Drawing.Size(width, height));
+                            }
+                            
+                            // 裁剪掉标题栏和菜单栏（大约 100 像素）
+                            int cropTop = 100;
+                            if (height > cropTop + 50)
+                            {
+                                var croppedBitmap = new System.Drawing.Bitmap(width, height - cropTop);
+                                using (var g = System.Drawing.Graphics.FromImage(croppedBitmap))
+                                {
+                                    g.DrawImage(windowBitmap, 0, -cropTop);
+                                }
+                                windowBitmap.Dispose();
+                                windowBitmap = croppedBitmap;
+                            }
+                            
+                            windowBitmap.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
+                            windowBitmap.Dispose();
+                            
+                            LoggerService.Info($"预览成功 (窗口截取方式)，窗口大小: {width}x{height}");
+                        }
+                    }
+                    else
+                    {
+                        // 如果获取不到窗口句柄，截取整个屏幕的中心区域
+                        LoggerService.Debug("无法获取窗口句柄，截取屏幕中心区域");
+                        var screenWidth = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width;
+                        var screenHeight = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height;
+                        
+                        // 截取屏幕中心区域（假设 BarTender 窗口在屏幕中心）
+                        int cropWidth = Math.Min(800, screenWidth);
+                        int cropHeight = Math.Min(600, screenHeight);
+                        int cropX = (screenWidth - cropWidth) / 2;
+                        int cropY = (screenHeight - cropHeight) / 2;
+                        
+                        var screenBitmap = new System.Drawing.Bitmap(cropWidth, cropHeight);
+                        using (var g = System.Drawing.Graphics.FromImage(screenBitmap))
+                        {
+                            g.CopyFromScreen(cropX, cropY, 0, 0, new System.Drawing.Size(cropWidth, cropHeight));
+                        }
+                        
+                        screenBitmap.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
+                        screenBitmap.Dispose();
+                        
+                        LoggerService.Info("预览成功 (屏幕中心区域截取方式)");
+                    }
                     
                     // 隐藏 BarTender 窗口
                     _btApp.Visible = false;
                     
                     if (File.Exists(tempPath) && new FileInfo(tempPath).Length > 0)
                     {
-                        LoggerService.Info("预览成功 (屏幕截取方式)");
                         CloseFormat(btFormat);
                         return tempPath;
                     }
                 }
                 catch (Exception ex) 
                 { 
-                    LoggerService.Debug($"屏幕截取方式异常: {ex.Message}");
+                    LoggerService.Debug($"窗口截取方式异常: {ex.Message}");
                     // 确保隐藏 BarTender 窗口
                     try { _btApp.Visible = false; } catch { }
                 }
