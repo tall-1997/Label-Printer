@@ -807,7 +807,8 @@ namespace BarTenderPrinter
                     {
                         SetStatus("打印失败");
                         AddLog($"失败: {result.ErrorMessage}", "ERROR");
-                        _history.Add(historyKey, "FAIL");
+                        foreach (var kv in fieldValues)
+                            _history.Add(kv.Value, "FAIL");
                         SetInputsReadOnly(false);
                     }
                     btnPrint.Enabled = true;
