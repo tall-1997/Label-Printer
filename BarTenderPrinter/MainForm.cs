@@ -15,13 +15,13 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.7";
+        private readonly string _version = "v5.7.8";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
+        private Panel[] _rowPanels = new Panel[0];
         private string _templatesFolder = "";
         private string _selectedTemplatePath = "";
-        private string _previewTempFile = null;
         private HashSet<string> _localData = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string _localDataPath = "";
         private bool _useLocalDataValidation = false;
@@ -38,7 +38,7 @@ namespace BarTenderPrinter
             titleLabel.Text = $"BarTender 标签打印工具 {_version}";
             MiuiTheme.ApplyTheme(this);
             Load += MainForm_Load;
-            FormClosing += (s, e) => { CleanupPreview(); _btService.Dispose(); };
+            FormClosing += (s, e) => { _btService.Dispose(); };
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -55,7 +55,6 @@ namespace BarTenderPrinter
 
             if (!string.IsNullOrEmpty(_selectedTemplatePath) && File.Exists(_selectedTemplatePath) && _btService.IsConnected)
             {
-                LoadTemplatePreview(_selectedTemplatePath);
                 LoadTemplateDataSources(_selectedTemplatePath);
             }
 
@@ -161,67 +160,7 @@ namespace BarTenderPrinter
 
             if (_isInitializing) return;
 
-            LoadTemplatePreview(_selectedTemplatePath);
             LoadTemplateDataSources(_selectedTemplatePath);
-        }
-
-        private void LoadTemplatePreview(string path)
-        {
-            CleanupPreview(); pictureBoxPreview.Image = null;
-            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
-
-            if (!_btService.IsConnected)
-            {
-                ShowPreviewPlaceholder("预览需要 BarTender");
-                return;
-            }
-
-            AddLog("正在生成预览...", "INFO");
-            Task.Run(() =>
-            {
-                var tmp = _btService.ExportPreview(path);
-                BeginInvoke((Action)(() =>
-                {
-                    if (tmp != null && File.Exists(tmp))
-                    {
-                        try
-                        {
-                            _previewTempFile = tmp;
-                            using (var fs = new FileStream(tmp, FileMode.Open, FileAccess.Read))
-                            {
-                                pictureBoxPreview.Image = Image.FromStream(fs);
-                            }
-                            AddLog("预览图加载成功", "SUCCESS");
-                        }
-                        catch (Exception ex)
-                        {
-                            LoggerService.Error($"加载预览图失败: {ex.Message}");
-                            ShowPreviewPlaceholder("预览加载失败");
-                            AddLog($"预览加载失败: {ex.Message}", "ERROR");
-                        }
-                    }
-                    else
-                    {
-                        ShowPreviewPlaceholder("预览生成失败");
-                        AddLog("预览生成失败，请查看日志文件获取详细信息", "WARNING");
-                        AddLog($"日志文件: {LoggerService.GetLogFile()}", "INFO");
-                    }
-                }));
-            });
-        }
-
-        private void ShowPreviewPlaceholder(string text)
-        {
-            var bmp = new Bitmap(pictureBoxPreview.Width, pictureBoxPreview.Height);
-            using (var g = Graphics.FromImage(bmp))
-            {
-                g.Clear(Color.WhiteSmoke);
-                using (var font = new Font("Microsoft YaHei UI", 8F))
-                using (var brush = new SolidBrush(Color.Gray))
-                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                    g.DrawString(text, font, brush, new RectangleF(0, 0, bmp.Width, bmp.Height), sf);
-            }
-            pictureBoxPreview.Image = bmp;
         }
 
         private void LoadTemplateDataSources(string path)
@@ -246,12 +185,6 @@ namespace BarTenderPrinter
                     }
                 }));
             });
-        }
-
-        private void CleanupPreview()
-        {
-            if (_previewTempFile != null && File.Exists(_previewTempFile))
-            { try { File.Delete(_previewTempFile); } catch { } _previewTempFile = null; }
         }
 
         private class TemplateItem
@@ -309,32 +242,132 @@ namespace BarTenderPrinter
             inputPanel.Controls.Clear();
             var enabled = _dataSources.Where(d => d.Enabled).ToList();
             _inputTextBoxes = new TextBox[enabled.Count];
-            int y = 8;
+            _rowPanels = new Panel[enabled.Count];
+            int y = 4;
             for (int i = 0; i < enabled.Count; i++)
             {
-                var lbl = new Label { Text = enabled[i].Name + "：", Location = new Point(8, y + 3), Size = new Size(85, 20), TextAlign = ContentAlignment.MiddleRight };
+                var rowPanel = new Panel
+                {
+                    Location = new Point(0, y),
+                    Size = new Size(inputPanel.ClientSize.Width, 28),
+                    Tag = i,
+                    AllowDrop = true,
+                    BackColor = Color.Transparent
+                };
+                rowPanel.DragEnter += RowPanel_DragEnter;
+                rowPanel.DragDrop += RowPanel_DragDrop;
+                rowPanel.DragOver += RowPanel_DragOver;
+
+                var grip = new Label
+                {
+                    Text = "≡",
+                    Location = new Point(2, 3),
+                    Size = new Size(22, 22),
+                    Cursor = Cursors.Hand,
+                    Tag = i,
+                    Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold),
+                    ForeColor = Color.FromArgb(160, 160, 160)
+                };
+                grip.MouseDown += Grip_MouseDown;
+
+                var lbl = new Label
+                {
+                    Text = enabled[i].Name + "：",
+                    Location = new Point(26, 3),
+                    Size = new Size(75, 20),
+                    TextAlign = ContentAlignment.MiddleRight
+                };
                 MiuiTheme.StyleLabel(lbl);
-                var txt = new TextBox { Location = new Point(98, y), Size = new Size(inputPanel.Width - 125, 25), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-                MiuiTheme.StyleTextBox(txt); txt.Tag = i; txt.KeyDown += Input_KeyDown;
-                inputPanel.Controls.Add(lbl); inputPanel.Controls.Add(txt);
-                _inputTextBoxes[i] = txt; y += 32;
+
+                var txt = new TextBox
+                {
+                    Location = new Point(104, 0),
+                    Size = new Size(rowPanel.Width - 110, 25),
+                    Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                    Tag = i
+                };
+                MiuiTheme.StyleTextBox(txt);
+                txt.KeyDown += Input_KeyDown;
+
+                rowPanel.Controls.Add(grip);
+                rowPanel.Controls.Add(lbl);
+                rowPanel.Controls.Add(txt);
+                inputPanel.Controls.Add(rowPanel);
+
+                _rowPanels[i] = rowPanel;
+                _inputTextBoxes[i] = txt;
+                y += 32;
             }
 
-            // Calculate required height
-            int requiredHeight = Math.Max(40, y + 8);
-
-            // Set max height for input panel (about 5 rows visible)
+            int requiredHeight = Math.Max(40, y + 4);
             int maxHeight = 180;
             inputPanel.Height = Math.Min(requiredHeight, maxHeight);
             inputPanel.AutoScroll = true;
             inputPanel.AutoScrollMinSize = new Size(0, requiredHeight);
 
-            // Reposition print button below input panel
             btnPrint.Top = inputPanel.Bottom + 8;
-
-            // Reposition bottom tabs
             tabBottom.Top = btnPrint.Bottom + 8;
             tabBottom.Height = groupBoxLog.Top - tabBottom.Top - 8;
+        }
+
+        private void Grip_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            var grip = (Label)sender;
+            var rowIdx = (int)grip.Tag;
+            grip.DoDragDrop(rowIdx, DragDropEffects.Move);
+        }
+
+        private void RowPanel_DragEnter(object sender, DragEventArgs e)
+        {
+            if (e.Data?.GetDataPresent(typeof(int)) == true)
+                e.Effect = DragDropEffects.Move;
+        }
+
+        private void RowPanel_DragOver(object sender, DragEventArgs e)
+        {
+            if (e.Data?.GetDataPresent(typeof(int)) == true)
+                e.Effect = DragDropEffects.Move;
+        }
+
+        private void RowPanel_DragDrop(object sender, DragEventArgs e)
+        {
+            if (e.Data?.GetDataPresent(typeof(int)) != true) return;
+            var fromIdx = (int)e.Data.GetData(typeof(int));
+            var toPanel = (Panel)sender;
+            var toIdx = (int)toPanel.Tag;
+
+            if (fromIdx == toIdx) return;
+
+            var enabled = _dataSources.Where(d => d.Enabled).ToList();
+            var savedValues = new Dictionary<string, string>();
+            for (int i = 0; i < enabled.Count; i++)
+                if (i < _inputTextBoxes.Length && _inputTextBoxes[i] != null)
+                    savedValues[enabled[i].Field] = _inputTextBoxes[i].Text;
+
+            var fromItem = enabled[fromIdx];
+            enabled.RemoveAt(fromIdx);
+            enabled.Insert(toIdx, fromItem);
+
+            var newDs = new List<DataSourceItem>();
+            int ei = 0;
+            foreach (var ds in _dataSources)
+            {
+                if (ds.Enabled)
+                    newDs.Add(enabled[ei++]);
+                else
+                    newDs.Add(ds);
+            }
+            _dataSources = newDs;
+
+            RebuildInputFields();
+
+            var newEnabled = _dataSources.Where(d => d.Enabled).ToList();
+            for (int i = 0; i < newEnabled.Count; i++)
+                if (i < _inputTextBoxes.Length && _inputTextBoxes[i] != null && savedValues.ContainsKey(newEnabled[i].Field))
+                    _inputTextBoxes[i].Text = savedValues[newEnabled[i].Field];
+
+            AddLog($"数据源排序已更新: {fromIdx + 1} -> {toIdx + 1}", "INFO");
         }
 
         private void Input_KeyDown(object sender, KeyEventArgs e)

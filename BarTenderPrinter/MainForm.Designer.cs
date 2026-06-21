@@ -17,7 +17,7 @@ namespace BarTenderPrinter
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.titlePanel.Height = 38;
             this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.7";
+            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.8";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
             this.titleLabel.Location = new System.Drawing.Point(10, 7);
@@ -64,14 +64,12 @@ namespace BarTenderPrinter
             this.btnBrowseDir.Click += new System.EventHandler(this.btnBrowseDir_Click);
             MiuiTheme.StyleLabel(this.lblTemplateDir); MiuiTheme.StyleTextBox(this.txtTemplateDir); MiuiTheme.StyleButton(this.btnBrowseDir);
 
-            // === Template Combo + Preview ===
+            // === Template Combo ===
             this.cmbTemplate = new System.Windows.Forms.ComboBox { Location = new System.Drawing.Point(10, 102), Size = new System.Drawing.Size(340, 25), DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList };
             this.cmbTemplate.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left;
             this.cmbTemplate.SelectedIndexChanged += new System.EventHandler(this.cmbTemplate_SelectedIndexChanged);
-            this.lblSelectedTemplate = new System.Windows.Forms.Label { Text = "未选择模板", Location = new System.Drawing.Point(10, 132), Size = new System.Drawing.Size(250, 18) };
+            this.lblSelectedTemplate = new System.Windows.Forms.Label { Text = "未选择模板", Location = new System.Drawing.Point(10, 132), Size = new System.Drawing.Size(300, 18) };
             MiuiTheme.StyleLabel(this.lblSelectedTemplate, true);
-            this.pictureBoxPreview = new System.Windows.Forms.PictureBox { Location = new System.Drawing.Point(360, 98), Size = new System.Drawing.Size(135, 55), SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom, BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle, BackColor = System.Drawing.Color.White };
-            this.pictureBoxPreview.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
 
             // === Printer + Copies Row ===
             this.lblPrinter = new System.Windows.Forms.Label { Text = "打印机：", Location = new System.Drawing.Point(10, 160), Size = new System.Drawing.Size(55, 18) };
@@ -149,7 +147,6 @@ namespace BarTenderPrinter
             this.Controls.Add(this.btnRefreshPrinter);
             this.Controls.Add(this.cmbPrinter);
             this.Controls.Add(this.lblPrinter);
-            this.Controls.Add(this.pictureBoxPreview);
             this.Controls.Add(this.lblSelectedTemplate);
             this.Controls.Add(this.cmbTemplate);
             this.Controls.Add(this.btnBrowseDir);
@@ -170,7 +167,7 @@ namespace BarTenderPrinter
             this.ClientSize = new System.Drawing.Size(560, 700);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.MinimumSize = new System.Drawing.Size(520, 650);
-            this.Text = "BarTender 标签打印工具 v5.7.7";
+            this.Text = "BarTender 标签打印工具 v5.7.8";
             this.ResumeLayout(false); this.PerformLayout();
         }
 
@@ -185,7 +182,6 @@ namespace BarTenderPrinter
         private System.Windows.Forms.Button btnBrowseDir;
         private System.Windows.Forms.ComboBox cmbTemplate;
         private System.Windows.Forms.Label lblSelectedTemplate;
-        private System.Windows.Forms.PictureBox pictureBoxPreview;
         private System.Windows.Forms.Label lblPrinter;
         private System.Windows.Forms.ComboBox cmbPrinter;
         private System.Windows.Forms.Button btnRefreshPrinter;
