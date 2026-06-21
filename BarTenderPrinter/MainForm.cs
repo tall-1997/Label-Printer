@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.11";
+        private readonly string _version = "v5.7.12";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -39,6 +39,7 @@ namespace BarTenderPrinter
             MiuiTheme.ApplyTheme(this);
             Load += MainForm_Load;
             FormClosing += (s, e) => { _btService.Dispose(); };
+            inputPanel.SizeChanged += InputPanel_SizeChanged;
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -307,8 +308,19 @@ namespace BarTenderPrinter
             inputPanel.AutoScrollMinSize = new Size(0, requiredHeight);
 
             btnPrint.Top = inputPanel.Bottom + 8;
+            btnPrint.Width = inputPanel.Width;
             tabBottom.Top = btnPrint.Bottom + 8;
             tabBottom.Height = groupBoxLog.Top - tabBottom.Top - 8;
+        }
+
+        private void InputPanel_SizeChanged(object sender, EventArgs e)
+        {
+            int w = inputPanel.ClientSize.Width;
+            for (int i = 0; i < _rowPanels.Length; i++)
+            {
+                if (_rowPanels[i] != null)
+                    _rowPanels[i].Width = w;
+            }
         }
 
         private void Grip_MouseDown(object sender, MouseEventArgs e)
@@ -397,8 +409,13 @@ namespace BarTenderPrinter
             if (e.KeyCode != Keys.Enter) return;
             e.SuppressKeyPress = true;
             int idx = (int)((TextBox)sender).Tag;
-            if (idx < _inputTextBoxes.Length - 1)
-            { _inputTextBoxes[idx + 1].Focus(); _inputTextBoxes[idx + 1].SelectAll(); }
+
+            int nextIdx = idx + 1;
+            while (nextIdx < _inputTextBoxes.Length && _inputTextBoxes[nextIdx].ReadOnly)
+                nextIdx++;
+
+            if (nextIdx < _inputTextBoxes.Length)
+            { _inputTextBoxes[nextIdx].Focus(); _inputTextBoxes[nextIdx].SelectAll(); }
             else DoPrint();
         }
 
