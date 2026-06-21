@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.9";
+        private readonly string _version = "v5.7.10";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
