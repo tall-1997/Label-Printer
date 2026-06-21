@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.14";
+        private readonly string _version = "v5.7.15";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -757,10 +757,15 @@ namespace BarTenderPrinter
                 fieldValues[enabled[i].Field] = val;
             }
 
-            // Duplicate check - only if not allowed
+            // Duplicate check - check each field individually
             if (!_allowDuplicatePrint)
             {
-                var duplicates = fieldValues.Where(kv => _history.IsPrinted(kv.Value)).Select(kv => $"{kv.Key}={kv.Value}").ToList();
+                var duplicates = new List<string>();
+                foreach (var kv in fieldValues)
+                {
+                    if (_history.IsPrinted(kv.Value))
+                        duplicates.Add($"{kv.Key}={kv.Value}");
+                }
                 if (duplicates.Count > 0)
                 {
                     if (MessageBox.Show(this, $"以下数据已打印过：\n{string.Join("\n", duplicates)}\n\n是否继续？", "数据重复",
@@ -777,7 +782,6 @@ namespace BarTenderPrinter
             }
 
             int copies = (int)numCopies.Value;
-            var historyKey = string.Join("|", fieldValues.Values);
             SetStatus("打印中..."); SetInputsReadOnly(true); btnPrint.Enabled = false;
             AddLog($"打印: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
 
@@ -790,7 +794,8 @@ namespace BarTenderPrinter
                     {
                         SetStatus("打印完成");
                         AddLog("打印完成", "SUCCESS");
-                        _history.Add(historyKey, "PASS");
+                        foreach (var kv in fieldValues)
+                            _history.Add(kv.Value, "PASS");
 
                         // Auto-increment enabled fields
                         AutoIncrementFields(enabled);
