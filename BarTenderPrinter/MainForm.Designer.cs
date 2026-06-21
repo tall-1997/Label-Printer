@@ -17,7 +17,7 @@ namespace BarTenderPrinter
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.titlePanel.Height = 38;
             this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.12";
+            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.13";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
             this.titleLabel.Location = new System.Drawing.Point(10, 7);
@@ -66,7 +66,7 @@ namespace BarTenderPrinter
 
             // === Template Combo ===
             this.cmbTemplate = new System.Windows.Forms.ComboBox { Location = new System.Drawing.Point(10, 102), Size = new System.Drawing.Size(340, 25), DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList };
-            this.cmbTemplate.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left;
+            this.cmbTemplate.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             this.cmbTemplate.SelectedIndexChanged += new System.EventHandler(this.cmbTemplate_SelectedIndexChanged);
             this.lblSelectedTemplate = new System.Windows.Forms.Label { Text = "未选择模板", Location = new System.Drawing.Point(10, 132), Size = new System.Drawing.Size(300, 18) };
             MiuiTheme.StyleLabel(this.lblSelectedTemplate, true);
@@ -164,11 +164,11 @@ namespace BarTenderPrinter
             this.Controls.Add(this.titlePanel);
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 17F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1080, 900);
+            this.ClientSize = new System.Drawing.Size(880, 800);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
-            this.MinimumSize = new System.Drawing.Size(1080, 900);
+            this.MinimumSize = new System.Drawing.Size(880, 800);
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "BarTender 标签打印工具 v5.7.12";
+            this.Text = "BarTender 标签打印工具 v5.7.13";
             this.ResumeLayout(false); this.PerformLayout();
         }
 
