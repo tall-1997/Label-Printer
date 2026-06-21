@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.10";
+        private readonly string _version = "v5.7.11";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -288,6 +288,7 @@ namespace BarTenderPrinter
                 };
                 MiuiTheme.StyleTextBox(txt);
                 txt.KeyDown += Input_KeyDown;
+                txt.GotFocus += Input_GotFocus;
 
                 rowPanel.Controls.Add(grip);
                 rowPanel.Controls.Add(lbl);
@@ -316,6 +317,27 @@ namespace BarTenderPrinter
             var grip = (Label)sender;
             var rowIdx = (int)grip.Tag;
             grip.DoDragDrop(rowIdx, DragDropEffects.Move);
+        }
+
+        private void Input_GotFocus(object sender, EventArgs e)
+        {
+            var txt = (TextBox)sender;
+            if (!txt.ReadOnly) return;
+            for (int i = 0; i < _inputTextBoxes.Length; i++)
+            {
+                if (_inputTextBoxes[i] == txt && i + 1 < _inputTextBoxes.Length)
+                {
+                    var next = _inputTextBoxes[i + 1];
+                    if (next != null && !next.ReadOnly) { next.Focus(); next.SelectAll(); }
+                    else if (next != null) Input_GotFocus(next, EventArgs.Empty);
+                    return;
+                }
+            }
+            for (int i = _inputTextBoxes.Length - 1; i >= 0; i--)
+            {
+                if (_inputTextBoxes[i] != null && !_inputTextBoxes[i].ReadOnly)
+                { _inputTextBoxes[i].Focus(); _inputTextBoxes[i].SelectAll(); return; }
+            }
         }
 
         private void RowPanel_DragEnter(object sender, DragEventArgs e)
