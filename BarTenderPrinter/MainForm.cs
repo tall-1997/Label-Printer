@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.8";
+        private readonly string _version = "v5.7.9";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -922,79 +922,176 @@ namespace BarTenderPrinter
     public class DataSourceSelectDialog : Form
     {
         public List<DataSourceItem> SelectedSources { get; private set; }
-        private CheckBox[] _cbs; private TextBox[] _names;
-        private CheckBox[] _autoInc; private NumericUpDown[] _autoStep;
-        private readonly List<string> _fields;
+        private readonly List<DataSourceRow> _rows = new List<DataSourceRow>();
+        private Panel _scrollPanel;
         private CheckBox chkSelectAll;
+
+        private class DataSourceRow
+        {
+            public string Field;
+            public Panel RowPanel;
+            public CheckBox CbEnabled;
+            public TextBox TxtName;
+            public CheckBox CbAutoInc;
+            public NumericUpDown NumStep;
+            public Label Grip;
+        }
 
         public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current)
         {
-            _fields = fields;
-            Text = "选择数据源"; Size = new Size(550, 420);
+            Text = "选择数据源 - 拖拽排序"; Size = new Size(570, 460);
             FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false;
 
-            var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，勾选需要使用的：", Location = new Point(10, 10), Size = new Size(520, 20) };
+            var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，拖拽 ≡ 排序，勾选使用：", Location = new Point(10, 10), Size = new Size(540, 20) };
 
-            // Select all checkbox
             chkSelectAll = new CheckBox { Text = "全选/全不选", Location = new Point(10, 32), Size = new Size(100, 20), Checked = true };
-            chkSelectAll.CheckedChanged += (s, e) =>
+            chkSelectAll.CheckedChanged += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = chkSelectAll.Checked; };
+
+            var hdrGrip = new Label { Text = "排序", Location = new Point(15, 55), Size = new Size(22, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrName = new Label { Text = "字段名", Location = new Point(40, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrDisplay = new Label { Text = "显示名称", Location = new Point(155, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrAuto = new Label { Text = "增序", Location = new Point(340, 55), Size = new Size(30, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrStep = new Label { Text = "步长", Location = new Point(380, 55), Size = new Size(60, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+
+            _scrollPanel = new Panel { Location = new Point(10, 75), Size = new Size(540, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
+
+            var orderedFields = new List<string>();
+            foreach (var c in current)
+                if (fields.Contains(c.Field))
+                    orderedFields.Add(c.Field);
+            foreach (var f in fields)
+                if (!orderedFields.Contains(f))
+                    orderedFields.Add(f);
+
+            for (int i = 0; i < orderedFields.Count; i++)
             {
-                foreach (var cb in _cbs) cb.Checked = chkSelectAll.Checked;
-            };
-
-            // Column headers
-            var hdrName = new Label { Text = "字段名", Location = new Point(15, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrDisplay = new Label { Text = "显示名称", Location = new Point(130, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrAuto = new Label { Text = "增序", Location = new Point(320, 55), Size = new Size(30, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrStep = new Label { Text = "步长", Location = new Point(360, 55), Size = new Size(60, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-
-            var panel = new Panel { Location = new Point(10, 75), Size = new Size(520, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
-            _cbs = new CheckBox[fields.Count]; _names = new TextBox[fields.Count];
-            _autoInc = new CheckBox[fields.Count]; _autoStep = new NumericUpDown[fields.Count];
-
-            for (int i = 0; i < fields.Count; i++)
-            {
-                int y = i * 28 + 5;
-                var existing = current.FirstOrDefault(d => d.Field == fields[i]);
+                var field = orderedFields[i];
+                var existing = current.FirstOrDefault(d => d.Field == field);
                 bool isChecked = existing != null ? existing.Enabled : (current.Count == 0 ? true : false);
-
-                _cbs[i] = new CheckBox { Text = fields[i], Location = new Point(5, y + 2), Size = new Size(115, 20), Checked = isChecked };
-                _names[i] = new TextBox { Location = new Point(125, y), Size = new Size(185, 25), Text = existing?.Name ?? fields[i] };
-                _autoInc[i] = new CheckBox { Location = new Point(325, y + 2), Size = new Size(20, 20), Checked = existing?.AutoIncrement ?? false };
-                _autoStep[i] = new NumericUpDown { Location = new Point(355, y), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = existing?.AutoStep ?? 1 };
-
-                panel.Controls.Add(_cbs[i]); panel.Controls.Add(_names[i]);
-                panel.Controls.Add(_autoInc[i]); panel.Controls.Add(_autoStep[i]);
+                CreateRow(field, isChecked, existing?.Name ?? field, existing?.AutoIncrement ?? false, existing?.AutoStep ?? 1);
             }
 
-            // Info label
-            var infoLbl = new Label { Text = "增序示例：AC20260616 → AC20260617（自动识别数字部分）", Location = new Point(10, 335), Size = new Size(400, 16), ForeColor = Color.Gray };
+            RelayoutRows();
 
-            var btnSelectAll = new Button { Text = "全选", Location = new Point(10, 360), Size = new Size(50, 25) };
-            btnSelectAll.Click += (s, e) => { foreach (var cb in _cbs) cb.Checked = true; };
-            var btnSelectNone = new Button { Text = "全不选", Location = new Point(65, 360), Size = new Size(55, 25) };
-            btnSelectNone.Click += (s, e) => { foreach (var cb in _cbs) cb.Checked = false; };
+            var infoLbl = new Label { Text = "拖拽 ≡ 图标可调整排序，增序示例：AC20260616 → AC20260617", Location = new Point(10, 340), Size = new Size(400, 16), ForeColor = Color.Gray };
 
-            var ok = new Button { Text = "确定", Location = new Point(360, 360), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+            var btnSelectAll = new Button { Text = "全选", Location = new Point(10, 365), Size = new Size(50, 25) };
+            btnSelectAll.Click += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = true; };
+            var btnSelectNone = new Button { Text = "全不选", Location = new Point(65, 365), Size = new Size(55, 25) };
+            btnSelectNone.Click += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = false; };
+
+            var ok = new Button { Text = "确定", Location = new Point(380, 365), Size = new Size(75, 28), DialogResult = DialogResult.OK };
             ok.Click += (s, e) =>
             {
                 SelectedSources = new List<DataSourceItem>();
-                for (int i = 0; i < _fields.Count; i++)
-                    if (_cbs[i].Checked)
+                foreach (var r in _rows)
+                    if (r.CbEnabled.Checked)
                         SelectedSources.Add(new DataSourceItem
                         {
-                            Name = _names[i].Text?.Trim() ?? _fields[i],
-                            Field = _fields[i],
+                            Name = r.TxtName.Text?.Trim() ?? r.Field,
+                            Field = r.Field,
                             Enabled = true,
-                            AutoIncrement = _autoInc[i].Checked,
-                            AutoStep = (int)_autoStep[i].Value
+                            AutoIncrement = r.CbAutoInc.Checked,
+                            AutoStep = (int)r.NumStep.Value
                         });
             };
-            var cancel = new Button { Text = "取消", Location = new Point(445, 360), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+            var cancel = new Button { Text = "取消", Location = new Point(465, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
 
-            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrName, hdrDisplay, hdrAuto, hdrStep, panel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
+            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrDisplay, hdrAuto, hdrStep, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
             AcceptButton = ok; CancelButton = cancel;
+        }
+
+        private void CreateRow(string field, bool checkedVal, string displayName, bool autoInc, int autoStep)
+        {
+            var row = new DataSourceRow { Field = field };
+
+            row.RowPanel = new Panel
+            {
+                Size = new Size(530, 28),
+                AllowDrop = true,
+                Tag = _rows.Count,
+                BackColor = Color.Transparent
+            };
+            row.RowPanel.DragEnter += Row_DragEnter;
+            row.RowPanel.DragOver += Row_DragOver;
+            row.RowPanel.DragDrop += Row_DragDrop;
+
+            row.Grip = new Label
+            {
+                Text = "≡",
+                Location = new Point(0, 3),
+                Size = new Size(22, 22),
+                Cursor = Cursors.Hand,
+                Tag = _rows.Count,
+                Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(160, 160, 160)
+            };
+            row.Grip.MouseDown += Grip_MouseDown;
+
+            row.CbEnabled = new CheckBox { Text = field, Location = new Point(25, 2), Size = new Size(115, 20), Checked = checkedVal };
+
+            row.TxtName = new TextBox { Location = new Point(145, 0), Size = new Size(185, 25), Text = displayName };
+
+            row.CbAutoInc = new CheckBox { Location = new Point(340, 2), Size = new Size(20, 20), Checked = autoInc };
+
+            row.NumStep = new NumericUpDown { Location = new Point(370, 0), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = autoStep };
+
+            row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.TxtName, row.CbAutoInc, row.NumStep });
+            _scrollPanel.Controls.Add(row.RowPanel);
+
+            _rows.Add(row);
+        }
+
+        private void RelayoutRows()
+        {
+            for (int i = 0; i < _rows.Count; i++)
+            {
+                _rows[i].RowPanel.Location = new Point(0, i * 30 + 2);
+                _rows[i].RowPanel.Tag = i;
+                _rows[i].Grip.Tag = i;
+            }
+            _scrollPanel.AutoScrollMinSize = new Size(0, _rows.Count * 30 + 4);
+        }
+
+        private void Grip_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            var grip = (Label)sender;
+            var rowIdx = (int)grip.Tag;
+            grip.DoDragDrop(rowIdx, DragDropEffects.Move);
+        }
+
+        private void Row_DragEnter(object sender, DragEventArgs e)
+        {
+            if (e.Data?.GetDataPresent(typeof(int)) == true)
+                e.Effect = DragDropEffects.Move;
+        }
+
+        private void Row_DragOver(object sender, DragEventArgs e)
+        {
+            if (e.Data?.GetDataPresent(typeof(int)) == true)
+                e.Effect = DragDropEffects.Move;
+        }
+
+        private void Row_DragDrop(object sender, DragEventArgs e)
+        {
+            if (e.Data?.GetDataPresent(typeof(int)) != true) return;
+            var fromIdx = (int)e.Data.GetData(typeof(int));
+            var toPanel = (Panel)sender;
+            var toIdx = (int)toPanel.Tag;
+
+            if (fromIdx == toIdx) return;
+
+            var fromRow = _rows[fromIdx];
+            _rows.RemoveAt(fromIdx);
+            _rows.Insert(toIdx, fromRow);
+
+            _scrollPanel.Controls.Clear();
+            foreach (var r in _rows)
+                _scrollPanel.Controls.Add(r.RowPanel);
+
+            RelayoutRows();
         }
     }
 
