@@ -378,34 +378,92 @@ namespace BarTenderPrinter
                 }
                 catch (Exception ex) { LoggerService.Debug($"ExportImageToClipboard 异常: {ex.Message}"); }
 
-                // 方式3: 尝试 PrintToFile（某些 BarTender 版本支持）
+                // 方式3: 尝试使用 Format 的 PrintOut 方法打印到 PDF
                 try
                 {
-                    LoggerService.Debug("尝试 PrintToFile");
+                    LoggerService.Debug("尝试 PrintOut 到 PDF");
                     var pdfPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.pdf");
-                    btFormat.PrintToFile(pdfPath, false);
-                    if (File.Exists(pdfPath) && new FileInfo(pdfPath).Length > 0)
+                    
+                    // 保存当前打印机设置
+                    string currentPrinter = null;
+                    try { currentPrinter = (string)btFormat.Printer; } catch { }
+                    
+                    // 设置打印机为 Microsoft Print to PDF
+                    try
                     {
-                        LoggerService.Info($"预览成功 (PrintToFile)，PDF 文件已生成");
-                        CloseFormat(btFormat);
-                        return pdfPath;
+                        btFormat.Printer = "Microsoft Print to PDF";
+                        LoggerService.Debug("已设置打印机为 Microsoft Print to PDF");
                     }
+                    catch (Exception ex)
+                    {
+                        LoggerService.Debug($"设置打印机失败: {ex.Message}");
+                    }
+                    
+                    // 尝试打印
+                    btFormat.PrintOut(false, false);
+                    
+                    // 恢复原来的打印机设置
+                    if (!string.IsNullOrEmpty(currentPrinter))
+                    {
+                        try { btFormat.Printer = currentPrinter; } catch { }
+                    }
+                    
+                    LoggerService.Info("PrintOut 执行完成");
                 }
-                catch (Exception ex) { LoggerService.Debug($"PrintToFile 异常: {ex.Message}"); }
+                catch (Exception ex) { LoggerService.Debug($"PrintOut 异常: {ex.Message}"); }
 
-                // 方式4: 尝试使用 Application 的 ExportImageToFile
+                // 方式4: 尝试使用 Application 的 Visible 属性显示预览窗口，然后截取屏幕
                 try
                 {
-                    LoggerService.Debug("尝试 Application.ExportImageToFile");
-                    _btApp.ExportImageToFile(tempPath, 3, 0, 300, 300);
+                    LoggerService.Debug("尝试显示 BarTender 窗口并截取屏幕");
+                    
+                    // 显示 BarTender 窗口
+                    _btApp.Visible = true;
+                    System.Threading.Thread.Sleep(1000); // 等待窗口显示
+                    
+                    // 截取屏幕
+                    var screenBitmap = new System.Drawing.Bitmap(
+                        System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width,
+                        System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height);
+                    using (var g = System.Drawing.Graphics.FromImage(screenBitmap))
+                    {
+                        g.CopyFromScreen(0, 0, 0, 0, screenBitmap.Size);
+                    }
+                    
+                    // 保存为文件
+                    screenBitmap.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
+                    screenBitmap.Dispose();
+                    
+                    // 隐藏 BarTender 窗口
+                    _btApp.Visible = false;
+                    
                     if (File.Exists(tempPath) && new FileInfo(tempPath).Length > 0)
                     {
-                        LoggerService.Info("预览成功 (Application.ExportImageToFile)");
+                        LoggerService.Info("预览成功 (屏幕截取方式)");
                         CloseFormat(btFormat);
                         return tempPath;
                     }
                 }
-                catch (Exception ex) { LoggerService.Debug($"Application.ExportImageToFile 异常: {ex.Message}"); }
+                catch (Exception ex) 
+                { 
+                    LoggerService.Debug($"屏幕截取方式异常: {ex.Message}");
+                    // 确保隐藏 BarTender 窗口
+                    try { _btApp.Visible = false; } catch { }
+                }
+
+                // 方式5: 尝试使用 Format 的 ExportImageToFile 方法（使用不同的参数）
+                try
+                {
+                    LoggerService.Debug("尝试 ExportImageToFile 使用不同的参数");
+                    btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300, 1);
+                    if (File.Exists(tempPath) && new FileInfo(tempPath).Length > 0)
+                    {
+                        LoggerService.Info("预览成功 (ExportImageToFile with different params)");
+                        CloseFormat(btFormat);
+                        return tempPath;
+                    }
+                }
+                catch (Exception ex) { LoggerService.Debug($"ExportImageToFile with different params 异常: {ex.Message}"); }
 
                 CloseFormat(btFormat);
                 LoggerService.Warn("预览导出失败：所有方式都失败");
