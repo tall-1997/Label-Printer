@@ -39,15 +39,19 @@ jobs:
 
             ### 更新内容
 
-            #### 修复
-            - 修复 BarTender 并发打印冲突：添加互斥锁机制，防止多个打印任务同时执行
-            - 修复 COM 服务器错误 (RPC_E_SERVERFAULT)：识别 COM 忙碌状态并自动重试
-            - 修复预览生成失败：优化预览导出方式，优先使用 ExportImageToFile 直接导出
+            #### 新增
+            - Enter键跳过增序锁定字段 (ReadOnly) 自动触发打印
+            - 数据源选择对话框拖拽排序，排序顺序保存到配置
+            - 主界面数据源输入框支持拖拽排序 (≡ 手柄)
+            - 增序锁定字段获得焦点时自动跳到下一个可输入字段
+            - BarTender 诊断功能：检查连接/模板/数据源/打印机/导出方法/版本/许可
+            - 本地数据校验：支持 CSV/Excel/文本 加载校验数据
 
-            #### 改进
-            - 添加操作间隔控制：确保 BarTender 操作之间至少间隔 2 秒
-            - 添加自动重试机制：打印和预览操作最多重试 3 次，每次间隔 3 秒
-            - 优化错误处理：区分可重试错误和致命错误，提高稳定性
+            #### 修复
+            - 修复并发打印冲突：SemaphoreSlim 互斥锁、操作间隔 2s、重试机制
+            - 识别 COM 忙碌错误 (RPC_E_SERVERFAULT) 并自动重试
+            - 修复界面布局未随窗口大小自适应的问题
+            - 修复版本号不一致 (Designer.cs 硬编码问题)
 
             ### 系统要求
             - Windows 10/11 x64
@@ -62,7 +66,7 @@ jobs:
             ### 文件信息
             - 文件名: BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe
             - 架构: win-x64
-            - 类型: 自包含单文件（无需 .NET 运行时）
+            - 类型: 自包含单文件
           generate_release_notes: false
           draft: false
           prerelease: false
