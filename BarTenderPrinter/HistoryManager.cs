@@ -87,6 +87,15 @@ namespace BarTenderPrinter
             return Records.Any(r => r.Imei == imei);
         }
 
+        public bool ContainsAnyValue(string value)
+        {
+            return Records.Any(r =>
+            {
+                var parts = r.Imei.Split('|');
+                return parts.Contains(value);
+            });
+        }
+
         public void Clear()
         {
             Records.Clear();

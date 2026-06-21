@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.15";
+        private readonly string _version = "v5.7.16";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -40,6 +40,7 @@ namespace BarTenderPrinter
             Load += MainForm_Load;
             FormClosing += (s, e) => { _btService.Dispose(); };
             inputPanel.SizeChanged += InputPanel_SizeChanged;
+            dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -757,13 +758,13 @@ namespace BarTenderPrinter
                 fieldValues[enabled[i].Field] = val;
             }
 
-            // Duplicate check - check each field individually
+            // Duplicate check - check each field against all records
             if (!_allowDuplicatePrint)
             {
                 var duplicates = new List<string>();
                 foreach (var kv in fieldValues)
                 {
-                    if (_history.IsPrinted(kv.Value))
+                    if (_history.ContainsAnyValue(kv.Value))
                         duplicates.Add($"{kv.Key}={kv.Value}");
                 }
                 if (duplicates.Count > 0)
@@ -782,6 +783,7 @@ namespace BarTenderPrinter
             }
 
             int copies = (int)numCopies.Value;
+            var historyKey = string.Join("|", fieldValues.Values);
             SetStatus("打印中..."); SetInputsReadOnly(true); btnPrint.Enabled = false;
             AddLog($"打印: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
 
@@ -794,8 +796,7 @@ namespace BarTenderPrinter
                     {
                         SetStatus("打印完成");
                         AddLog("打印完成", "SUCCESS");
-                        foreach (var kv in fieldValues)
-                            _history.Add(kv.Value, "PASS");
+                        _history.Add(historyKey, "PASS");
 
                         // Auto-increment enabled fields
                         AutoIncrementFields(enabled);
@@ -807,8 +808,7 @@ namespace BarTenderPrinter
                     {
                         SetStatus("打印失败");
                         AddLog($"失败: {result.ErrorMessage}", "ERROR");
-                        foreach (var kv in fieldValues)
-                            _history.Add(kv.Value, "FAIL");
+                        _history.Add(historyKey, "FAIL");
                         SetInputsReadOnly(false);
                     }
                     btnPrint.Enabled = true;
@@ -871,6 +871,26 @@ namespace BarTenderPrinter
             lblTodayCount.Text = _history.TodayCount().ToString();
             lblTotalCount.Text = _history.TotalCount().ToString();
             SetStatus($"就绪 | 今日: {_history.TodayCount()} | 总计: {_history.TotalCount()}");
+        }
+
+        private void DgvHistory_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0) return;
+            var row = dgvHistory.Rows[e.RowIndex];
+            var imei = row.Cells["IMEI"].Value?.ToString() ?? "";
+            var time = row.Cells["打印时间"].Value?.ToString() ?? "";
+            var status = row.Cells["状态"].Value?.ToString() ?? "";
+
+            var parts = imei.Split('|');
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"打印时间: {time}");
+            sb.AppendLine($"状态: {status}");
+            sb.AppendLine();
+            sb.AppendLine("数据详情:");
+            for (int i = 0; i < parts.Length; i++)
+                sb.AppendLine($"  {i + 1}. {parts[i]}");
+
+            MessageBox.Show(this, sb.ToString(), "打印详情", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         #endregion
