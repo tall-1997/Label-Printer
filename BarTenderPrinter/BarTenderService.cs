@@ -326,18 +326,17 @@ namespace BarTenderPrinter
                 LoggerService.Info("模板打开成功");
                 var tempPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.png");
 
-                // 优先使用 ExportImageToFile 直接导出（避免剪贴板问题）
-                var methods = new (string name, Action tryFunc)[]
+                // 方式1: 尝试 ExportImageToFile（标准方式）
+                var exportMethods = new (string name, Action tryFunc)[]
                 {
                     ("ExportImageToFile(path, 3, 0, 300, 300)", () => btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300)),
                     ("ExportImageToFile(path, 3, 0, 300)", () => btFormat.ExportImageToFile(tempPath, 3, 0, 300)),
                     ("ExportImageToFile(path, 3, 0)", () => btFormat.ExportImageToFile(tempPath, 3, 0)),
                     ("ExportImageToFile(path, 3)", () => btFormat.ExportImageToFile(tempPath, 3)),
                     ("ExportImageToFile(path)", () => btFormat.ExportImageToFile(tempPath)),
-                    ("ExportImageToFile(path, 3, 0, 300, 300, 1)", () => btFormat.ExportImageToFile(tempPath, 3, 0, 300, 300, 1)),
                 };
 
-                foreach (var (name, tryFunc) in methods)
+                foreach (var (name, tryFunc) in exportMethods)
                 {
                     try
                     {
@@ -350,23 +349,18 @@ namespace BarTenderPrinter
                             CloseFormat(btFormat);
                             return tempPath;
                         }
-                        else
-                        {
-                            LoggerService.Debug($"{name} 失败: 文件{(File.Exists(tempPath) ? "大小为0" : "不存在")}");
-                        }
                     }
-                    catch (Exception ex) 
-                    { 
+                    catch (Exception ex)
+                    {
                         LoggerService.Debug($"{name} 异常: {ex.Message}");
-                        // 清理可能创建的空文件
                         try { if (File.Exists(tempPath) && new FileInfo(tempPath).Length == 0) File.Delete(tempPath); } catch { }
                     }
                 }
 
-                // 剪贴板方式作为后备
+                // 方式2: 尝试 ExportImageToClipboard
                 try
                 {
-                    LoggerService.Debug("尝试剪贴板方式");
+                    LoggerService.Debug("尝试 ExportImageToClipboard");
                     btFormat.ExportImageToClipboard(300, 300);
                     var img = System.Windows.Forms.Clipboard.GetImage();
                     if (img != null)
@@ -376,17 +370,42 @@ namespace BarTenderPrinter
                         var fileInfo = new FileInfo(tempPath);
                         if (File.Exists(tempPath) && fileInfo.Length > 0)
                         {
-                            LoggerService.Info($"预览成功 (剪贴板方式)，文件大小: {fileInfo.Length} bytes");
+                            LoggerService.Info($"预览成功 (ExportImageToClipboard)，文件大小: {fileInfo.Length} bytes");
                             CloseFormat(btFormat);
                             return tempPath;
                         }
                     }
-                    else
+                }
+                catch (Exception ex) { LoggerService.Debug($"ExportImageToClipboard 异常: {ex.Message}"); }
+
+                // 方式3: 尝试 PrintToFile（某些 BarTender 版本支持）
+                try
+                {
+                    LoggerService.Debug("尝试 PrintToFile");
+                    var pdfPath = Path.Combine(Path.GetTempPath(), $"bt_preview_{Guid.NewGuid():N}.pdf");
+                    btFormat.PrintToFile(pdfPath, false);
+                    if (File.Exists(pdfPath) && new FileInfo(pdfPath).Length > 0)
                     {
-                        LoggerService.Debug("剪贴板方式失败: 无法获取图像");
+                        LoggerService.Info($"预览成功 (PrintToFile)，PDF 文件已生成");
+                        CloseFormat(btFormat);
+                        return pdfPath;
                     }
                 }
-                catch (Exception ex) { LoggerService.Debug($"剪贴板方式异常: {ex.Message}"); }
+                catch (Exception ex) { LoggerService.Debug($"PrintToFile 异常: {ex.Message}"); }
+
+                // 方式4: 尝试使用 Application 的 ExportImageToFile
+                try
+                {
+                    LoggerService.Debug("尝试 Application.ExportImageToFile");
+                    _btApp.ExportImageToFile(tempPath, 3, 0, 300, 300);
+                    if (File.Exists(tempPath) && new FileInfo(tempPath).Length > 0)
+                    {
+                        LoggerService.Info("预览成功 (Application.ExportImageToFile)");
+                        CloseFormat(btFormat);
+                        return tempPath;
+                    }
+                }
+                catch (Exception ex) { LoggerService.Debug($"Application.ExportImageToFile 异常: {ex.Message}"); }
 
                 CloseFormat(btFormat);
                 LoggerService.Warn("预览导出失败：所有方式都失败");
