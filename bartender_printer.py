@@ -1,0 +1,970 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+BarTender 标签打印工具 v2.2.7
+集成 BarTender 2022 R2 Enterprise，IMEI 标签打印
+"""
+
+import os
+import sys
+import csv
+import json
+import subprocess
+import tempfile
+import logging
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from datetime import datetime
+import threading
+
+try:
+    import win32com.client
+    import win32com.client.dynamic
+    import pythoncom
+    HAS_WIN32COM = True
+    # 清理可能损坏的 gen_py 缓存（EnsureDispatch 可能生成不兼容的缓存）
+    try:
+        import shutil
+        _gen_py = os.path.join(os.path.dirname(win32com.__file__), 'gen_py')
+        if os.path.exists(_gen_py):
+            shutil.rmtree(_gen_py, ignore_errors=True)
+    except Exception:
+        pass
+except ImportError:
+    HAS_WIN32COM = False
+
+try:
+    import openpyxl
+    HAS_OPENPYXL = True
+except ImportError:
+    HAS_OPENPYXL = False
+
+
+class PrintRecord:
+    def __init__(self, imei, print_time, status="PASS"):
+        self.imei = str(imei) if imei else ""
+        self.print_time = str(print_time) if print_time else ""
+        self.status = str(status) if status else "PASS"
+
+
+class BarTenderPrintApp:
+    VERSION = "v2.6.5"
+
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title(f"BarTender 标签打印工具 {self.VERSION}")
+        self.root.geometry("950x750")
+        self.root.minsize(850, 700)
+
+        # 配置路径
+        self.app_dir = os.path.join(os.path.expanduser("~"), ".bartender-printer")
+        os.makedirs(self.app_dir, exist_ok=True)
+
+        # 日志文件
+        self.log_file = os.path.join(self.app_dir, "bartender-printer.log")
+        logging.basicConfig(
+            filename=self.log_file,
+            level=logging.DEBUG,
+            format='%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            encoding='utf-8',
+        )
+        self._log(f"=== BarTender 标签打印工具 {self.VERSION} 启动 ===")
+        self.config_file = os.path.join(self.app_dir, "bt_config.json")
+        self.records_file = os.path.join(self.app_dir, "print_records.csv")
+
+        # BarTender
+        self.bt_app = None
+        self.bt_format = None
+
+        # 数据
+        self.print_records = []
+        self.excel_data = []
+
+        # 配置
+        self._config = {
+            'template_path': '',
+            'datasource': 'IMEI1',
+            'excel_path': '',
+            'excel_column': 'IMEI1',
+            'printer': '',
+            'copies': 1,
+            'verify_excel': True,
+        }
+
+        # 加载
+        self._load_config()
+        self._load_records()
+
+        # UI变量（在tk.Tk()之后创建）
+        self.template_path_var = tk.StringVar(value=self._config['template_path'])
+        self.datasource_var = tk.StringVar(value=self._config['datasource'])
+        self.excel_path_var = tk.StringVar(value=self._config['excel_path'])
+        self.excel_column_var = tk.StringVar(value=self._config['excel_column'])
+        self.printer_var = tk.StringVar(value=self._config['printer'])
+        self.copies_var = tk.IntVar(value=int(self._config.get('copies', 1) or 1))
+        self.verify_excel_var = tk.BooleanVar(value=self._config['verify_excel'])
+        self.history_search_var = tk.StringVar(value="")
+
+        # 创建UI
+        self._create_ui()
+        self.refresh_history()
+        self.refresh_stats()
+
+        # 加载Excel数据
+        if self._config['excel_path'] and os.path.exists(self._config['excel_path']):
+            self.root.after(100, self._load_excel_data)
+
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+    def _load_config(self):
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    self._config.update(json.load(f))
+        except Exception:
+            pass
+
+    def _save_config(self):
+        try:
+            try:
+                copies = max(1, int(self.copies_var.get() or 1))
+            except Exception:
+                copies = 1
+            self._config.update({
+                'template_path': self.template_path_var.get(),
+                'datasource': self.datasource_var.get(),
+                'excel_path': self.excel_path_var.get(),
+                'excel_column': self.excel_column_var.get(),
+                'printer': self.printer_var.get(),
+                'copies': copies,
+                'verify_excel': self.verify_excel_var.get(),
+            })
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self._config, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _load_records(self):
+        try:
+            if os.path.exists(self.records_file):
+                with open(self.records_file, 'r', encoding='utf-8-sig') as f:
+                    reader = csv.reader(f)
+                    next(reader, None)
+                    for row in reader:
+                        if len(row) >= 3:
+                            self.print_records.append(PrintRecord(row[0], row[1], row[2]))
+        except Exception:
+            pass
+
+    def _save_records(self):
+        try:
+            with open(self.records_file, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                writer.writerow(['imei', 'print_time', 'status'])
+                for r in self.print_records:
+                    writer.writerow([r.imei, r.print_time, r.status])
+        except Exception:
+            pass
+
+    def _create_ui(self):
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 标题
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(title_frame, text="BarTender 标签打印工具", font=("微软雅黑", 16, "bold")).pack(side=tk.LEFT)
+        ttk.Button(title_frame, text="导出日志", command=self._export_log).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(title_frame, text="设置", command=self._open_settings).pack(side=tk.RIGHT)
+
+        # 选项卡
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
+        self._create_print_tab()
+        self._create_history_tab()
+        self._create_stats_tab()
+
+        # 状态栏
+        self.status_var = tk.StringVar(value="就绪")
+        ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN).pack(fill=tk.X, pady=(10, 0))
+
+        # 初始化BarTender
+        self._init_bartender()
+
+    def _create_print_tab(self):
+        tab = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(tab, text="打印")
+
+        # 模板
+        tf = ttk.LabelFrame(tab, text="BarTender 模板", padding="10")
+        tf.pack(fill=tk.X, pady=(0, 10))
+        ff = ttk.Frame(tf)
+        ff.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(ff, text="模板文件：", width=12).pack(side=tk.LEFT)
+        ttk.Entry(ff, textvariable=self.template_path_var, state="readonly").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(ff, text="浏览", command=self._browse_template).pack(side=tk.RIGHT)
+        df = ttk.Frame(tf)
+        df.pack(fill=tk.X)
+        ttk.Label(df, text="数据源名称：", width=12).pack(side=tk.LEFT)
+        ttk.Entry(df, textvariable=self.datasource_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Excel
+        ef = ttk.LabelFrame(tab, text="IMEI 数据源（Excel）", padding="10")
+        ef.pack(fill=tk.X, pady=(0, 10))
+        ef1 = ttk.Frame(ef)
+        ef1.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(ef1, text="Excel 文件：", width=12).pack(side=tk.LEFT)
+        ttk.Entry(ef1, textvariable=self.excel_path_var, state="readonly").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(ef1, text="选择文件", command=self._browse_excel).pack(side=tk.RIGHT)
+        ef2 = ttk.Frame(ef)
+        ef2.pack(fill=tk.X)
+        ttk.Label(ef2, text="IMEI 列名：", width=12).pack(side=tk.LEFT)
+        ttk.Entry(ef2, textvariable=self.excel_column_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        ttk.Label(ef2, text="已加载：").pack(side=tk.LEFT)
+        self.excel_count_var = tk.StringVar(value="0 条")
+        ttk.Label(ef2, textvariable=self.excel_count_var).pack(side=tk.LEFT)
+
+        # 打印机
+        pf = ttk.LabelFrame(tab, text="打印机", padding="10")
+        pf.pack(fill=tk.X, pady=(0, 10))
+        pf2 = ttk.Frame(pf)
+        pf2.pack(fill=tk.X)
+        ttk.Label(pf2, text="选择打印机：", width=12).pack(side=tk.LEFT)
+        self.printer_combo = ttk.Combobox(pf2, textvariable=self.printer_var, state="readonly")
+        self.printer_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(pf2, text="刷新", command=self._refresh_printers).pack(side=tk.RIGHT)
+
+        # 选项
+        of = ttk.Frame(tab)
+        of.pack(fill=tk.X, pady=(0, 10))
+        ttk.Checkbutton(of, text="打印前校验 Excel 数据", variable=self.verify_excel_var).pack(side=tk.LEFT)
+        ttk.Label(of, text="打印份数：").pack(side=tk.LEFT, padx=(20, 5))
+        ttk.Spinbox(of, from_=1, to=99, textvariable=self.copies_var, width=6).pack(side=tk.LEFT)
+
+        # 按钮
+        bf = ttk.Frame(tab)
+        bf.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(bf, text="输入 IMEI 并打印", command=self._show_imei_dialog).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(bf, text="批量导入 IMEI", command=self._import_imei_file).pack(side=tk.LEFT)
+
+        # 状态
+        sf = ttk.LabelFrame(tab, text="打印状态", padding="10")
+        sf.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        self.print_status = tk.Text(sf, state=tk.DISABLED, wrap=tk.WORD)
+        sb = ttk.Scrollbar(sf, orient=tk.VERTICAL, command=self.print_status.yview)
+        self.print_status.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.print_status.pack(fill=tk.BOTH, expand=True)
+
+    def _create_history_tab(self):
+        tab = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(tab, text="历史记录")
+
+        sf = ttk.Frame(tab)
+        sf.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(sf, text="搜索：").pack(side=tk.LEFT)
+        search_entry = ttk.Entry(sf, textvariable=self.history_search_var)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+        search_entry.bind('<KeyRelease>', lambda event: self.refresh_history())
+        ttk.Button(sf, text="清空搜索", command=self._clear_history_search).pack(side=tk.LEFT)
+
+        hf = ttk.LabelFrame(tab, text="打印记录", padding="10")
+        hf.pack(fill=tk.BOTH, expand=True)
+        self.history_tree = ttk.Treeview(hf, columns=("imei", "time", "status"), show="headings")
+        self.history_tree.heading("imei", text="IMEI")
+        self.history_tree.heading("time", text="打印时间")
+        self.history_tree.heading("status", text="状态")
+        self.history_tree.pack(fill=tk.BOTH, expand=True)
+
+        bf = ttk.Frame(tab)
+        bf.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(bf, text="清空记录", command=self._clear_records).pack(side=tk.LEFT)
+        ttk.Button(bf, text="导出记录", command=self._export_records).pack(side=tk.LEFT, padx=(10, 0))
+
+    def _create_stats_tab(self):
+        tab = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(tab, text="统计")
+
+        sf = ttk.Frame(tab)
+        sf.pack(fill=tk.X, pady=(0, 20))
+
+        c1 = ttk.LabelFrame(sf, text="今日打印", padding="15")
+        c1.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        self.today_count_var = tk.StringVar(value="0")
+        ttk.Label(c1, textvariable=self.today_count_var, font=("微软雅黑", 24, "bold")).pack()
+        ttk.Label(c1, text="个 IMEI").pack()
+
+        c2 = ttk.LabelFrame(sf, text="总打印", padding="15")
+        c2.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.total_count_var = tk.StringVar(value="0")
+        ttk.Label(c2, textvariable=self.total_count_var, font=("微软雅黑", 24, "bold")).pack()
+        ttk.Label(c2, text="个 IMEI").pack()
+
+    def _init_bartender(self):
+        if not HAS_WIN32COM:
+            self.status_var.set("警告：未安装 pywin32，BarTender 功能不可用")
+            return
+        try:
+            pythoncom.CoInitialize()
+            print("[DEBUG] 正在创建 BarTender.Application...")
+            self.bt_app = win32com.client.dynamic.Dispatch("BarTender.Application")
+            print(f"[DEBUG] BarTender 对象: {self.bt_app}")
+            self.bt_app.Visible = False
+            print("[DEBUG] Visible 设置完成")
+            self.status_var.set("BarTender 已连接")
+            self._refresh_printers()
+        except Exception as e:
+            print(f"[DEBUG] BarTender 初始化失败: {e}")
+            self.status_var.set(f"BarTender 连接失败: {e}")
+
+    def _refresh_printers(self):
+        printers = []
+        try:
+            if sys.platform == 'win32':
+                import win32print
+                printers = [p[2] for p in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)]
+        except Exception:
+            pass
+        self.printer_combo['values'] = printers
+        if printers:
+            self.printer_combo.current(0)
+
+    def _browse_template(self):
+        path = filedialog.askopenfilename(title="选择 BarTender 模板", filetypes=[("BarTender 文件", "*.btw"), ("所有文件", "*.*")])
+        if path:
+            self.template_path_var.set(path)
+            self._save_config()
+
+    def _browse_excel(self):
+        path = filedialog.askopenfilename(title="选择 Excel 文件", filetypes=[("Excel 文件", "*.xlsx *.xls"), ("CSV 文件", "*.csv")])
+        if path:
+            self.excel_path_var.set(path)
+            self._save_config()
+            self._load_excel_data()
+
+    def _load_excel_data(self):
+        path = self.excel_path_var.get()
+        if not path or not os.path.exists(path):
+            self.excel_data = []
+            self.excel_count_var.set("0 条")
+            return
+        try:
+            col = self.excel_column_var.get().strip()
+            if not col:
+                return
+            if path.endswith('.csv'):
+                with open(path, 'r', encoding='utf-8-sig') as f:
+                    reader = csv.DictReader(f)
+                    self.excel_data = [row.get(col, '').strip() for row in reader if row.get(col, '').strip()]
+            elif HAS_OPENPYXL:
+                wb = openpyxl.load_workbook(path, read_only=True)
+                ws = wb.active
+                header = [c.value for c in ws[1]]
+                if col not in header:
+                    wb.close()
+                    return
+                idx = header.index(col)
+                self.excel_data = []
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if idx < len(row) and row[idx]:
+                        self.excel_data.append(str(row[idx]).strip())
+                wb.close()
+            self.excel_count_var.set(f"{len(self.excel_data)} 条")
+        except Exception:
+            self.excel_data = []
+            self.excel_count_var.set("0 条")
+
+    def _is_imei_in_excel(self, imei):
+        if not self.excel_data:
+            return True
+        return str(imei).strip() in self.excel_data
+
+    def _is_imei_printed(self, imei):
+        return any(r.imei == str(imei).strip() for r in self.print_records)
+
+    def _show_imei_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("输入 IMEI")
+        dialog.geometry("400x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        main_frame = ttk.Frame(dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(main_frame, text="扫码或输入 IMEI：回车立即打印，窗口保持打开").pack(anchor=tk.W, pady=(0, 10))
+
+        imei_text = tk.Text(main_frame, wrap=tk.WORD, height=3)
+        imei_text.pack(fill=tk.X, pady=(0, 10))
+        imei_text.focus_set()
+
+        def on_content_change(event=None):
+            lines = imei_text.get("1.0", tk.END).count('\n') + 1
+            imei_text.config(height=min(max(lines, 3), 10))
+
+        imei_text.bind('<KeyRelease>', on_content_change)
+
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X)
+
+        def on_print():
+            content = imei_text.get("1.0", tk.END).strip()
+            if content:
+                imei_list = [l.strip() for l in content.split('\n') if l.strip()]
+                dialog.destroy()
+                self._process_imei_list(imei_list)
+
+        def on_enter(event):
+            content = imei_text.get("1.0", tk.END).strip()
+            if content:
+                lines = [l.strip() for l in content.split('\n') if l.strip()]
+                if len(lines) == 1:
+                    imei_text.delete("1.0", tk.END)
+                    imei_text.config(height=3)
+                    imei_text.focus_set()
+                    self._process_imei_list(lines, clear_status=False)
+                    return "break"
+            return None
+
+        imei_text.bind('<Return>', on_enter)
+        ttk.Button(btn_frame, text="批量打印并关闭", command=on_print).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT)
+
+    def _import_imei_file(self):
+        path = filedialog.askopenfilename(title="选择 IMEI 文件", filetypes=[("文本文件", "*.txt"), ("CSV 文件", "*.csv")])
+        if path:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                imei_list = [l.strip() for l in content.split('\n') if l.strip()]
+                if imei_list:
+                    self._process_imei_list(imei_list)
+            except Exception as e:
+                messagebox.showerror("错误", f"文件读取失败: {e}")
+
+    def _process_imei_list(self, imei_list, clear_status=True):
+        printer = self.printer_var.get()
+        if not printer:
+            self._update_status("错误：请选择打印机", "error")
+            return
+
+        template_path = self.template_path_var.get()
+        if not template_path or not os.path.exists(template_path):
+            self._update_status("错误：请选择有效的 BarTender 模板文件", "error")
+            return
+
+        if not self.bt_app:
+            self._update_status("错误：BarTender 未连接", "error")
+            return
+
+        datasource = self.datasource_var.get()
+        try:
+            copies = max(1, int(self.copies_var.get() or 1))
+        except Exception:
+            copies = 1
+            self.copies_var.set(1)
+        self._save_config()
+
+        # 校验Excel
+        if self.verify_excel_var.get() and self.excel_data:
+            invalid = [i for i in imei_list if not self._is_imei_in_excel(i)]
+            if invalid:
+                result = messagebox.askyesnocancel(
+                    "数据不在文件中",
+                    f"发现 {len(invalid)} 个 IMEI 不在 Excel 数据中！\n\n"
+                    f"无效 IMEI:\n{chr(10).join(invalid[:5])}\n\n"
+                    "是：继续打印 / 否：跳过无效 / 取消：取消打印"
+                )
+                if result is None:
+                    return
+                elif not result:
+                    imei_list = [i for i in imei_list if self._is_imei_in_excel(i)]
+                    if not imei_list:
+                        self._update_status("没有有效的 IMEI", "error")
+                        return
+
+        # 检查已打印
+        printed = [i for i in imei_list if self._is_imei_printed(i)]
+        if printed:
+            result = messagebox.askyesnocancel(
+                "数据重复",
+                f"发现 {len(printed)} 个 IMEI 已打印过！\n\n"
+                f"已打印:\n{chr(10).join(printed[:5])}\n\n"
+                "是：继续打印 / 否：跳过已打印 / 取消：取消打印"
+            )
+            if result is None:
+                return
+            elif not result:
+                imei_list = [i for i in imei_list if not self._is_imei_printed(i)]
+                if not imei_list:
+                    self._update_status("所有 IMEI 都已打印过", "error")
+                    return
+
+        # BarTender COM 对象必须在创建它的线程中使用。
+        if clear_status:
+            self._clear_status()
+        self._update_status(f"开始打印 {len(imei_list)} 个 IMEI...", "info")
+        threading.Thread(target=self._do_print, args=(imei_list, template_path, printer, datasource, copies), daemon=True).start()
+
+    def _do_print(self, imei_list, template_path, printer, datasource, copies):
+        """实际打印逻辑（后台线程执行）"""
+        pythoncom.CoInitialize()
+        try:
+            self._do_print_inner(imei_list, template_path, printer, datasource, copies)
+        finally:
+            pythoncom.CoUninitialize()
+
+    def _do_print_inner(self, imei_list, template_path, printer, datasource, copies):
+        ok = 0
+        fail = 0
+        for imei in imei_list:
+            success, error_msg = self._print_single(imei, template_path, printer, datasource, copies)
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if success:
+                self.print_records.append(PrintRecord(imei, now, "PASS"))
+                ok += 1
+                self.root.after(0, lambda m=f"PASS {imei}": self._update_status(m, "success"))
+            else:
+                self.print_records.append(PrintRecord(imei, now, "FAIL"))
+                fail += 1
+                self.root.after(0, lambda m=f"FAIL {imei} - {error_msg}": self._update_status(m, "error"))
+
+        self._save_config()
+        self._save_records()
+        self.root.after(0, self.refresh_history)
+        self.root.after(0, self.refresh_stats)
+        self.root.after(0, lambda: self._update_status(f"\n完成：成功 {ok}，失败 {fail}", "info"))
+        self.root.after(0, lambda: self.status_var.set(f"完成：成功 {ok}，失败 {fail}"))
+
+    def _print_single(self, imei, template_path, printer, datasource, copies):
+        """打印单个IMEI（通过VBScript调用BarTender COM）"""
+        try:
+            return self._print_single_vbs(imei, template_path, printer, datasource, copies)
+        except Exception as e:
+            import traceback
+            error_msg = f"{type(e).__name__}: {e}"
+            print(f"[DEBUG] 打印失败: {error_msg}")
+            print(f"[DEBUG] 详细错误:\n{traceback.format_exc()}")
+            return False, error_msg
+
+    def _vbs_string(self, value):
+        return '"' + str(value).replace('"', '""') + '"'
+
+    def _print_batch_vbs(self, imei_list, template_path, printer, datasource, copies):
+        template_path = os.path.abspath(template_path).replace('/', '\\')
+        self.root.after(0, lambda: self._update_status(f"准备打开模板: {template_path}", "info"))
+        script_file = None
+        data_file = None
+        try:
+            with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                data_file = f.name
+                for imei in imei_list:
+                    f.write(str(imei).replace('\r', '').replace('\n', '') + '\n')
+            script = f'''
+On Error Resume Next
+Dim btApp, btFormat, fso, file, line
+Set btApp = CreateObject("BarTender.Application")
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR|ALL|CreateObject: " & Err.Number & " " & Err.Description
+  WScript.Quit 1
+End If
+btApp.Visible = False
+Err.Clear
+Set btFormat = btApp.Formats.Open({self._vbs_string(template_path)}, False, "")
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR|ALL|Formats.Open: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btApp.Quit 0
+  WScript.Quit 2
+End If
+Err.Clear
+btFormat.Printer = {self._vbs_string(printer)}
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR|ALL|Printer: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btFormat.Close False
+  btApp.Quit 0
+  WScript.Quit 3
+End If
+Err.Clear
+btFormat.PrintSetup.IdenticalCopiesOfLabel = {int(copies)}
+If Err.Number <> 0 Then
+  Err.Clear
+End If
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set file = fso.OpenTextFile({self._vbs_string(data_file)}, 1, False, -1)
+Do Until file.AtEndOfStream
+  line = Trim(file.ReadLine)
+  If line <> "" Then
+    Err.Clear
+    btFormat.SetNamedSubStringValue {self._vbs_string(datasource)}, line
+    If Err.Number <> 0 Then
+      WScript.Echo "FAIL|" & line & "|SetNamedSubStringValue: " & Err.Number & " " & Err.Description
+    Else
+      Err.Clear
+      btFormat.PrintOut False, False
+      If Err.Number <> 0 Then
+        WScript.Echo "WARN|" & line & "|PrintOut: " & Err.Number & " " & Err.Description
+        WScript.Echo "PASS|" & line
+      Else
+        WScript.Echo "PASS|" & line
+      End If
+    End If
+  End If
+Loop
+file.Close
+On Error Resume Next
+btFormat.Close False
+btApp.Quit 0
+WScript.Quit 0
+'''
+            with tempfile.NamedTemporaryFile('w', suffix='.vbs', delete=False, encoding='utf-16') as f:
+                script_file = f.name
+                f.write(script)
+            startupinfo = None
+            creationflags = 0
+            if sys.platform == 'win32':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            result = subprocess.run(
+                ['cscript.exe', '//NoLogo', script_file],
+                capture_output=True,
+                text=True,
+                timeout=max(300, len(imei_list) * 60),
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+            )
+            output = (result.stdout or '').strip()
+            error_output = (result.stderr or '').strip()
+            if error_output:
+                self.root.after(0, lambda msg=error_output: self._update_status(msg, "error"))
+            results = {}
+            for raw_line in output.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                parts = line.split('|', 2)
+                if len(parts) >= 2 and parts[0] == 'PASS':
+                    results[parts[1]] = (True, "")
+                elif len(parts) >= 3 and parts[0] in ('FAIL', 'ERROR'):
+                    if parts[1] == 'ALL':
+                        for imei in imei_list:
+                            results[str(imei)] = (False, parts[2])
+                    else:
+                        results[parts[1]] = (False, parts[2])
+                elif len(parts) >= 3 and parts[0] == 'WARN':
+                    self.root.after(0, lambda msg=line: self._update_status(msg, "info"))
+                else:
+                    self.root.after(0, lambda msg=line: self._update_status(msg, "info"))
+            if result.returncode != 0 and not results:
+                message = output or error_output or f"cscript 退出码 {result.returncode}"
+                for imei in imei_list:
+                    results[str(imei)] = (False, message)
+            return results
+        except Exception as e:
+            message = f"{type(e).__name__}: {e}"
+            return {str(imei): (False, message) for imei in imei_list}
+        finally:
+            for path in (script_file, data_file):
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+
+    def _print_single_vbs(self, imei, template_path, printer, datasource, copies):
+        template_path = os.path.abspath(template_path).replace('/', '\\')
+        script = f'''
+On Error Resume Next
+Dim btApp, btFormat
+Set btApp = CreateObject("BarTender.Application")
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR: CreateObject: " & Err.Number & " " & Err.Description
+  WScript.Quit 1
+End If
+btApp.Visible = False
+Err.Clear
+Set btFormat = btApp.Formats.Open({self._vbs_string(template_path)}, False, "")
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR: Formats.Open: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btApp.Quit 0
+  WScript.Quit 2
+End If
+Err.Clear
+btFormat.SetNamedSubStringValue {self._vbs_string(datasource)}, {self._vbs_string(imei)}
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR: SetNamedSubStringValue: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btFormat.Close False
+  btApp.Quit 0
+  WScript.Quit 3
+End If
+Err.Clear
+btFormat.Printer = {self._vbs_string(printer)}
+If Err.Number <> 0 Then
+  WScript.Echo "ERROR: Printer: " & Err.Number & " " & Err.Description
+  On Error Resume Next
+  btFormat.Close False
+  btApp.Quit 0
+  WScript.Quit 4
+End If
+Err.Clear
+btFormat.PrintSetup.IdenticalCopiesOfLabel = {int(copies)}
+If Err.Number <> 0 Then
+  Err.Clear
+End If
+Err.Clear
+btFormat.PrintOut False, False
+If Err.Number <> 0 Then
+  WScript.Echo "WARN: PrintOut: " & Err.Number & " " & Err.Description
+End If
+On Error Resume Next
+btFormat.Close False
+btApp.Quit 0
+WScript.Echo "OK"
+WScript.Quit 0
+'''
+        script_file = None
+        try:
+            with tempfile.NamedTemporaryFile('w', suffix='.vbs', delete=False, encoding='utf-16') as f:
+                script_file = f.name
+                f.write(script)
+            startupinfo = None
+            creationflags = 0
+            if sys.platform == 'win32':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            result = subprocess.run(
+                ['cscript.exe', '//NoLogo', script_file],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+            )
+            output = (result.stdout or '').strip()
+            error_output = (result.stderr or '').strip()
+            output_lines = [line.strip() for line in output.splitlines()]
+            if result.returncode == 0 or "OK" in output_lines:
+                return True, ""
+            return False, output or error_output or f"cscript 退出码 {result.returncode}"
+        finally:
+            if script_file and os.path.exists(script_file):
+                try:
+                    os.remove(script_file)
+                except Exception:
+                    pass
+
+    def _open_template(self, template_path, printer):
+        template_path = os.path.abspath(template_path).replace('/', '\\')
+        errors = []
+        missing = None
+        try:
+            missing = win32com.client.VARIANT(pythoncom.VT_ERROR, pythoncom.DISP_E_PARAMNOTFOUND)
+        except Exception:
+            pass
+
+        def try_open(label, opener):
+            try:
+                self._update_status(f"尝试打开模板: {label}", "info")
+                return opener()
+            except BaseException as e:
+                error_msg = f"{label} => {type(e).__name__}: {e}"
+                errors.append(error_msg)
+                print(f"[DEBUG] {error_msg}")
+                return None
+
+        documents = getattr(self.bt_app, "Documents", None)
+        if documents is not None:
+            for label, opener in (
+                ("Documents.Open(path)", lambda: documents.Open(template_path)),
+                ("Documents.Open(path, False)", lambda: documents.Open(template_path, False)),
+                ("Documents.Open(path, False, 0)", lambda: documents.Open(template_path, False, 0)),
+                ("Documents.Open(path, False, printer)", lambda: documents.Open(template_path, False, printer)),
+            ):
+                opened = try_open(label, opener)
+                if opened is not None:
+                    return opened
+
+        formats = getattr(self.bt_app, "Formats", None)
+        if formats is not None:
+            attempts = [
+                ("Formats.Open(path, False, printer)", lambda: formats.Open(template_path, False, printer)),
+                ("Formats.Open(path)", lambda: formats.Open(template_path)),
+                ("Formats.Open(path, False)", lambda: formats.Open(template_path, False)),
+                ("Formats.Open(path, False, '')", lambda: formats.Open(template_path, False, "")),
+            ]
+            if missing is not None:
+                attempts.insert(1, ("Formats.Open(path, False, missing)", lambda: formats.Open(template_path, False, missing)))
+                attempts.insert(2, ("Formats.Open(path, missing, missing)", lambda: formats.Open(template_path, missing, missing)))
+            for label, opener in attempts:
+                opened = try_open(label, opener)
+                if opened is not None:
+                    return opened
+
+        raise RuntimeError("; ".join(errors))
+
+    def _clear_status(self):
+        self.print_status.config(state=tk.NORMAL)
+        self.print_status.delete("1.0", tk.END)
+        self.print_status.config(state=tk.DISABLED)
+
+    def _log(self, msg, level="info"):
+        if level == "error":
+            logging.error(msg)
+        elif level == "success":
+            logging.info(msg)
+        else:
+            logging.info(msg)
+
+    def _update_status(self, msg, level="info"):
+        self._log(msg, level)
+        self.print_status.config(state=tk.NORMAL)
+        self.print_status.tag_configure("success", foreground="green")
+        self.print_status.tag_configure("error", foreground="red")
+        self.print_status.tag_configure("info", foreground="black")
+        tag = level if level in ("success", "error", "info") else "info"
+        self.print_status.insert(tk.END, msg + "\n", tag)
+        self.print_status.see(tk.END)
+        self.print_status.config(state=tk.DISABLED)
+
+    def refresh_history(self):
+        for item in self.history_tree.get_children():
+            self.history_tree.delete(item)
+        keyword = self.history_search_var.get().strip().lower() if hasattr(self, 'history_search_var') else ""
+        for r in reversed(self.print_records):
+            if keyword and keyword not in r.imei.lower() and keyword not in r.print_time.lower() and keyword not in r.status.lower():
+                continue
+            self.history_tree.insert('', 0, values=(r.imei, r.print_time, r.status))
+
+    def _clear_history_search(self):
+        self.history_search_var.set("")
+        self.refresh_history()
+
+    def _export_records(self):
+        if not self.print_records:
+            messagebox.showinfo("提示", "没有可导出的历史记录")
+            return
+        path = filedialog.asksaveasfilename(
+            title="导出历史记录",
+            defaultextension=".csv",
+            filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")],
+            initialfile=f"print_records_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        )
+        if not path:
+            return
+        keyword = self.history_search_var.get().strip().lower()
+        rows = []
+        for r in self.print_records:
+            if keyword and keyword not in r.imei.lower() and keyword not in r.print_time.lower() and keyword not in r.status.lower():
+                continue
+            rows.append(r)
+        try:
+            with open(path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                writer.writerow(['imei', 'print_time', 'status'])
+                for r in rows:
+                    writer.writerow([r.imei, r.print_time, r.status])
+            messagebox.showinfo("导出成功", f"已导出 {len(rows)} 条记录")
+        except Exception as e:
+            messagebox.showerror("导出失败", str(e))
+
+    def _export_log(self):
+        if not os.path.exists(self.log_file):
+            messagebox.showinfo("提示", "日志文件不存在")
+            return
+        path = filedialog.asksaveasfilename(
+            title="导出运行日志",
+            defaultextension=".log",
+            filetypes=[("日志文件", "*.log"), ("文本文件", "*.txt"), ("所有文件", "*.*")],
+            initialfile=f"bartender-printer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+        )
+        if not path:
+            return
+        try:
+            import shutil
+            shutil.copy2(self.log_file, path)
+            messagebox.showinfo("导出成功", f"日志已导出到:\n{path}")
+        except Exception as e:
+            messagebox.showerror("导出失败", str(e))
+
+    def refresh_stats(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_count = sum(1 for r in self.print_records if r.print_time.startswith(today))
+        self.today_count_var.set(str(today_count))
+        self.total_count_var.set(str(len(self.print_records)))
+
+    def _clear_records(self):
+        if messagebox.askyesno("确认", "确定要清空所有记录吗？"):
+            self.print_records.clear()
+            self._save_records()
+            self.refresh_history()
+            self.refresh_stats()
+
+    def _open_settings(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("设置")
+        dialog.geometry("400x250")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        f = ttk.Frame(dialog, padding="20")
+        f.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(f, text="设置", font=("微软雅黑", 12, "bold")).pack(anchor=tk.W, pady=(0, 15))
+
+        ttk.Label(f, text="默认打印机：").pack(anchor=tk.W)
+        printer_var = tk.StringVar(value=self.printer_var.get())
+        ttk.Entry(f, textvariable=printer_var).pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(f, text="数据源名称：").pack(anchor=tk.W)
+        ds_var = tk.StringVar(value=self.datasource_var.get())
+        ttk.Entry(f, textvariable=ds_var).pack(fill=tk.X, pady=(0, 10))
+
+        vf = tk.BooleanVar(value=self.verify_excel_var.get())
+        ttk.Checkbutton(f, text="打印前校验 Excel 数据", variable=vf).pack(anchor=tk.W, pady=(0, 15))
+
+        bf = ttk.Frame(f)
+        bf.pack(fill=tk.X)
+
+        def save():
+            self.printer_var.set(printer_var.get())
+            self.datasource_var.set(ds_var.get())
+            self.verify_excel_var.set(vf.get())
+            self._save_config()
+            dialog.destroy()
+
+        ttk.Button(bf, text="保存", command=save).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(bf, text="取消", command=dialog.destroy).pack(side=tk.RIGHT)
+
+    def _on_closing(self):
+        self._save_config()
+        self._save_records()
+        if self.bt_app:
+            try:
+                self.bt_app.Quit()
+            except:
+                pass
+        if HAS_WIN32COM:
+            try:
+                pythoncom.CoUninitialize()
+            except:
+                pass
+        self.root.destroy()
+
+    def run(self):
+        self.root.mainloop()
+
+
+def main():
+    app = BarTenderPrintApp()
+    app.run()
+
+
+if __name__ == "__main__":
+    main()

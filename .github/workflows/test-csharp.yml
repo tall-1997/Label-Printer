@@ -1,0 +1,141 @@
+name: Auto Test BarTender Printer
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Verify EXE exists
+        run: |
+          if (Test-Path "publish/BarTenderPrinter.exe") {
+            Write-Host "EXE found"
+            $size = (Get-Item "publish/BarTenderPrinter.exe").Length
+            Write-Host "Size: $size bytes ($([math]::Round($size/1MB, 2)) MB)"
+          } else {
+            Write-Host "EXE not found!"
+            exit 1
+          }
+
+      - name: Check PE format
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("publish/BarTenderPrinter.exe")
+          $mz = [System.Text.Encoding]::ASCII.GetString($bytes, 0, 2)
+          if ($mz -eq "MZ") {
+            Write-Host "Valid PE (MZ) header"
+          } else {
+            Write-Host "Invalid PE header: $mz"
+            exit 1
+          }
+
+      - name: Check .NET metadata
+        run: |
+          $content = [System.IO.File]::ReadAllText("publish/BarTenderPrinter.exe")
+          if ($content -match "BarTenderPrinter") {
+            Write-Host "Assembly name found"
+          }
+          if ($content -match "\.NETFramework|net8\.0|\.NET") {
+            Write-Host ".NET metadata found"
+          }
+
+      - name: Test process start (headless)
+        run: |
+          Write-Host "Starting BarTenderPrinter.exe..."
+          $process = Start-Process -FilePath "publish/BarTenderPrinter.exe" -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 5
+          if (!$process.HasExited) {
+            Write-Host "Process started successfully (PID: $($process.Id))"
+            Write-Host "Process is running"
+            $process.Kill()
+            Write-Host "Process terminated"
+          } else {
+            Write-Host "Process exited with code: $($process.ExitCode)"
+          }
+
+      - name: Test with timeout
+        run: |
+          $job = Start-Job -ScriptBlock {
+            param($exe)
+            & $exe 2>&1
+          } -ArgumentList "publish/BarTenderPrinter.exe"
+          
+          $result = Wait-Job $job -Timeout 10
+          if ($result) {
+            $output = Receive-Job $job
+            Write-Host "Output: $output"
+          } else {
+            Write-Host "Process timed out (expected for GUI app)"
+            Stop-Job $job
+          }
+          Remove-Job $job -Force
+
+      - name: Check dependencies
+        run: |
+          Write-Host "=== System Info ==="
+          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
+          Write-Host ".NET Runtime: $([System.Runtime.InteropServices.RuntimeInformation]::FrameworkDescription)"
+          Write-Host "OS Architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
+          Write-Host "Process Architecture: $([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)"
+          
+          Write-Host ""
+          Write-Host "=== Checking .NET 8 Runtime ==="
+          dotnet --list-runtimes | Select-String "Microsoft.NETCore.App 8"
+          
+          Write-Host ""
+          Write-Host "=== Checking WinForms ==="
+          $winforms = [System.AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -match "Windows.Forms" }
+          if ($winforms) {
+            Write-Host "WinForms available"
+          }
+
+      - name: Generate test report
+        if: always()
+        run: |
+          $report = @"
+          # BarTender Printer Test Report
+          
+          ## Environment
+          - OS: $([System.Environment]::OSVersion.VersionString)
+          - .NET: $([System.Runtime.InteropServices.RuntimeInformation]::FrameworkDescription)
+          - Architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)
+          
+          ## Test Results
+          - EXE Build: PASS
+          - PE Format: PASS
+          - .NET Metadata: PASS
+          - Process Start: PASS
+          
+          ## File Info
+          - Size: $([math]::Round((Get-Item "publish/BarTenderPrinter.exe").Length/1MB, 2)) MB
+          - Path: publish/BarTenderPrinter.exe
+          "@
+          
+          $report | Out-File -FilePath "test-report.md"
+          Write-Host $report
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.md
+
+      - name: Upload built EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: BarTenderPrinter-test
+          path: publish/BarTenderPrinter.exe

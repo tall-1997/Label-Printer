@@ -1,0 +1,63 @@
+name: Release C# BarTender Printer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish self-contained single file
+        run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+
+      - name: Rename exe with version
+        run: Rename-Item -Path "publish/BarTenderPrinter.exe" -NewName "BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "publish/BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe"
+          body: |
+            ## BarTender 标签打印工具 ${{ steps.version.outputs.VERSION }}
+
+            ### 更新内容
+
+            #### 优化
+            - 界面布局专为 1080x900 优化，所有控件初始尺寸匹配窗口宽度
+            - 模板/打印机下拉框、输入面板、打印按钮等控件宽度适配 1080px
+            - 右侧按钮和标签位置重新计算，贴合右边缘
+
+            ### 系统要求
+            - Windows 10/11 x64
+            - .NET 8.0 运行时（已内置，无需额外安装）
+            - BarTender 2022 R2 Enterprise 或更高版本
+
+            ### 安装说明
+            1. 下载 `BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe`
+            2. 直接运行即可，无需安装
+            3. 首次运行需要配置 BarTender 模板和打印机
+
+            ### 文件信息
+            - 文件名: BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe
+            - 架构: win-x64
+            - 类型: 自包含单文件
+          generate_release_notes: false
+          draft: false
+          prerelease: false
