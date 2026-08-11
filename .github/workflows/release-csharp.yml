@@ -20,32 +20,52 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish self-contained single file
+      - name: Publish self-contained application
         run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Rename exe with version
-        run: Rename-Item -Path "publish/BarTenderPrinter.exe" -NewName "BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe"
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "installer/BarTenderPrinter.iss"
+
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "installer-output/BarTenderPrinter-Setup-*-win-x64.exe" | Select-Object -First 1
+          if (!$installer -or $installer.Length -le 0) {
+            throw "Installer was not generated"
+          }
+          $releaseInstaller = "installer-output/BarTenderPrinter-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe"
+          Move-Item $installer.FullName $releaseInstaller -Force
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "publish/BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe"
+          files: "installer-output/BarTenderPrinter-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe"
           body: |
             ## BarTender 标签打印工具 ${{ steps.version.outputs.VERSION }}
 
             ### 更新内容
 
             #### 新功能
-            - 首次识别模板数据源时按字段名执行自然数字排序
-            - 模板数据源确认后弹出集中输入窗口，支持预填和 Enter 连续录入
+            - 提供当前用户范围的 Windows 安装向导、开始菜单入口和可选桌面快捷方式
+            - 数据源串行输入、自动打印和可点击锁定图标
 
-            #### 修复
-            - 打印前检测当前数据源之间的重复输入并聚焦重复字段
-            - 历史重复放行时继续拦截本次输入内部重复
+            #### 优化
+            - 使用自包含多文件安装模式，减少单文件启动解压开销
+            - 配置、打印历史和日志统一保存到 LocalAppData
+            - 首次启动自动迁移旧版用户数据
 
             ### 系统要求
             - Windows 10/11 x64
@@ -53,14 +73,14 @@ jobs:
             - BarTender 2022 R2 Enterprise 或更高版本
 
             ### 安装说明
-            1. 下载 `BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe`
-            2. 直接运行即可，无需安装
-            3. 首次运行需要配置 BarTender 模板和打印机
+            1. 下载 `BarTenderPrinter-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe`
+            2. 运行安装向导
+            3. 从开始菜单或桌面快捷方式启动软件
 
             ### 文件信息
-            - 文件名: BarTenderPrinter-${{ steps.version.outputs.VERSION }}-win-x64.exe
+            - 文件名: BarTenderPrinter-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe
             - 架构: win-x64
-            - 类型: 自包含单文件
+            - 类型: 当前用户范围自包含安装包
           generate_release_notes: false
           draft: false
           prerelease: false

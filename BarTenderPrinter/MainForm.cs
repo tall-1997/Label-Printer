@@ -15,11 +15,12 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.18";
+        private readonly string _version = "v5.7.19";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
         private Panel[] _rowPanels = new Panel[0];
+        private Button[] _lockButtons = new Button[0];
         private string _templatesFolder = "";
         private string _selectedTemplatePath = "";
         private HashSet<string> _localData = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -32,9 +33,7 @@ namespace BarTenderPrinter
         public MainForm()
         {
             InitializeComponent();
-            _configFile = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".bartender-printer", "config.ini");
+            _configFile = AppPaths.ConfigFile;
             Text = $"BarTender 标签打印工具 {_version}";
             titleLabel.Text = $"BarTender 标签打印工具 {_version}";
             MiuiTheme.ApplyTheme(this);
@@ -296,14 +295,23 @@ namespace BarTenderPrinter
         private void ShowDataSourceInputDialog(Dictionary<string, string> existingValues)
         {
             var enabled = _dataSources.Where(d => d.Enabled).ToList();
-            if (enabled.Count == 0) return;
-
-            using (var dlg = new DataSourceInputDialog(enabled, existingValues))
+            var editable = enabled.Where(d => !d.IsLocked && !d.AutoIncrementLocked).ToList();
+            for (int i = 0; i < editable.Count; i++)
             {
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
-                    _inputTextBoxes[i].Text = dlg.Values[enabled[i].Field];
+                var source = editable[i];
+                var existingValue = "";
+                if (existingValues != null)
+                    existingValues.TryGetValue(source.Field, out existingValue);
+                using (var dlg = new DataSourceInputDialog(source, existingValue ?? "", i + 1, editable.Count))
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                    var inputIndex = enabled.FindIndex(d => string.Equals(d.Field, source.Field, StringComparison.OrdinalIgnoreCase));
+                    if (inputIndex >= 0 && inputIndex < _inputTextBoxes.Length)
+                        _inputTextBoxes[inputIndex].Text = dlg.Value;
+                }
             }
+
+            DoPrint();
         }
 
         private void RebuildInputFields()
@@ -312,6 +320,7 @@ namespace BarTenderPrinter
             var enabled = _dataSources.Where(d => d.Enabled).ToList();
             _inputTextBoxes = new TextBox[enabled.Count];
             _rowPanels = new Panel[enabled.Count];
+            _lockButtons = new Button[enabled.Count];
             int y = 4;
             for (int i = 0; i < enabled.Count; i++)
             {
@@ -342,29 +351,49 @@ namespace BarTenderPrinter
                 var lbl = new Label
                 {
                     Text = enabled[i].Name + "：",
-                    Location = new Point(26, 3),
+                    Location = new Point(52, 3),
                     Size = new Size(75, 20),
                     TextAlign = ContentAlignment.MiddleRight
                 };
                 MiuiTheme.StyleLabel(lbl);
 
+                var lockButton = new Button
+                {
+                    Location = new Point(26, 1),
+                    Size = new Size(24, 24),
+                    Tag = i,
+                    FlatStyle = FlatStyle.Flat,
+                    Cursor = Cursors.Hand,
+                    BackColor = Color.Transparent,
+                    AccessibleName = enabled[i].IsLocked ? "解除锁定" : "锁定"
+                };
+                lockButton.FlatAppearance.BorderSize = 0;
+                lockButton.Paint += LockButton_Paint;
+                lockButton.Click += LockButton_Click;
+
                 var txt = new TextBox
                 {
-                    Location = new Point(104, 0),
-                    Size = new Size(rowPanel.Width - 110, 25),
+                    Location = new Point(130, 0),
+                    Size = new Size(rowPanel.Width - 136, 25),
                     Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-                    Tag = i
+                    Tag = i,
+                    Text = enabled[i].IsLocked ? enabled[i].LockedValue ?? "" : "",
+                    ReadOnly = enabled[i].IsLocked || enabled[i].AutoIncrementLocked,
+                    BackColor = enabled[i].IsLocked || enabled[i].AutoIncrementLocked ? SystemColors.Control : MiuiTheme.InputBackground
                 };
                 MiuiTheme.StyleTextBox(txt);
+                txt.BackColor = txt.ReadOnly ? SystemColors.Control : MiuiTheme.InputBackground;
                 txt.KeyDown += Input_KeyDown;
                 txt.GotFocus += Input_GotFocus;
 
                 rowPanel.Controls.Add(grip);
+                rowPanel.Controls.Add(lockButton);
                 rowPanel.Controls.Add(lbl);
                 rowPanel.Controls.Add(txt);
                 inputPanel.Controls.Add(rowPanel);
 
                 _rowPanels[i] = rowPanel;
+                _lockButtons[i] = lockButton;
                 _inputTextBoxes[i] = txt;
                 y += 32;
             }
@@ -389,6 +418,45 @@ namespace BarTenderPrinter
                 if (_rowPanels[i] != null)
                     _rowPanels[i].Width = w;
             }
+        }
+
+        private void LockButton_Paint(object sender, PaintEventArgs e)
+        {
+            var button = (Button)sender;
+            var enabled = _dataSources.Where(d => d.Enabled).ToList();
+            var index = (int)button.Tag;
+            if (index < 0 || index >= enabled.Count) return;
+
+            var color = enabled[index].IsLocked ? Color.FromArgb(90, 90, 90) : Color.FromArgb(150, 150, 150);
+            using (var pen = new Pen(color, 2F))
+            using (var brush = new SolidBrush(color))
+            {
+                var shackleX = enabled[index].IsLocked ? 7 : 10;
+                e.Graphics.DrawArc(pen, shackleX, 4, 10, 11, 180, -180);
+                if (!enabled[index].IsLocked)
+                    e.Graphics.DrawLine(pen, 10, 9, 10, 12);
+                e.Graphics.FillRectangle(brush, 6, 11, 13, 9);
+            }
+        }
+
+        private void LockButton_Click(object sender, EventArgs e)
+        {
+            var button = (Button)sender;
+            var enabled = _dataSources.Where(d => d.Enabled).ToList();
+            var index = (int)button.Tag;
+            if (index < 0 || index >= enabled.Count || index >= _inputTextBoxes.Length) return;
+
+            var source = enabled[index];
+            source.IsLocked = !source.IsLocked;
+            source.LockAfterInput = false;
+            source.LockedValue = source.IsLocked ? _inputTextBoxes[index].Text.Trim() : "";
+            var readOnly = source.IsLocked || source.AutoIncrementLocked;
+            _inputTextBoxes[index].ReadOnly = readOnly;
+            _inputTextBoxes[index].BackColor = readOnly ? SystemColors.Control : MiuiTheme.InputBackground;
+            button.AccessibleName = source.IsLocked ? "解除锁定" : "锁定";
+            button.Invalidate();
+            SaveConfig();
+            AddLog($"数据源 {source.Name} 已{(source.IsLocked ? "锁定" : "解除锁定")}", "INFO");
         }
 
         private void Grip_MouseDown(object sender, MouseEventArgs e)
@@ -499,20 +567,31 @@ namespace BarTenderPrinter
             {
                 if (i < _inputTextBoxes.Length && _inputTextBoxes[i] != null)
                 {
-                    if (!enabled[i].AutoIncrement)
+                    if (!enabled[i].AutoIncrement && !enabled[i].IsLocked)
                     {
                         // Clear and enable non-auto-increment fields
                         _inputTextBoxes[i].Text = "";
                         _inputTextBoxes[i].ReadOnly = false;
                         _inputTextBoxes[i].BackColor = MiuiTheme.InputBackground;
                     }
-                    // Auto-increment fields stay locked with their values
+                    else if (enabled[i].IsLocked)
+                    {
+                        _inputTextBoxes[i].Text = enabled[i].LockedValue ?? "";
+                        _inputTextBoxes[i].ReadOnly = true;
+                        _inputTextBoxes[i].BackColor = SystemColors.Control;
+                    }
                 }
+            }
+            foreach (var button in _lockButtons)
+            {
+                if (button == null) continue;
+                button.Enabled = true;
+                button.Invalidate();
             }
             // Focus first non-auto-increment field
             for (int i = 0; i < enabled.Count; i++)
             {
-                if (i < _inputTextBoxes.Length && !enabled[i].AutoIncrement)
+                if (i < _inputTextBoxes.Length && !enabled[i].AutoIncrement && !enabled[i].IsLocked)
                 {
                     _inputTextBoxes[i].Focus();
                     _inputTextBoxes[i].SelectAll();
@@ -533,6 +612,9 @@ namespace BarTenderPrinter
                     var step = enabled[i].AutoStep;
                     var newVal = IncrementValue(currentVal, step);
                     _inputTextBoxes[i].Text = newVal;
+                    enabled[i].AutoIncrementLocked = true;
+                    if (enabled[i].IsLocked)
+                        enabled[i].LockedValue = newVal;
 
                     // Lock auto-increment fields after first print
                     _inputTextBoxes[i].ReadOnly = true;
@@ -573,6 +655,20 @@ namespace BarTenderPrinter
         {
             foreach (var tb in _inputTextBoxes)
                 if (tb != null) { tb.ReadOnly = ro; tb.BackColor = ro ? SystemColors.Control : MiuiTheme.InputBackground; }
+            foreach (var button in _lockButtons)
+                if (button != null) button.Enabled = !ro;
+        }
+
+        private void RestoreInputReadOnlyStates(bool[] readOnlyStates)
+        {
+            for (int i = 0; i < readOnlyStates.Length && i < _inputTextBoxes.Length; i++)
+            {
+                var readOnly = readOnlyStates[i];
+                _inputTextBoxes[i].ReadOnly = readOnly;
+                _inputTextBoxes[i].BackColor = readOnly ? SystemColors.Control : MiuiTheme.InputBackground;
+                if (i < _lockButtons.Length && _lockButtons[i] != null)
+                    _lockButtons[i].Enabled = true;
+            }
         }
 
         #endregion
@@ -784,6 +880,7 @@ namespace BarTenderPrinter
             var notInLocal = new List<string>();
             foreach (var kv in fieldValues)
             {
+                if (string.IsNullOrEmpty(kv.Value)) continue;
                 if (!_localData.Contains(kv.Value))
                     notInLocal.Add($"{kv.Key}={kv.Value}");
             }
@@ -821,10 +918,10 @@ namespace BarTenderPrinter
             for (int i = 0; i < enabled.Count; i++)
             {
                 var val = _inputTextBoxes[i]?.Text?.Trim() ?? "";
-                if (string.IsNullOrEmpty(val))
+                if (string.IsNullOrEmpty(val) && !enabled[i].IsLocked)
                 { MessageBox.Show(this, $"\"{enabled[i].Name}\" 不能为空"); _inputTextBoxes[i]?.Focus(); return; }
 
-                if (currentValues.TryGetValue(val, out var previousSource))
+                if (!string.IsNullOrEmpty(val) && currentValues.TryGetValue(val, out var previousSource))
                 {
                     MessageBox.Show(this,
                         $"\"{enabled[i].Name}\" 与前面的 \"{previousSource.Name}\" 输入重复：{val}",
@@ -835,7 +932,8 @@ namespace BarTenderPrinter
                     return;
                 }
 
-                currentValues[val] = enabled[i];
+                if (!string.IsNullOrEmpty(val))
+                    currentValues[val] = enabled[i];
                 fieldValues[enabled[i].Field] = val;
             }
 
@@ -845,6 +943,7 @@ namespace BarTenderPrinter
                 var duplicates = new List<string>();
                 foreach (var kv in fieldValues)
                 {
+                    if (string.IsNullOrEmpty(kv.Value)) continue;
                     if (_history.ContainsAnyValue(kv.Value))
                         duplicates.Add($"{kv.Key}={kv.Value}");
                 }
@@ -865,6 +964,7 @@ namespace BarTenderPrinter
 
             int copies = (int)numCopies.Value;
             var historyKey = string.Join("|", fieldValues.Values);
+            var readOnlyStates = _inputTextBoxes.Select(input => input?.ReadOnly ?? false).ToArray();
             SetStatus("打印中..."); SetInputsReadOnly(true); btnPrint.Enabled = false;
             AddLog($"打印: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
 
@@ -879,18 +979,28 @@ namespace BarTenderPrinter
                         AddLog("打印完成", "SUCCESS");
                         _history.Add(historyKey, "PASS");
 
+                        for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
+                        {
+                            if (enabled[i].LockAfterInput && !enabled[i].IsLocked)
+                            {
+                                enabled[i].IsLocked = true;
+                                enabled[i].LockedValue = _inputTextBoxes[i].Text.Trim();
+                            }
+                        }
+
                         // Auto-increment enabled fields
                         AutoIncrementFields(enabled);
 
                         // Clear non-auto-increment fields
                         ClearNonAutoIncrementInputs(enabled);
+                        SaveConfig();
                     }
                     else
                     {
                         SetStatus("打印失败");
                         AddLog($"失败: {result.ErrorMessage}", "ERROR");
                         _history.Add(historyKey, "FAIL");
-                        SetInputsReadOnly(false);
+                        RestoreInputReadOnlyStates(readOnlyStates);
                     }
                     btnPrint.Enabled = true;
                     LoadHistory(); RefreshStats();
@@ -986,6 +1096,14 @@ namespace BarTenderPrinter
         private void SaveConfig()
         {
             var dir = Path.GetDirectoryName(_configFile); if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            try
+            {
+                if (File.Exists(_configFile)) File.Copy(_configFile, _configFile + ".bak", true);
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Warn($"备份配置失败: {ex.Message}");
+            }
             IniWriteValue("General", "TemplatesFolder", _templatesFolder ?? "", _configFile);
             IniWriteValue("General", "Printer", cmbPrinter.SelectedItem?.ToString() ?? "", _configFile);
             IniWriteValue("General", "Copies", numCopies.Value.ToString(), _configFile);
@@ -997,6 +1115,9 @@ namespace BarTenderPrinter
                 IniWriteValue($"DS{i}", "Enabled", _dataSources[i].Enabled.ToString(), _configFile);
                 IniWriteValue($"DS{i}", "AutoIncrement", _dataSources[i].AutoIncrement.ToString(), _configFile);
                 IniWriteValue($"DS{i}", "AutoStep", _dataSources[i].AutoStep.ToString(), _configFile);
+                IniWriteValue($"DS{i}", "IsLocked", _dataSources[i].IsLocked.ToString(), _configFile);
+                IniWriteValue($"DS{i}", "LockAfterInput", _dataSources[i].LockAfterInput.ToString(), _configFile);
+                IniWriteValue($"DS{i}", "LockedValue", _dataSources[i].LockedValue ?? "", _configFile);
             }
         }
 
@@ -1014,13 +1135,18 @@ namespace BarTenderPrinter
                 var en = true; bool.TryParse(IniReadValue($"DS{i}", "Enabled", path), out en);
                 var autoInc = false; bool.TryParse(IniReadValue($"DS{i}", "AutoIncrement", path), out autoInc);
                 var autoStep = 1; int.TryParse(IniReadValue($"DS{i}", "AutoStep", path), out autoStep);
+                var isLocked = false; bool.TryParse(IniReadValue($"DS{i}", "IsLocked", path), out isLocked);
+                var lockAfterInput = false; bool.TryParse(IniReadValue($"DS{i}", "LockAfterInput", path), out lockAfterInput);
                 _dataSources.Add(new DataSourceItem
                 {
                     Name = IniReadValue($"DS{i}", "Name", path),
                     Field = IniReadValue($"DS{i}", "Field", path),
                     Enabled = en,
                     AutoIncrement = autoInc,
-                    AutoStep = autoStep
+                    AutoStep = autoStep,
+                    IsLocked = isLocked,
+                    LockAfterInput = lockAfterInput,
+                    LockedValue = IniReadValue($"DS{i}", "LockedValue", path)
                 });
             }
             if (_dataSources.Count == 0) _dataSources.Add(new DataSourceItem { Name = "IMEI", Field = "IMEI1", Enabled = true });
@@ -1081,16 +1207,19 @@ namespace BarTenderPrinter
             public TextBox TxtName;
             public CheckBox CbAutoInc;
             public NumericUpDown NumStep;
+            public ComboBox CmbLockMode;
+            public TextBox TxtLockedValue;
+            public bool WasInputLocked;
             public Label Grip;
         }
 
         public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current, bool preserveExistingOrder = true)
         {
-            Text = "选择数据源 - 拖拽排序"; Size = new Size(570, 460);
+            Text = "选择数据源 - 拖拽排序"; Size = new Size(850, 460);
             FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false;
 
-            var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，拖拽 ≡ 排序，勾选使用：", Location = new Point(10, 10), Size = new Size(540, 20) };
+            var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，拖拽 ≡ 排序，勾选使用：", Location = new Point(10, 10), Size = new Size(810, 20) };
 
             chkSelectAll = new CheckBox { Text = "全选/全不选", Location = new Point(10, 32), Size = new Size(100, 20), Checked = true };
             chkSelectAll.CheckedChanged += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = chkSelectAll.Checked; };
@@ -1100,8 +1229,10 @@ namespace BarTenderPrinter
             var hdrDisplay = new Label { Text = "显示名称", Location = new Point(155, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
             var hdrAuto = new Label { Text = "增序", Location = new Point(340, 55), Size = new Size(30, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
             var hdrStep = new Label { Text = "步长", Location = new Point(380, 55), Size = new Size(60, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrLock = new Label { Text = "锁定方式", Location = new Point(440, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrLockedValue = new Label { Text = "锁定值（可空）", Location = new Point(565, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
 
-            _scrollPanel = new Panel { Location = new Point(10, 75), Size = new Size(540, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
+            _scrollPanel = new Panel { Location = new Point(10, 75), Size = new Size(810, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
 
             var fieldSet = new HashSet<string>(fields, StringComparer.OrdinalIgnoreCase);
             var orderedFields = new List<string>();
@@ -1122,7 +1253,8 @@ namespace BarTenderPrinter
                 var field = orderedFields[i];
                 var existing = current.FirstOrDefault(d => string.Equals(d.Field, field, StringComparison.OrdinalIgnoreCase));
                 bool isChecked = existing != null ? existing.Enabled : (!preserveExistingOrder || current.Count == 0);
-                CreateRow(field, isChecked, existing?.Name ?? field, existing?.AutoIncrement ?? false, existing?.AutoStep ?? 1);
+                CreateRow(field, isChecked, existing?.Name ?? field, existing?.AutoIncrement ?? false, existing?.AutoStep ?? 1,
+                    existing?.IsLocked ?? false, existing?.LockAfterInput ?? false, existing?.LockedValue ?? "");
             }
 
             RelayoutRows();
@@ -1134,7 +1266,7 @@ namespace BarTenderPrinter
             var btnSelectNone = new Button { Text = "全不选", Location = new Point(65, 365), Size = new Size(55, 25) };
             btnSelectNone.Click += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = false; };
 
-            var ok = new Button { Text = "确定", Location = new Point(380, 365), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+            var ok = new Button { Text = "确定", Location = new Point(650, 365), Size = new Size(75, 28), DialogResult = DialogResult.OK };
             ok.Click += (s, e) =>
             {
                 SelectedSources = new List<DataSourceItem>();
@@ -1146,22 +1278,28 @@ namespace BarTenderPrinter
                             Field = r.Field,
                             Enabled = true,
                             AutoIncrement = r.CbAutoInc.Checked,
-                            AutoStep = (int)r.NumStep.Value
+                            AutoStep = (int)r.NumStep.Value,
+                            IsLocked = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && r.WasInputLocked),
+                            LockAfterInput = r.CmbLockMode.SelectedIndex == 2,
+                            LockedValue = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && r.WasInputLocked)
+                                ? r.TxtLockedValue.Text.Trim()
+                                : ""
                         });
             };
-            var cancel = new Button { Text = "取消", Location = new Point(465, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+            var cancel = new Button { Text = "取消", Location = new Point(735, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
 
-            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrDisplay, hdrAuto, hdrStep, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
+            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrDisplay, hdrAuto, hdrStep, hdrLock, hdrLockedValue, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
             AcceptButton = ok; CancelButton = cancel;
         }
 
-        private void CreateRow(string field, bool checkedVal, string displayName, bool autoInc, int autoStep)
+        private void CreateRow(string field, bool checkedVal, string displayName, bool autoInc, int autoStep,
+            bool isLocked, bool lockAfterInput, string lockedValue)
         {
-            var row = new DataSourceRow { Field = field };
+            var row = new DataSourceRow { Field = field, WasInputLocked = isLocked && lockAfterInput };
 
             row.RowPanel = new Panel
             {
-                Size = new Size(530, 28),
+                Size = new Size(800, 28),
                 AllowDrop = true,
                 Tag = _rows.Count,
                 BackColor = Color.Transparent
@@ -1190,7 +1328,31 @@ namespace BarTenderPrinter
 
             row.NumStep = new NumericUpDown { Location = new Point(370, 0), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = autoStep };
 
-            row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.TxtName, row.CbAutoInc, row.NumStep });
+            row.CmbLockMode = new ComboBox { Location = new Point(435, 0), Size = new Size(120, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            row.CmbLockMode.Items.AddRange(new object[] { "不锁定", "固定锁定", "输入后锁定" });
+            row.CmbLockMode.SelectedIndex = lockAfterInput ? 2 : isLocked ? 1 : 0;
+            row.TxtLockedValue = new TextBox { Location = new Point(565, 0), Size = new Size(220, 25), Text = lockedValue ?? "" };
+            row.TxtLockedValue.Enabled = row.CmbLockMode.SelectedIndex == 1;
+            row.CmbLockMode.SelectedIndexChanged += (s, e) =>
+            {
+                row.TxtLockedValue.Enabled = row.CmbLockMode.SelectedIndex == 1;
+                if (row.CmbLockMode.SelectedIndex == 0)
+                {
+                    row.WasInputLocked = false;
+                    row.TxtLockedValue.Text = "";
+                }
+                else if (row.CmbLockMode.SelectedIndex == 1)
+                {
+                    row.WasInputLocked = false;
+                }
+                else if (!lockAfterInput)
+                {
+                    row.WasInputLocked = false;
+                    row.TxtLockedValue.Text = "";
+                }
+            };
+
+            row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.TxtName, row.CbAutoInc, row.NumStep, row.CmbLockMode, row.TxtLockedValue });
             _scrollPanel.Controls.Add(row.RowPanel);
 
             _rows.Add(row);
@@ -1250,17 +1412,16 @@ namespace BarTenderPrinter
 
     public class DataSourceInputDialog : Form
     {
-        public Dictionary<string, string> Values { get; private set; }
-        private readonly List<DataSourceItem> _sources;
-        private readonly List<TextBox> _inputs = new List<TextBox>();
+        public string Value { get; private set; }
+        private readonly DataSourceItem _source;
+        private readonly TextBox _input;
 
-        public DataSourceInputDialog(List<DataSourceItem> sources, Dictionary<string, string> existingValues)
+        public DataSourceInputDialog(DataSourceItem source, string existingValue, int position, int total)
         {
-            _sources = sources;
-            Values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            Text = "输入数据源";
-            Size = new Size(500, Math.Min(650, 145 + sources.Count * 38));
-            MinimumSize = new Size(500, 240);
+            _source = source;
+            Value = existingValue ?? "";
+            Text = $"输入数据源 ({position}/{total})";
+            Size = new Size(500, 190);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false;
@@ -1268,106 +1429,82 @@ namespace BarTenderPrinter
 
             var title = new Label
             {
-                Text = $"请输入当前模板的 {sources.Count} 个数据源值：",
+                Text = $"请输入 {source.Name}：",
                 Location = new Point(12, 12),
                 Size = new Size(455, 22),
                 Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold)
             };
-            var panel = new Panel
+            var progress = new Label
             {
-                Location = new Point(12, 40),
-                Size = new Size(460, ClientSize.Height - 95),
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                AutoScroll = true,
-                BorderStyle = BorderStyle.FixedSingle
+                Text = $"当前第 {position} 项，共 {total} 项",
+                Location = new Point(12, 38),
+                Size = new Size(455, 18),
+                ForeColor = Color.Gray
             };
-
-            for (int i = 0; i < sources.Count; i++)
+            var label = new Label
             {
-                var source = sources[i];
-                var label = new Label
-                {
-                    Text = source.Name + "：",
-                    Location = new Point(8, 10 + i * 36),
-                    Size = new Size(120, 22),
-                    TextAlign = ContentAlignment.MiddleRight
-                };
-                var input = new TextBox
-                {
-                    Location = new Point(132, 8 + i * 36),
-                    Size = new Size(300, 25),
-                    Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-                    Tag = i,
-                    Text = existingValues != null && existingValues.TryGetValue(source.Field, out var value) ? value : ""
-                };
-                input.KeyDown += Input_KeyDown;
-                MiuiTheme.StyleLabel(label);
-                MiuiTheme.StyleTextBox(input);
-                panel.Controls.Add(label);
-                panel.Controls.Add(input);
-                _inputs.Add(input);
-            }
-            panel.AutoScrollMinSize = new Size(0, sources.Count * 36 + 12);
+                Text = source.Name + "：",
+                Location = new Point(12, 68),
+                Size = new Size(100, 22),
+                TextAlign = ContentAlignment.MiddleRight
+            };
+            _input = new TextBox
+            {
+                Location = new Point(118, 66),
+                Size = new Size(350, 25),
+                Text = existingValue ?? ""
+            };
+            _input.KeyDown += Input_KeyDown;
+            MiuiTheme.StyleLabel(label);
+            MiuiTheme.StyleTextBox(_input);
 
             var ok = new Button
             {
-                Text = "确定",
-                Location = new Point(312, ClientSize.Height - 42),
-                Size = new Size(75, 28),
-                Anchor = AnchorStyles.Bottom | AnchorStyles.Right
+                Text = position == total ? "完成并打印" : "下一项",
+                Location = new Point(288, 110),
+                Size = new Size(99, 28)
             };
             ok.Click += Confirm_Click;
             var cancel = new Button
             {
                 Text = "取消",
-                Location = new Point(397, ClientSize.Height - 42),
+                Location = new Point(397, 110),
                 Size = new Size(75, 28),
-                Anchor = AnchorStyles.Bottom | AnchorStyles.Right,
                 DialogResult = DialogResult.Cancel
             };
             MiuiTheme.StyleButton(ok, true);
             MiuiTheme.StyleButton(cancel);
 
             Controls.Add(title);
-            Controls.Add(panel);
+            Controls.Add(progress);
+            Controls.Add(label);
+            Controls.Add(_input);
             Controls.Add(ok);
             Controls.Add(cancel);
             AcceptButton = ok;
             CancelButton = cancel;
-            Shown += (s, e) => { if (_inputs.Count > 0) { _inputs[0].Focus(); _inputs[0].SelectAll(); } };
+            Shown += (s, e) => { _input.Focus(); _input.SelectAll(); };
         }
 
         private void Input_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode != Keys.Enter) return;
             e.SuppressKeyPress = true;
-            var index = (int)((TextBox)sender).Tag;
-            if (index + 1 < _inputs.Count)
-            {
-                _inputs[index + 1].Focus();
-                _inputs[index + 1].SelectAll();
-            }
-            else
-            {
-                ConfirmInputs();
-            }
+            ConfirmInput();
         }
 
-        private void Confirm_Click(object sender, EventArgs e) => ConfirmInputs();
+        private void Confirm_Click(object sender, EventArgs e) => ConfirmInput();
 
-        private void ConfirmInputs()
+        private void ConfirmInput()
         {
-            for (int i = 0; i < _sources.Count; i++)
+            var value = _input.Text.Trim();
+            if (string.IsNullOrEmpty(value))
             {
-                var value = _inputs[i].Text.Trim();
-                if (string.IsNullOrEmpty(value))
-                {
-                    MessageBox.Show(this, $"\"{_sources[i].Name}\" 不能为空", "数据源输入", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    _inputs[i].Focus();
-                    return;
-                }
-                Values[_sources[i].Field] = value;
+                MessageBox.Show(this, $"\"{_source.Name}\" 不能为空", "数据源输入", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _input.Focus();
+                return;
             }
+            Value = value;
             DialogResult = DialogResult.OK;
             Close();
         }
@@ -1433,5 +1570,9 @@ namespace BarTenderPrinter
         public bool Enabled { get; set; }
         public bool AutoIncrement { get; set; }
         public int AutoStep { get; set; } = 1; // +1 for increment, -1 for decrement
+        public bool IsLocked { get; set; }
+        public bool LockAfterInput { get; set; }
+        public string LockedValue { get; set; } = "";
+        public bool AutoIncrementLocked { get; set; }
     }
 }

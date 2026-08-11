@@ -6,16 +6,13 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>BarTenderPrinter</RootNamespace>
     <AssemblyName>BarTenderPrinter</AssemblyName>
-    <Version>5.7.18</Version>
+    <Version>5.7.19</Version>
     <ApplicationIcon>icon.ico</ApplicationIcon>
 
-    <!-- Self-contained single file -->
+    <!-- Self-contained installed application -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
-    <IncludeAllContentForSelfExtract>false</IncludeAllContentForSelfExtract>
+    <PublishSingleFile>false</PublishSingleFile>
 
     <!-- Optimizations -->
     <PublishTrimmed>false</PublishTrimmed>

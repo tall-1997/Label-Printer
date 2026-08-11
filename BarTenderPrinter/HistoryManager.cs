@@ -27,11 +27,8 @@ namespace BarTenderPrinter
 
         public HistoryManager()
         {
-            var appDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".bartender-printer");
-            Directory.CreateDirectory(appDir);
-            _recordsFile = Path.Combine(appDir, "print_records.csv");
+            AppPaths.Initialize();
+            _recordsFile = AppPaths.RecordsFile;
             Records = new List<PrintRecord>();
         }
 
@@ -59,6 +56,7 @@ namespace BarTenderPrinter
 
         public void Save()
         {
+            var tempFile = _recordsFile + ".tmp";
             try
             {
                 var sb = new StringBuilder();
@@ -67,11 +65,18 @@ namespace BarTenderPrinter
                 {
                     sb.AppendLine($"\"{r.Imei}\",\"{r.PrintTime}\",\"{r.Status}\"");
                 }
-                File.WriteAllText(_recordsFile, sb.ToString(), Encoding.UTF8);
+                File.WriteAllText(tempFile, sb.ToString(), Encoding.UTF8);
+                if (File.Exists(_recordsFile))
+                    File.Copy(_recordsFile, _recordsFile + ".bak", true);
+                File.Move(tempFile, _recordsFile, true);
             }
             catch (Exception ex)
             {
                 LoggerService.Error("保存历史记录失败", ex);
+            }
+            finally
+            {
+                try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
             }
         }
 

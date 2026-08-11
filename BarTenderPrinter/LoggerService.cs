@@ -5,15 +5,12 @@ namespace BarTenderPrinter
 {
     public static class LoggerService
     {
-        private static readonly string LogDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".bartender-printer");
-        private static readonly string LogFile = Path.Combine(LogDir, "bartender-printer.log");
+        private static readonly string LogFile = AppPaths.LogFile;
         private static readonly object Lock = new object();
 
         static LoggerService()
         {
-            Directory.CreateDirectory(LogDir);
+            AppPaths.Initialize();
         }
 
         public static void Info(string message)

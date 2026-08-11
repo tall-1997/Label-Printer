@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**[v5.7.18](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.18)** - C# WinForms 自包含版（推荐）
+**v5.7.19** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -57,13 +57,13 @@
 | 预览方式 | `ExportImageToClipboard` + `ExportImageToFile` |
 | 配置存储 | Windows INI 文件 |
 | 历史记录 | CSV 文件 |
-| 发布方式 | 自包含单文件（无需安装运行时） |
+| 发布方式 | Inno Setup 当前用户安装包（内置 .NET 运行时） |
 
 ## 界面布局
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender 标签打印工具 v5.7.18    [导出日志]  │
+│ BarTender 标签打印工具 v5.7.19    [导出日志]  │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -100,7 +100,7 @@
 
 - Windows 10/11 x64
 - BarTender 2022 R2 Enterprise（Automation/Enterprise Automation 版）
-- 无需安装 .NET 运行时（自包含）
+- 安装包内置 .NET 运行时
 
 ## 下载
 
@@ -108,7 +108,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
-| [v5.7.18](https://github.com/tall-1997/Label-Printer/releases/download/v5.7.18/BarTenderPrinter-v5.7.18-win-x64.exe) | ~155 MB | 自包含版，无需安装运行时 |
+| [v5.7.18](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.18) | ~155 MB | 历史自包含单文件版 |
 | [v2.6.5](https://github.com/tall-1997/Label-Printer/releases/download/v2.6.5/bartender-printer.exe) | 38 KB | Python 版（需 Python 环境） |
 
 ## 项目结构
@@ -143,6 +143,9 @@ BarTenderPrinter/BarTenderPrinter.csproj
 
 # 或使用 dotnet 命令行
 dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
+
+# 使用 Inno Setup 6 构建当前用户安装包
+iscc installer/BarTenderPrinter.iss
 ```
 
 ### Python 版

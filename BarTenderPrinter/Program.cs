@@ -8,6 +8,7 @@ namespace BarTenderPrinter
         [STAThread]
         static void Main()
         {
+            AppPaths.Initialize();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
