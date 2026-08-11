@@ -75,6 +75,7 @@ namespace BarTenderPrinter
                 for (int i = startIndex; i < lines.Length; i++)
                 {
                     var parts = ParseCsvLine(lines[i]);
+                    if (!_usesCurrentFormat && i == 0 && IsLegacyHeader(parts)) continue;
                     if (parts.Count >= 8)
                     {
                         var fields = DeserializeFields(parts[3]);
@@ -319,6 +320,14 @@ namespace BarTenderPrinter
         {
             if (record.FieldValues != null && record.FieldValues.Count > 0) return record.FieldValues.Values;
             return (record.Imei ?? "").Split('|');
+        }
+
+        private static bool IsLegacyHeader(List<string> parts)
+        {
+            if (parts == null || parts.Count < 3) return false;
+            return string.Equals(parts[0], "imei", StringComparison.OrdinalIgnoreCase) &&
+                   parts[1].IndexOf("time", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                   parts[2].IndexOf("status", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static string NormalizePath(string path)

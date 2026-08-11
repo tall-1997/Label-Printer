@@ -19,7 +19,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.25";
+        private readonly string _version = "v5.7.26";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -56,6 +56,7 @@ namespace BarTenderPrinter
             historyMenu.Items.Add("删除此条记录", null, DeleteSelectedHistoryRecord_Click);
             historyMenu.Opening += HistoryMenu_Opening;
             dgvHistory.ContextMenuStrip = historyMenu;
+            cmbPrinter.SelectedIndexChanged += (s, e) => SaveCurrentConfigurationState();
             _historySearchTimer.Tick += (s, e) => { _historySearchTimer.Stop(); LoadHistory(); };
         }
 
@@ -196,7 +197,7 @@ namespace BarTenderPrinter
             cmbTemplate.SelectedItem = match;
             _selectedTemplatePath = match.FullPath;
             lblSelectedTemplate.Text = match.Name;
-            SaveConfig();
+            SaveTemplateFolderConfig();
             AddLog($"已通过右键菜单打开模板: {match.Name}", "INFO");
         }
 
@@ -423,7 +424,11 @@ namespace BarTenderPrinter
                 var value = source.LockedValue ?? "";
                 if (values != null && values.TryGetValue(source.Field, out var currentValue)) value = currentValue;
                 value = value.Trim();
-                if (string.IsNullOrEmpty(value)) continue;
+                if (string.IsNullOrEmpty(value))
+                {
+                    MessageBox.Show(this, $"锁定数据源 \"{source.Name}\" 不能为空。请先输入或解除锁定。", "数据源锁定", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
 
                 var expectedLength = GetExpectedLength(source);
                 if (expectedLength > 0 && value.Length != expectedLength)
@@ -919,6 +924,7 @@ namespace BarTenderPrinter
             _localDataPath = path; _useLocalDataValidation = true; chkUseLocalData.Checked = true;
             UpdateLocalDataLabel($"已加载: {_localData.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})");
             AddLog($"加载 CSV: {_localData.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
+            SaveCurrentConfigurationState();
         }
 
         private void LoadExcelData(string path)
@@ -995,6 +1001,7 @@ namespace BarTenderPrinter
                             UpdateLocalDataLabel($"已加载: {data.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})");
                             AddLog($"加载 Excel: {data.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
                             SetStatus("就绪");
+                            SaveCurrentConfigurationState();
                         }));
                     }
                     finally
@@ -1019,6 +1026,7 @@ namespace BarTenderPrinter
             _localDataPath = path; _useLocalDataValidation = true; chkUseLocalData.Checked = true;
             UpdateLocalDataLabel($"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})");
             AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
+            SaveCurrentConfigurationState();
         }
 
         private int PromptForColumnSelection(List<string> columns, string fileName)
@@ -1061,7 +1069,7 @@ namespace BarTenderPrinter
         private void chkUseLocalData_CheckedChanged(object sender, EventArgs e)
         {
             _useLocalDataValidation = chkUseLocalData.Checked;
-            if (!_isInitializing) SaveConfig();
+            if (!_isInitializing) SaveCurrentConfigurationState();
         }
 
         private void chkLengthValidation_CheckedChanged(object sender, EventArgs e)
@@ -1071,7 +1079,7 @@ namespace BarTenderPrinter
             if (_isInitializing || _isLoadingConfig) return;
             if (!chkLengthValidation.Checked)
             {
-                SaveConfig();
+                SaveCurrentConfigurationState();
                 return;
             }
             if (_globalExpectedLength == 0 && !PromptForGlobalLength())
@@ -1079,17 +1087,17 @@ namespace BarTenderPrinter
                 chkLengthValidation.Checked = false;
                 return;
             }
-            SaveConfig();
+            SaveCurrentConfigurationState();
         }
 
         private void btnGlobalLength_Click(object sender, EventArgs e)
         {
-            if (PromptForGlobalLength()) SaveConfig();
+            if (PromptForGlobalLength()) SaveCurrentConfigurationState();
         }
 
         private void numCopies_ValueChanged(object sender, EventArgs e)
         {
-            if (!_isInitializing && !_isLoadingConfig) SaveConfig();
+            if (!_isInitializing && !_isLoadingConfig) SaveCurrentConfigurationState();
         }
 
         private bool PromptForGlobalLength()
@@ -1278,10 +1286,13 @@ namespace BarTenderPrinter
 
                         for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
                         {
-                            if (enabled[i].LockAfterInput && !enabled[i].IsLocked)
+                            if (enabled[i].LockAfterInput && !IsInputLocked(enabled[i]))
                             {
-                                enabled[i].IsLocked = true;
                                 enabled[i].LockedValue = _inputTextBoxes[i].Text.Trim();
+                                if (enabled[i].AutoIncrement)
+                                    enabled[i].AutoIncrementLocked = true;
+                                else
+                                    enabled[i].IsLocked = true;
                             }
                         }
 
@@ -1360,6 +1371,8 @@ namespace BarTenderPrinter
         private void btnClearSearch_Click(object sender, EventArgs e) { txtSearch.Text = ""; }
         private void btnClearHistory_Click(object sender, EventArgs e)
         {
+            if (string.IsNullOrEmpty(_selectedTemplatePath))
+            { MessageBox.Show(this, "请先选择模板"); return; }
             if (MessageBox.Show(this, "确定清空当前模板的全部记录？", "确认", MessageBoxButtons.YesNo) == DialogResult.Yes)
             { _history.Clear(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath); LoadHistory(); RefreshStats(); }
         }
@@ -1633,16 +1646,26 @@ namespace BarTenderPrinter
             }
             dgvHistory.ClearSelection();
             dgvHistory.Rows[e.RowIndex].Selected = true;
-            dgvHistory.CurrentCell = dgvHistory.Rows[e.RowIndex].Cells[Math.Max(0, e.ColumnIndex)];
+            var columnIndex = e.ColumnIndex >= 0 && dgvHistory.Columns[e.ColumnIndex].Visible ? e.ColumnIndex : GetFirstVisibleHistoryColumnIndex();
+            if (columnIndex >= 0) dgvHistory.CurrentCell = dgvHistory.Rows[e.RowIndex].Cells[columnIndex];
         }
 
         private void HistoryMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
         {
-            if (dgvHistory.HitTest(dgvHistory.PointToClient(Cursor.Position).X, dgvHistory.PointToClient(Cursor.Position).Y).RowIndex < 0)
+            var point = dgvHistory.PointToClient(Cursor.Position);
+            var hit = dgvHistory.HitTest(point.X, point.Y);
+            if (hit.RowIndex < 0)
             {
                 dgvHistory.ClearSelection();
                 e.Cancel = true;
             }
+        }
+
+        private int GetFirstVisibleHistoryColumnIndex()
+        {
+            foreach (DataGridViewColumn column in dgvHistory.Columns)
+                if (column.Visible) return column.Index;
+            return -1;
         }
 
         private void DeleteSelectedHistoryRecord_Click(object sender, EventArgs e)
@@ -1661,6 +1684,10 @@ namespace BarTenderPrinter
                 AddLog("已删除单条历史记录", "INFO");
                 LoadHistory();
                 RefreshStats();
+            }
+            else
+            {
+                MessageBox.Show(this, "该历史记录已不存在，请刷新后重试。", "删除历史记录", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
@@ -1801,6 +1828,20 @@ namespace BarTenderPrinter
                 IniWriteValue($"DS{i}", "ExpectedLength", _dataSources[i].ExpectedLength.ToString(), _configFile);
                 IniWriteValue($"DS{i}", "LengthRevision", _dataSources[i].LengthRevision.ToString(), _configFile);
             }
+        }
+
+        private void SaveCurrentConfigurationState()
+        {
+            if (_isInitializing || _isLoadingConfig) return;
+            SaveConfig();
+            SaveCurrentTemplateSettings();
+        }
+
+        private void SaveTemplateFolderConfig()
+        {
+            var dir = Path.GetDirectoryName(_configFile);
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            IniWriteValue("General", "TemplatesFolder", _templatesFolder ?? "", _configFile);
         }
 
         private void LoadConfig(string path)
@@ -2002,6 +2043,13 @@ namespace BarTenderPrinter
             {
                 SelectedSources = new List<DataSourceItem>();
                 var lockWithoutIncrement = _rows.Any(r => r.CbEnabled.Checked && r.CmbLockMode.SelectedIndex != 0 && !r.CbAutoInc.Checked);
+                var zeroStepAutoIncrement = _rows.Any(r => r.CbEnabled.Checked && r.CbAutoInc.Checked && r.NumStep.Value == 0);
+                if (zeroStepAutoIncrement)
+                {
+                    MessageBox.Show(this, "启用增降序的数据源步长不能为 0。", "数据源配置", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    DialogResult = DialogResult.None;
+                    return;
+                }
                 if (lockWithoutIncrement && MessageBox.Show(this,
                     "存在已开启锁定且未启用增降序的数据源，确定按固定锁定保存吗？",
                     "确认固定锁定", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
@@ -2077,7 +2125,7 @@ namespace BarTenderPrinter
 
             row.CbAutoInc = new CheckBox { Location = new Point(255, 2), Size = new Size(20, 20), Checked = autoInc };
 
-            row.NumStep = new NumericUpDown { Location = new Point(295, 0), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = autoStep };
+            row.NumStep = new NumericUpDown { Location = new Point(295, 0), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = Math.Max(-99, Math.Min(99, autoStep)) };
 
             row.CmbLockMode = new ComboBox { Location = new Point(375, 0), Size = new Size(120, 25), DropDownStyle = ComboBoxStyle.DropDownList };
             row.CmbLockMode.Items.AddRange(new object[] { "不锁定", "固定锁定", "输入后锁定" });
