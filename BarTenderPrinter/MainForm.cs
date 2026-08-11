@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -17,7 +18,7 @@ namespace BarTenderPrinter
         private readonly TemplateSettingsManager _templateSettings = new TemplateSettingsManager();
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _configFile;
-        private readonly string _version = "v5.7.22";
+        private readonly string _version = "v5.7.23";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -230,7 +231,7 @@ namespace BarTenderPrinter
                     if (!string.Equals(path, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)) return;
                     if (names.Count == 0) return;
                     var previousSources = _dataSources.ToList();
-                    var dlg = new DataSourceSelectDialog(names, _dataSources, _hasSavedDataSourceOrder);
+                    var dlg = new DataSourceSelectDialog(names, _dataSources, _hasSavedDataSourceOrder, _lengthValidationEnabled, _globalExpectedLength);
                     if (dlg.ShowDialog(this) == DialogResult.OK)
                     {
                         _dataSources = dlg.SelectedSources;
@@ -293,7 +294,7 @@ namespace BarTenderPrinter
                 else fields = new List<string> { "IMEI1" };
             }
             var previousSources = _dataSources.ToList();
-            var dlg = new DataSourceSelectDialog(fields, _dataSources);
+            var dlg = new DataSourceSelectDialog(fields, _dataSources, true, _lengthValidationEnabled, _globalExpectedLength);
             if (dlg.ShowDialog(this) == DialogResult.OK)
             {
                 _dataSources = dlg.SelectedSources;
@@ -449,13 +450,14 @@ namespace BarTenderPrinter
 
                 var lockButton = new Button
                 {
-                    Location = new Point(26, 1),
+                    Location = new Point(rowPanel.Width - 28, 1),
                     Size = new Size(24, 24),
+                    Anchor = AnchorStyles.Top | AnchorStyles.Right,
                     Tag = i,
                     FlatStyle = FlatStyle.Flat,
                     Cursor = Cursors.Hand,
                     BackColor = Color.Transparent,
-                    AccessibleName = enabled[i].IsLocked ? "解除锁定" : "锁定"
+                    AccessibleName = IsInputLocked(enabled[i]) ? "解除锁定" : "锁定"
                 };
                 lockButton.FlatAppearance.BorderSize = 0;
                 lockButton.Paint += LockButton_Paint;
@@ -464,7 +466,7 @@ namespace BarTenderPrinter
                 var txt = new TextBox
                 {
                     Location = new Point(130, 0),
-                    Size = new Size(rowPanel.Width - 136, 25),
+                    Size = new Size(rowPanel.Width - 164, 25),
                     Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                     Tag = i,
                     Text = enabled[i].IsLocked || enabled[i].AutoIncrementLocked ? enabled[i].LockedValue ?? "" : "",
@@ -505,8 +507,12 @@ namespace BarTenderPrinter
             int w = inputPanel.ClientSize.Width;
             for (int i = 0; i < _rowPanels.Length; i++)
             {
-                if (_rowPanels[i] != null)
-                    _rowPanels[i].Width = w;
+                if (_rowPanels[i] == null) continue;
+                _rowPanels[i].Width = w;
+                if (i < _inputTextBoxes.Length && _inputTextBoxes[i] != null)
+                    _inputTextBoxes[i].Width = Math.Max(80, w - 164);
+                if (i < _lockButtons.Length && _lockButtons[i] != null)
+                    _lockButtons[i].Left = w - 28;
             }
         }
 
@@ -517,15 +523,19 @@ namespace BarTenderPrinter
             var index = (int)button.Tag;
             if (index < 0 || index >= enabled.Count) return;
 
-            var color = enabled[index].IsLocked ? Color.FromArgb(90, 90, 90) : Color.FromArgb(150, 150, 150);
-            using (var pen = new Pen(color, 2F))
+            var isLocked = IsInputLocked(enabled[index]);
+            var color = isLocked ? Color.FromArgb(45, 105, 210) : Color.FromArgb(150, 150, 150);
+            using (var pen = new Pen(color, 1.8F) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             using (var brush = new SolidBrush(color))
             {
-                var shackleX = enabled[index].IsLocked ? 7 : 10;
-                e.Graphics.DrawArc(pen, shackleX, 4, 10, 11, 180, -180);
-                if (!enabled[index].IsLocked)
-                    e.Graphics.DrawLine(pen, 10, 9, 10, 12);
-                e.Graphics.FillRectangle(brush, 6, 11, 13, 9);
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                // Based on Heroicons MIT lock-open/lock-closed outline SVGs, redrawn to avoid bundled image files.
+                DrawRoundedRectangle(e.Graphics, pen, new RectangleF(5.5F, 10.5F, 13F, 10F), 2.2F);
+                if (isLocked)
+                    e.Graphics.DrawArc(pen, 7F, 3.5F, 10F, 11F, 180F, 180F);
+                else
+                    e.Graphics.DrawArc(pen, 10F, 3.5F, 10F, 11F, 190F, 230F);
+                e.Graphics.FillEllipse(brush, 11F, 14F, 2.5F, 2.5F);
             }
         }
 
@@ -537,17 +547,55 @@ namespace BarTenderPrinter
             if (index < 0 || index >= enabled.Count || index >= _inputTextBoxes.Length) return;
 
             var source = enabled[index];
-            source.IsLocked = !source.IsLocked;
-            source.LockAfterInput = false;
-            source.LockedValue = source.IsLocked ? _inputTextBoxes[index].Text.Trim() : "";
-            var readOnly = source.IsLocked || source.AutoIncrementLocked;
+            if (IsInputLocked(source))
+            {
+                source.IsLocked = false;
+                source.AutoIncrementLocked = false;
+                source.LockAfterInput = false;
+                source.LockedValue = "";
+            }
+            else
+            {
+                var value = _inputTextBoxes[index].Text.Trim();
+                if (string.IsNullOrEmpty(value))
+                { MessageBox.Show(this, $"请先输入 {source.Name} 后再锁定。", "锁定数据源", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                source.LockedValue = value;
+                source.LockAfterInput = false;
+                if (source.AutoIncrement)
+                {
+                    source.IsLocked = false;
+                    source.AutoIncrementLocked = true;
+                }
+                else
+                {
+                    source.IsLocked = true;
+                    source.AutoIncrementLocked = false;
+                }
+            }
+            var readOnly = IsInputLocked(source);
             _inputTextBoxes[index].ReadOnly = readOnly;
             _inputTextBoxes[index].BackColor = readOnly ? SystemColors.Control : MiuiTheme.InputBackground;
-            button.AccessibleName = source.IsLocked ? "解除锁定" : "锁定";
+            button.AccessibleName = readOnly ? "解除锁定" : "锁定";
             button.Invalidate();
             SaveConfig();
             SaveCurrentTemplateSettings();
-            AddLog($"数据源 {source.Name} 已{(source.IsLocked ? "锁定" : "解除锁定")}", "INFO");
+            AddLog($"数据源 {source.Name} 已{(readOnly ? "锁定" : "解除锁定")}", "INFO");
+        }
+
+        private static bool IsInputLocked(DataSourceItem source) => source != null && (source.IsLocked || source.AutoIncrementLocked);
+
+        private static void DrawRoundedRectangle(Graphics graphics, Pen pen, RectangleF bounds, float radius)
+        {
+            using (var path = new GraphicsPath())
+            {
+                var diameter = radius * 2F;
+                path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180F, 90F);
+                path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270F, 90F);
+                path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0F, 90F);
+                path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90F, 90F);
+                path.CloseFigure();
+                graphics.DrawPath(pen, path);
+            }
         }
 
         private void Grip_MouseDown(object sender, MouseEventArgs e)
@@ -1045,9 +1093,9 @@ namespace BarTenderPrinter
         private int GetExpectedLength(DataSourceItem source)
         {
             if (!_lengthValidationEnabled) return 0;
-            if (source.ExpectedLength > 0 && source.LengthRevision > _globalLengthRevision)
+            if (source.ExpectedLength > 0)
                 return source.ExpectedLength;
-            return _globalExpectedLength > 0 ? _globalExpectedLength : source.ExpectedLength;
+            return _globalExpectedLength;
         }
 
         private string GetDuplicateValidationMessage(DataSourceItem source, string value, HashSet<string> acceptedValues)
@@ -1799,20 +1847,27 @@ namespace BarTenderPrinter
             public string Field;
             public Panel RowPanel;
             public CheckBox CbEnabled;
-            public TextBox TxtName;
+            public Label LblField;
             public CheckBox CbAutoInc;
             public NumericUpDown NumStep;
             public ComboBox CmbLockMode;
             public TextBox TxtLockedValue;
             public NumericUpDown NumExpectedLength;
             public bool LengthEdited;
+            public int InitialExpectedLength;
             public bool WasInputLocked;
             public bool AutoIncrementLocked;
             public Label Grip;
         }
 
-        public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current, bool preserveExistingOrder = true)
+        private readonly bool _lengthValidationEnabled;
+        private readonly int _globalExpectedLength;
+
+        public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current, bool preserveExistingOrder = true,
+            bool lengthValidationEnabled = false, int globalExpectedLength = 0)
         {
+            _lengthValidationEnabled = lengthValidationEnabled;
+            _globalExpectedLength = globalExpectedLength;
             Text = "选择数据源 - 拖拽排序"; Size = new Size(980, 460);
             FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false;
@@ -1823,13 +1878,12 @@ namespace BarTenderPrinter
             chkSelectAll.CheckedChanged += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = chkSelectAll.Checked; };
 
             var hdrGrip = new Label { Text = "排序", Location = new Point(15, 55), Size = new Size(22, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrName = new Label { Text = "字段名", Location = new Point(40, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrDisplay = new Label { Text = "显示名称", Location = new Point(155, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrAuto = new Label { Text = "增序", Location = new Point(340, 55), Size = new Size(30, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrStep = new Label { Text = "步长", Location = new Point(380, 55), Size = new Size(60, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrLock = new Label { Text = "锁定方式", Location = new Point(440, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrLockedValue = new Label { Text = "锁定值（可空）", Location = new Point(565, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrLength = new Label { Text = "单项长度", Location = new Point(795, 55), Size = new Size(70, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrName = new Label { Text = "字段名", Location = new Point(40, 55), Size = new Size(180, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrAuto = new Label { Text = "增序", Location = new Point(255, 55), Size = new Size(30, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrStep = new Label { Text = "步长", Location = new Point(300, 55), Size = new Size(60, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrLock = new Label { Text = "锁定方式", Location = new Point(380, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrLockedValue = new Label { Text = "锁定值（可空）", Location = new Point(505, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrLength = new Label { Text = "长度", Location = new Point(795, 55), Size = new Size(70, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
 
             _scrollPanel = new Panel { Location = new Point(10, 75), Size = new Size(940, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
 
@@ -1859,7 +1913,7 @@ namespace BarTenderPrinter
 
             RelayoutRows();
 
-            var infoLbl = new Label { Text = "拖拽 ≡ 可调整排序；单项长度 0 表示引用当前全局长度规则", Location = new Point(10, 340), Size = new Size(500, 16), ForeColor = Color.Gray };
+            var infoLbl = new Label { Text = "拖拽整行或 ≡ 可调整排序；长度显示全局值，改动后按单项长度保存", Location = new Point(10, 340), Size = new Size(620, 16), ForeColor = Color.Gray };
 
             var btnSelectAll = new Button { Text = "全选", Location = new Point(10, 365), Size = new Size(50, 25) };
             btnSelectAll.Click += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = true; };
@@ -1870,11 +1924,19 @@ namespace BarTenderPrinter
             ok.Click += (s, e) =>
             {
                 SelectedSources = new List<DataSourceItem>();
+                var lockWithoutIncrement = _rows.Any(r => r.CbEnabled.Checked && r.CmbLockMode.SelectedIndex != 0 && !r.CbAutoInc.Checked);
+                if (lockWithoutIncrement && MessageBox.Show(this,
+                    "存在已开启锁定且未启用增降序的数据源，确定按固定锁定保存吗？",
+                    "确认固定锁定", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                {
+                    DialogResult = DialogResult.None;
+                    return;
+                }
                 foreach (var r in _rows)
                     if (r.CbEnabled.Checked)
                         SelectedSources.Add(new DataSourceItem
                         {
-                            Name = r.TxtName.Text?.Trim() ?? r.Field,
+                            Name = r.Field,
                             Field = r.Field,
                             Enabled = true,
                             AutoIncrement = r.CbAutoInc.Checked,
@@ -1885,20 +1947,27 @@ namespace BarTenderPrinter
                                 ? r.TxtLockedValue.Text.Trim()
                                 : "",
                             AutoIncrementLocked = r.CbAutoInc.Checked && r.AutoIncrementLocked,
-                            ExpectedLength = (int)r.NumExpectedLength.Value,
+                            ExpectedLength = r.LengthEdited ? (int)r.NumExpectedLength.Value : r.InitialExpectedLength,
                             LengthEdited = r.LengthEdited
                         });
             };
             var cancel = new Button { Text = "取消", Location = new Point(865, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
 
-            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrDisplay, hdrAuto, hdrStep, hdrLock, hdrLockedValue, hdrLength, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
+            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrAuto, hdrStep, hdrLock, hdrLockedValue, hdrLength, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
             AcceptButton = ok; CancelButton = cancel;
         }
 
         private void CreateRow(string field, bool checkedVal, string displayName, bool autoInc, int autoStep,
             bool isLocked, bool lockAfterInput, string lockedValue, bool autoIncrementLocked, int expectedLength)
         {
-            var row = new DataSourceRow { Field = field, WasInputLocked = isLocked && lockAfterInput, AutoIncrementLocked = autoIncrementLocked };
+            var displayLength = expectedLength > 0 ? expectedLength : (_lengthValidationEnabled ? _globalExpectedLength : 0);
+            var row = new DataSourceRow
+            {
+                Field = field,
+                InitialExpectedLength = expectedLength,
+                WasInputLocked = isLocked && lockAfterInput,
+                AutoIncrementLocked = autoIncrementLocked
+            };
 
             row.RowPanel = new Panel
             {
@@ -1910,6 +1979,7 @@ namespace BarTenderPrinter
             row.RowPanel.DragEnter += Row_DragEnter;
             row.RowPanel.DragOver += Row_DragOver;
             row.RowPanel.DragDrop += Row_DragDrop;
+            row.RowPanel.MouseDown += Row_MouseDown;
 
             row.Grip = new Label
             {
@@ -1923,19 +1993,20 @@ namespace BarTenderPrinter
             };
             row.Grip.MouseDown += Grip_MouseDown;
 
-            row.CbEnabled = new CheckBox { Text = field, Location = new Point(25, 2), Size = new Size(115, 20), Checked = checkedVal };
+            row.CbEnabled = new CheckBox { Location = new Point(25, 2), Size = new Size(20, 20), Checked = checkedVal };
 
-            row.TxtName = new TextBox { Location = new Point(145, 0), Size = new Size(185, 25), Text = displayName };
+            row.LblField = new Label { Text = field, Location = new Point(50, 4), Size = new Size(190, 18), Cursor = Cursors.SizeAll };
+            row.LblField.MouseDown += Row_MouseDown;
 
-            row.CbAutoInc = new CheckBox { Location = new Point(340, 2), Size = new Size(20, 20), Checked = autoInc };
+            row.CbAutoInc = new CheckBox { Location = new Point(255, 2), Size = new Size(20, 20), Checked = autoInc };
 
-            row.NumStep = new NumericUpDown { Location = new Point(370, 0), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = autoStep };
+            row.NumStep = new NumericUpDown { Location = new Point(295, 0), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = autoStep };
 
-            row.CmbLockMode = new ComboBox { Location = new Point(435, 0), Size = new Size(120, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            row.CmbLockMode = new ComboBox { Location = new Point(375, 0), Size = new Size(120, 25), DropDownStyle = ComboBoxStyle.DropDownList };
             row.CmbLockMode.Items.AddRange(new object[] { "不锁定", "固定锁定", "输入后锁定" });
             row.CmbLockMode.SelectedIndex = lockAfterInput ? 2 : isLocked ? 1 : 0;
-            row.TxtLockedValue = new TextBox { Location = new Point(565, 0), Size = new Size(220, 25), Text = lockedValue ?? "" };
-            row.NumExpectedLength = new NumericUpDown { Location = new Point(795, 0), Size = new Size(70, 25), Minimum = 0, Maximum = 512, Value = Math.Max(0, Math.Min(512, expectedLength)) };
+            row.TxtLockedValue = new TextBox { Location = new Point(505, 0), Size = new Size(250, 25), Text = lockedValue ?? "" };
+            row.NumExpectedLength = new NumericUpDown { Location = new Point(795, 0), Size = new Size(70, 25), Minimum = 0, Maximum = 512, Value = Math.Max(0, Math.Min(512, displayLength)) };
             row.NumExpectedLength.ValueChanged += (s, e) => row.LengthEdited = true;
             row.TxtLockedValue.Enabled = row.CmbLockMode.SelectedIndex == 1;
             row.CmbLockMode.SelectedIndexChanged += (s, e) =>
@@ -1957,7 +2028,7 @@ namespace BarTenderPrinter
                 }
             };
 
-            row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.TxtName, row.CbAutoInc, row.NumStep, row.CmbLockMode, row.TxtLockedValue, row.NumExpectedLength });
+            row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.LblField, row.CbAutoInc, row.NumStep, row.CmbLockMode, row.TxtLockedValue, row.NumExpectedLength });
             _scrollPanel.Controls.Add(row.RowPanel);
 
             _rows.Add(row);
@@ -1980,6 +2051,15 @@ namespace BarTenderPrinter
             var grip = (Label)sender;
             var rowIdx = (int)grip.Tag;
             grip.DoDragDrop(rowIdx, DragDropEffects.Move);
+        }
+
+        private void Row_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            var control = sender as Control;
+            var panel = control as Panel ?? control?.Parent as Panel;
+            if (panel?.Tag is int rowIdx)
+                panel.DoDragDrop(rowIdx, DragDropEffects.Move);
         }
 
         private void Row_DragEnter(object sender, DragEventArgs e)
