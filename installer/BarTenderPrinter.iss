@@ -1,7 +1,7 @@
 #define MyAppName "BarTender 标签打印工具"
 #define MyAppPublisher "tall-1997"
 #define MyAppExeName "BarTenderPrinter.exe"
-#define MyAppVersion GetFileVersion("..\publish\BarTenderPrinter.exe")
+#define MyAppVersion GetVersionNumbersString("..\publish\BarTenderPrinter.exe")
 
 [Setup]
 AppId={{AA293069-3471-49F7-A52A-7976253617BC}
@@ -25,7 +25,7 @@ CloseApplications=yes
 RestartApplications=no
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："; Flags: unchecked
