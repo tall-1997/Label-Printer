@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.17";
+        private readonly string _version = "v5.7.18";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -27,6 +27,7 @@ namespace BarTenderPrinter
         private bool _useLocalDataValidation = false;
         private bool _allowDuplicatePrint = false;
         private bool _isInitializing = true;
+        private bool _hasSavedDataSourceOrder;
 
         public MainForm()
         {
@@ -214,12 +215,15 @@ namespace BarTenderPrinter
                 BeginInvoke((Action)(() =>
                 {
                     if (names.Count == 0) return;
-                    var dlg = new DataSourceSelectDialog(names, _dataSources);
+                    var existingValues = GetCurrentInputValues();
+                    var dlg = new DataSourceSelectDialog(names, _dataSources, _hasSavedDataSourceOrder);
                     if (dlg.ShowDialog(this) == DialogResult.OK)
                     {
                         _dataSources = dlg.SelectedSources;
+                        _hasSavedDataSourceOrder = true;
                         RebuildInputFields();
                         AddLog($"已加载 {names.Count} 个数据源，选择了 {_dataSources.Count} 个", "SUCCESS");
+                        ShowDataSourceInputDialog(existingValues);
                     }
                 }));
             });
@@ -248,7 +252,12 @@ namespace BarTenderPrinter
                 else fields = new List<string> { "IMEI1" };
             }
             var dlg = new DataSourceSelectDialog(fields, _dataSources);
-            if (dlg.ShowDialog(this) == DialogResult.OK) { _dataSources = dlg.SelectedSources; RebuildInputFields(); }
+            if (dlg.ShowDialog(this) == DialogResult.OK)
+            {
+                _dataSources = dlg.SelectedSources;
+                _hasSavedDataSourceOrder = true;
+                RebuildInputFields();
+            }
         }
 
         private List<string> PromptForManualDataSources()
@@ -274,6 +283,28 @@ namespace BarTenderPrinter
         #endregion
 
         #region Dynamic Input Fields
+
+        private Dictionary<string, string> GetCurrentInputValues()
+        {
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var enabled = _dataSources.Where(d => d.Enabled).ToList();
+            for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
+                values[enabled[i].Field] = _inputTextBoxes[i]?.Text ?? "";
+            return values;
+        }
+
+        private void ShowDataSourceInputDialog(Dictionary<string, string> existingValues)
+        {
+            var enabled = _dataSources.Where(d => d.Enabled).ToList();
+            if (enabled.Count == 0) return;
+
+            using (var dlg = new DataSourceInputDialog(enabled, existingValues))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
+                    _inputTextBoxes[i].Text = dlg.Values[enabled[i].Field];
+            }
+        }
 
         private void RebuildInputFields()
         {
@@ -786,15 +817,29 @@ namespace BarTenderPrinter
             if (enabled.Count == 0) { MessageBox.Show(this, "请配置数据源"); return; }
 
             var fieldValues = new Dictionary<string, string>();
+            var currentValues = new Dictionary<string, DataSourceItem>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < enabled.Count; i++)
             {
                 var val = _inputTextBoxes[i]?.Text?.Trim() ?? "";
                 if (string.IsNullOrEmpty(val))
                 { MessageBox.Show(this, $"\"{enabled[i].Name}\" 不能为空"); _inputTextBoxes[i]?.Focus(); return; }
+
+                if (currentValues.TryGetValue(val, out var previousSource))
+                {
+                    MessageBox.Show(this,
+                        $"\"{enabled[i].Name}\" 与前面的 \"{previousSource.Name}\" 输入重复：{val}",
+                        "当前输入重复", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    _inputTextBoxes[i]?.Focus();
+                    _inputTextBoxes[i]?.SelectAll();
+                    AddLog($"当前输入重复: {enabled[i].Field} 与 {previousSource.Field} = {val}", "WARNING");
+                    return;
+                }
+
+                currentValues[val] = enabled[i];
                 fieldValues[enabled[i].Field] = val;
             }
 
-            // Duplicate check - check each field against all records
+            // Historical duplicate check - check each field against all records
             if (!_allowDuplicatePrint)
             {
                 var duplicates = new List<string>();
@@ -962,6 +1007,7 @@ namespace BarTenderPrinter
             txtTemplateDir.Text = _templatesFolder;
             var copies = 1; int.TryParse(IniReadValue("General", "Copies", path), out copies); numCopies.Value = Math.Max(1, Math.Min(99, copies));
             int.TryParse(IniReadValue("General", "DSCount", path), out int count);
+            _hasSavedDataSourceOrder = count > 0;
             _dataSources = new List<DataSourceItem>();
             for (int i = 0; i < count; i++)
             {
@@ -1038,7 +1084,7 @@ namespace BarTenderPrinter
             public Label Grip;
         }
 
-        public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current)
+        public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current, bool preserveExistingOrder = true)
         {
             Text = "选择数据源 - 拖拽排序"; Size = new Size(570, 460);
             FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
@@ -1057,19 +1103,25 @@ namespace BarTenderPrinter
 
             _scrollPanel = new Panel { Location = new Point(10, 75), Size = new Size(540, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
 
+            var fieldSet = new HashSet<string>(fields, StringComparer.OrdinalIgnoreCase);
             var orderedFields = new List<string>();
-            foreach (var c in current)
-                if (fields.Contains(c.Field))
-                    orderedFields.Add(c.Field);
-            foreach (var f in fields)
-                if (!orderedFields.Contains(f))
+            if (preserveExistingOrder)
+            {
+                foreach (var c in current)
+                    if (fieldSet.Contains(c.Field) && !orderedFields.Contains(c.Field, StringComparer.OrdinalIgnoreCase))
+                        orderedFields.Add(c.Field);
+            }
+            foreach (var f in fields
+                .Where(f => !orderedFields.Contains(f, StringComparer.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(f => f, NaturalStringComparer.Instance))
                     orderedFields.Add(f);
 
             for (int i = 0; i < orderedFields.Count; i++)
             {
                 var field = orderedFields[i];
-                var existing = current.FirstOrDefault(d => d.Field == field);
-                bool isChecked = existing != null ? existing.Enabled : (current.Count == 0 ? true : false);
+                var existing = current.FirstOrDefault(d => string.Equals(d.Field, field, StringComparison.OrdinalIgnoreCase));
+                bool isChecked = existing != null ? existing.Enabled : (!preserveExistingOrder || current.Count == 0);
                 CreateRow(field, isChecked, existing?.Name ?? field, existing?.AutoIncrement ?? false, existing?.AutoStep ?? 1);
             }
 
@@ -1193,6 +1245,184 @@ namespace BarTenderPrinter
                 _scrollPanel.Controls.Add(r.RowPanel);
 
             RelayoutRows();
+        }
+    }
+
+    public class DataSourceInputDialog : Form
+    {
+        public Dictionary<string, string> Values { get; private set; }
+        private readonly List<DataSourceItem> _sources;
+        private readonly List<TextBox> _inputs = new List<TextBox>();
+
+        public DataSourceInputDialog(List<DataSourceItem> sources, Dictionary<string, string> existingValues)
+        {
+            _sources = sources;
+            Values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            Text = "输入数据源";
+            Size = new Size(500, Math.Min(650, 145 + sources.Count * 38));
+            MinimumSize = new Size(500, 240);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            MaximizeBox = false;
+            MinimizeBox = false;
+
+            var title = new Label
+            {
+                Text = $"请输入当前模板的 {sources.Count} 个数据源值：",
+                Location = new Point(12, 12),
+                Size = new Size(455, 22),
+                Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold)
+            };
+            var panel = new Panel
+            {
+                Location = new Point(12, 40),
+                Size = new Size(460, ClientSize.Height - 95),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                AutoScroll = true,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+
+            for (int i = 0; i < sources.Count; i++)
+            {
+                var source = sources[i];
+                var label = new Label
+                {
+                    Text = source.Name + "：",
+                    Location = new Point(8, 10 + i * 36),
+                    Size = new Size(120, 22),
+                    TextAlign = ContentAlignment.MiddleRight
+                };
+                var input = new TextBox
+                {
+                    Location = new Point(132, 8 + i * 36),
+                    Size = new Size(300, 25),
+                    Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                    Tag = i,
+                    Text = existingValues != null && existingValues.TryGetValue(source.Field, out var value) ? value : ""
+                };
+                input.KeyDown += Input_KeyDown;
+                MiuiTheme.StyleLabel(label);
+                MiuiTheme.StyleTextBox(input);
+                panel.Controls.Add(label);
+                panel.Controls.Add(input);
+                _inputs.Add(input);
+            }
+            panel.AutoScrollMinSize = new Size(0, sources.Count * 36 + 12);
+
+            var ok = new Button
+            {
+                Text = "确定",
+                Location = new Point(312, ClientSize.Height - 42),
+                Size = new Size(75, 28),
+                Anchor = AnchorStyles.Bottom | AnchorStyles.Right
+            };
+            ok.Click += Confirm_Click;
+            var cancel = new Button
+            {
+                Text = "取消",
+                Location = new Point(397, ClientSize.Height - 42),
+                Size = new Size(75, 28),
+                Anchor = AnchorStyles.Bottom | AnchorStyles.Right,
+                DialogResult = DialogResult.Cancel
+            };
+            MiuiTheme.StyleButton(ok, true);
+            MiuiTheme.StyleButton(cancel);
+
+            Controls.Add(title);
+            Controls.Add(panel);
+            Controls.Add(ok);
+            Controls.Add(cancel);
+            AcceptButton = ok;
+            CancelButton = cancel;
+            Shown += (s, e) => { if (_inputs.Count > 0) { _inputs[0].Focus(); _inputs[0].SelectAll(); } };
+        }
+
+        private void Input_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Enter) return;
+            e.SuppressKeyPress = true;
+            var index = (int)((TextBox)sender).Tag;
+            if (index + 1 < _inputs.Count)
+            {
+                _inputs[index + 1].Focus();
+                _inputs[index + 1].SelectAll();
+            }
+            else
+            {
+                ConfirmInputs();
+            }
+        }
+
+        private void Confirm_Click(object sender, EventArgs e) => ConfirmInputs();
+
+        private void ConfirmInputs()
+        {
+            for (int i = 0; i < _sources.Count; i++)
+            {
+                var value = _inputs[i].Text.Trim();
+                if (string.IsNullOrEmpty(value))
+                {
+                    MessageBox.Show(this, $"\"{_sources[i].Name}\" 不能为空", "数据源输入", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    _inputs[i].Focus();
+                    return;
+                }
+                Values[_sources[i].Field] = value;
+            }
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+    }
+
+    public sealed class NaturalStringComparer : IComparer<string>
+    {
+        public static readonly NaturalStringComparer Instance = new NaturalStringComparer();
+
+        public int Compare(string left, string right)
+        {
+            if (ReferenceEquals(left, right)) return 0;
+            if (left == null) return -1;
+            if (right == null) return 1;
+
+            int leftIndex = 0;
+            int rightIndex = 0;
+            while (leftIndex < left.Length && rightIndex < right.Length)
+            {
+                if (char.IsDigit(left[leftIndex]) && char.IsDigit(right[rightIndex]))
+                {
+                    int leftEnd = leftIndex;
+                    int rightEnd = rightIndex;
+                    while (leftEnd < left.Length && char.IsDigit(left[leftEnd])) leftEnd++;
+                    while (rightEnd < right.Length && char.IsDigit(right[rightEnd])) rightEnd++;
+
+                    int leftSignificant = leftIndex;
+                    int rightSignificant = rightIndex;
+                    while (leftSignificant < leftEnd - 1 && left[leftSignificant] == '0') leftSignificant++;
+                    while (rightSignificant < rightEnd - 1 && right[rightSignificant] == '0') rightSignificant++;
+
+                    int leftDigits = leftEnd - leftSignificant;
+                    int rightDigits = rightEnd - rightSignificant;
+                    if (leftDigits != rightDigits) return leftDigits.CompareTo(rightDigits);
+
+                    for (int i = 0; i < leftDigits; i++)
+                    {
+                        int digitComparison = left[leftSignificant + i].CompareTo(right[rightSignificant + i]);
+                        if (digitComparison != 0) return digitComparison;
+                    }
+
+                    int runLengthComparison = (leftEnd - leftIndex).CompareTo(rightEnd - rightIndex);
+                    if (runLengthComparison != 0) return runLengthComparison;
+                    leftIndex = leftEnd;
+                    rightIndex = rightEnd;
+                    continue;
+                }
+
+                int characterComparison = char.ToUpperInvariant(left[leftIndex]).CompareTo(char.ToUpperInvariant(right[rightIndex]));
+                if (characterComparison != 0) return characterComparison;
+                leftIndex++;
+                rightIndex++;
+            }
+
+            return (left.Length - leftIndex).CompareTo(right.Length - rightIndex);
         }
     }
 
