@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
         private readonly string _configFile;
-        private readonly string _version = "v5.7.16";
+        private readonly string _version = "v5.7.17";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -38,6 +38,7 @@ namespace BarTenderPrinter
             titleLabel.Text = $"BarTender 标签打印工具 {_version}";
             MiuiTheme.ApplyTheme(this);
             Load += MainForm_Load;
+            Shown += MainForm_Shown;
             FormClosing += (s, e) => { _btService.Dispose(); };
             inputPanel.SizeChanged += InputPanel_SizeChanged;
             dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
@@ -46,31 +47,50 @@ namespace BarTenderPrinter
         private void MainForm_Load(object sender, EventArgs e)
         {
             LoadConfig(_configFile);
-            InitBarTender();
-            PopulateTemplateList(_templatesFolder);
             RebuildInputFields();
-            _history.Load();
-            LoadHistory();
-            RefreshPrinters();
-            RefreshStats();
-            _isInitializing = false;
+            SetStatus("正在初始化...");
+        }
 
-            if (!string.IsNullOrEmpty(_selectedTemplatePath) && File.Exists(_selectedTemplatePath) && _btService.IsConnected)
+        private async void MainForm_Shown(object sender, EventArgs e)
+        {
+            AddLog("正在连接 BarTender...", "INFO");
+            try
             {
-                LoadTemplateDataSources(_selectedTemplatePath);
-            }
+                var historyTask = Task.Run(() => _history.Load());
+                var connectTask = Task.Run(() => _btService.Connect());
+                var printersTask = Task.Run(() => _btService.GetPrinters());
+                var templatesTask = Task.Run(() => GetTemplateFiles(_templatesFolder));
 
-            AddLog("系统启动完成", "INFO");
+                await Task.WhenAll(historyTask, connectTask, printersTask, templatesTask);
+                if (IsDisposed) return;
+
+                ApplyBarTenderConnection(connectTask.Result);
+                PopulateTemplateList(templatesTask.Result);
+                PopulatePrinters(printersTask.Result);
+                LoadHistory();
+                RefreshStats();
+                _isInitializing = false;
+
+                if (!string.IsNullOrEmpty(_selectedTemplatePath) && File.Exists(_selectedTemplatePath) && _btService.IsConnected)
+                {
+                    LoadTemplateDataSources(_selectedTemplatePath);
+                }
+
+                AddLog("系统启动完成", "INFO");
+            }
+            catch (Exception ex)
+            {
+                _isInitializing = false;
+                SetStatus("初始化失败，请查看日志");
+                AddLog($"系统初始化失败: {ex.Message}", "ERROR");
+            }
         }
 
         #region BarTender
 
-        private void InitBarTender()
+        private void ApplyBarTenderConnection(bool connected)
         {
-            SetStatus("正在连接 BarTender...");
-            AddLog("正在连接 BarTender...", "INFO");
-
-            if (_btService.Connect())
+            if (connected)
             {
                 SetStatus("BarTender 已连接");
                 AddLog("BarTender 已连接", "SUCCESS");
@@ -110,10 +130,16 @@ namespace BarTenderPrinter
 
         #region Printer
 
-        private void RefreshPrinters()
+        private async Task RefreshPrintersAsync()
+        {
+            var printers = await Task.Run(() => _btService.GetPrinters());
+            PopulatePrinters(printers);
+        }
+
+        private void PopulatePrinters(string[] printers)
         {
             cmbPrinter.Items.Clear();
-            foreach (var p in _btService.GetPrinters())
+            foreach (var p in printers)
                 cmbPrinter.Items.Add(p);
             var saved = IniReadValue("General", "Printer", _configFile);
             if (!string.IsNullOrEmpty(saved) && cmbPrinter.Items.Contains(saved))
@@ -122,7 +148,7 @@ namespace BarTenderPrinter
                 cmbPrinter.SelectedIndex = 0;
         }
 
-        private void btnRefreshPrinter_Click(object sender, EventArgs e) => RefreshPrinters();
+        private async void btnRefreshPrinter_Click(object sender, EventArgs e) => await RefreshPrintersAsync();
 
         #endregion
 
@@ -144,10 +170,20 @@ namespace BarTenderPrinter
 
         private void PopulateTemplateList(string folder)
         {
+            PopulateTemplateList(GetTemplateFiles(folder));
+        }
+
+        private static string[] GetTemplateFiles(string folder)
+        {
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return new string[0];
+            try { return Directory.GetFiles(folder, "*.btw"); }
+            catch { return new string[0]; }
+        }
+
+        private void PopulateTemplateList(string[] files)
+        {
             cmbTemplate.Items.Clear();
-            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
-            { lblSelectedTemplate.Text = "未找到模板"; _selectedTemplatePath = ""; return; }
-            foreach (var f in Directory.GetFiles(folder, "*.btw"))
+            foreach (var f in files)
                 cmbTemplate.Items.Add(new TemplateItem(Path.GetFileName(f), f));
             if (cmbTemplate.Items.Count > 0) cmbTemplate.SelectedIndex = 0;
             else { lblSelectedTemplate.Text = "未找到模板"; _selectedTemplatePath = ""; }

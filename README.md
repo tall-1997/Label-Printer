@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**[v5.7.16](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.16)** - C# WinForms 自包含版（推荐）
+**[v5.7.17](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.17)** - C# WinForms 自包含版（推荐）
 
 ## 功能特性
 
@@ -63,7 +63,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender 标签打印工具 v5.7.16    [导出日志]  │
+│ BarTender 标签打印工具 v5.7.17    [导出日志]  │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -108,7 +108,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
-| [v5.7.16](https://github.com/tall-1997/Label-Printer/releases/download/v5.7.16/BarTenderPrinter.exe) | ~68 MB | 自包含版，无需安装运行时 |
+| [v5.7.17](https://github.com/tall-1997/Label-Printer/releases/download/v5.7.17/BarTenderPrinter-v5.7.17-win-x64.exe) | ~68 MB | 自包含版，无需安装运行时 |
 | [v2.6.5](https://github.com/tall-1997/Label-Printer/releases/download/v2.6.5/bartender-printer.exe) | 38 KB | Python 版（需 Python 环境） |
 
 ## 项目结构

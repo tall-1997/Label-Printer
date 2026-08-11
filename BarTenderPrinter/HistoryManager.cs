@@ -33,7 +33,6 @@ namespace BarTenderPrinter
             Directory.CreateDirectory(appDir);
             _recordsFile = Path.Combine(appDir, "print_records.csv");
             Records = new List<PrintRecord>();
-            Load();
         }
 
         public void Load()
