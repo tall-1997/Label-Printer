@@ -17,7 +17,7 @@ namespace BarTenderPrinter
         private readonly TemplateSettingsManager _templateSettings = new TemplateSettingsManager();
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _configFile;
-        private readonly string _version = "v5.7.21";
+        private readonly string _version = "v5.7.22";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -238,6 +238,7 @@ namespace BarTenderPrinter
                         _hasSavedDataSourceOrder = true;
                         RebuildInputFields();
                         SaveConfig();
+                        SaveCurrentTemplateSettings();
                         AddLog($"已加载 {names.Count} 个数据源，选择了 {_dataSources.Count} 个", "SUCCESS");
                     }
                 }));
@@ -300,6 +301,7 @@ namespace BarTenderPrinter
                 _hasSavedDataSourceOrder = true;
                 RebuildInputFields();
                 SaveConfig();
+                SaveCurrentTemplateSettings();
             }
         }
 
@@ -465,7 +467,7 @@ namespace BarTenderPrinter
                     Size = new Size(rowPanel.Width - 136, 25),
                     Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                     Tag = i,
-                    Text = enabled[i].IsLocked ? enabled[i].LockedValue ?? "" : "",
+                    Text = enabled[i].IsLocked || enabled[i].AutoIncrementLocked ? enabled[i].LockedValue ?? "" : "",
                     ReadOnly = enabled[i].IsLocked || enabled[i].AutoIncrementLocked,
                     BackColor = enabled[i].IsLocked || enabled[i].AutoIncrementLocked ? SystemColors.Control : MiuiTheme.InputBackground
                 };
@@ -544,6 +546,7 @@ namespace BarTenderPrinter
             button.AccessibleName = source.IsLocked ? "解除锁定" : "锁定";
             button.Invalidate();
             SaveConfig();
+            SaveCurrentTemplateSettings();
             AddLog($"数据源 {source.Name} 已{(source.IsLocked ? "锁定" : "解除锁定")}", "INFO");
         }
 
@@ -662,10 +665,10 @@ namespace BarTenderPrinter
                         _inputTextBoxes[i].ReadOnly = false;
                         _inputTextBoxes[i].BackColor = MiuiTheme.InputBackground;
                     }
-                    else if (enabled[i].IsLocked)
+                    else if (enabled[i].IsLocked || enabled[i].AutoIncrement)
                     {
                         _inputTextBoxes[i].Text = enabled[i].LockedValue ?? "";
-                        _inputTextBoxes[i].ReadOnly = true;
+                        _inputTextBoxes[i].ReadOnly = enabled[i].IsLocked || enabled[i].AutoIncrementLocked;
                         _inputTextBoxes[i].BackColor = SystemColors.Control;
                     }
                 }
@@ -701,8 +704,7 @@ namespace BarTenderPrinter
                     var newVal = IncrementValue(currentVal, step);
                     _inputTextBoxes[i].Text = newVal;
                     enabled[i].AutoIncrementLocked = true;
-                    if (enabled[i].IsLocked)
-                        enabled[i].LockedValue = newVal;
+                    SaveAutoIncrementPendingValue(enabled[i], newVal);
 
                     // Lock auto-increment fields after first print
                     _inputTextBoxes[i].ReadOnly = true;
@@ -737,6 +739,37 @@ namespace BarTenderPrinter
             }
 
             return value;
+        }
+
+        private void SaveAutoIncrementPendingValue(DataSourceItem source, string candidate)
+        {
+            if (source == null || string.IsNullOrWhiteSpace(candidate)) return;
+            if (string.IsNullOrWhiteSpace(source.LockedValue) || IsBetterAutoIncrementPendingValue(candidate, source.LockedValue, source.AutoStep))
+                source.LockedValue = candidate;
+        }
+
+        private static bool IsBetterAutoIncrementPendingValue(string candidate, string current, int step)
+        {
+            if (TryGetNumericSuffix(candidate, out var candidatePrefix, out var candidateNumber) &&
+                TryGetNumericSuffix(current, out var currentPrefix, out var currentNumber) &&
+                string.Equals(candidatePrefix, currentPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return step < 0 ? candidateNumber < currentNumber : candidateNumber > currentNumber;
+            }
+            return string.Compare(candidate, current, StringComparison.OrdinalIgnoreCase) > 0;
+        }
+
+        private static bool TryGetNumericSuffix(string value, out string prefix, out long number)
+        {
+            prefix = value ?? "";
+            number = 0;
+            if (string.IsNullOrEmpty(value)) return false;
+            int i = value.Length - 1;
+            while (i >= 0 && char.IsDigit(value[i])) i--;
+            i++;
+            if (i == value.Length) return false;
+            prefix = value.Substring(0, i);
+            return long.TryParse(value.Substring(i), out number);
         }
 
         private void SetInputsReadOnly(bool ro)
@@ -1256,6 +1289,77 @@ namespace BarTenderPrinter
                 { try { _history.Export(sfd.FileName, records); MessageBox.Show(this, "导出成功"); } catch (Exception ex) { MessageBox.Show(this, ex.Message); } }
             }
         }
+
+        private void btnImportHistory_Click(object sender, EventArgs e)
+        {
+            if (dgvHistory.SelectedRows.Count == 0)
+            { MessageBox.Show(this, "请先选择一条历史记录"); return; }
+
+            var recordId = dgvHistory.SelectedRows[0].Cells["记录ID"].Value?.ToString() ?? "";
+            var record = _history.GetById(recordId);
+            if (record == null || record.FieldValues == null || record.FieldValues.Count == 0)
+            { MessageBox.Show(this, "该历史记录缺少完整字段数据，无法导入"); return; }
+
+            var fields = ShowHistoryImportDialog(record);
+            if (fields == null || fields.Count == 0) return;
+            ImportHistoryFields(record, fields);
+        }
+
+        private HashSet<string> ShowHistoryImportDialog(PrintRecord record)
+        {
+            using (var form = new Form())
+            {
+                form.Text = "导入历史数据";
+                form.Size = new Size(520, 430);
+                form.FormBorderStyle = FormBorderStyle.FixedDialog;
+                form.StartPosition = FormStartPosition.CenterParent;
+                form.MaximizeBox = false;
+                form.MinimizeBox = false;
+
+                var label = new Label { Text = "选择要导入到输入框的数据源：", Location = new Point(12, 12), Size = new Size(480, 22) };
+                var list = new CheckedListBox { Location = new Point(12, 40), Size = new Size(480, 285), CheckOnClick = true };
+                var enabledFields = new HashSet<string>(_dataSources.Where(item => item.Enabled).Select(item => item.Field), StringComparer.OrdinalIgnoreCase);
+                foreach (var item in record.FieldValues.Where(item => enabledFields.Contains(item.Key)))
+                    list.Items.Add(new HistoryImportField(item.Key, item.Value), true);
+                if (list.Items.Count == 0)
+                { MessageBox.Show(this, "该历史记录没有匹配当前模板输入框的数据源"); return null; }
+
+                var selectAll = new Button { Text = "全选", Location = new Point(12, 345), Size = new Size(55, 28) };
+                selectAll.Click += (s, e) => { for (int i = 0; i < list.Items.Count; i++) list.SetItemChecked(i, true); };
+                var selectNone = new Button { Text = "全不选", Location = new Point(75, 345), Size = new Size(65, 28) };
+                selectNone.Click += (s, e) => { for (int i = 0; i < list.Items.Count; i++) list.SetItemChecked(i, false); };
+                var ok = new Button { Text = "导入", Location = new Point(325, 345), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(415, 345), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+                form.Controls.AddRange(new Control[] { label, list, selectAll, selectNone, ok, cancel });
+                form.AcceptButton = ok;
+                form.CancelButton = cancel;
+
+                if (form.ShowDialog(this) != DialogResult.OK) return null;
+                return new HashSet<string>(list.CheckedItems.Cast<HistoryImportField>().Select(item => item.Field), StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private void ImportHistoryFields(PrintRecord record, HashSet<string> selectedFields)
+        {
+            var enabled = _dataSources.Where(item => item.Enabled).ToList();
+            var imported = 0;
+            for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
+            {
+                var source = enabled[i];
+                if (!selectedFields.Contains(source.Field) || !record.FieldValues.TryGetValue(source.Field, out var value)) continue;
+                _inputTextBoxes[i].Text = value ?? "";
+                if (source.IsLocked && !source.AutoIncrement)
+                    source.LockedValue = _inputTextBoxes[i].Text.Trim();
+                imported++;
+            }
+
+            if (imported > 0)
+            {
+                SaveConfig();
+                SaveCurrentTemplateSettings();
+                AddLog($"已从历史记录导入 {imported} 个数据源", "SUCCESS");
+            }
+        }
         private void btnReprintHistory_Click(object sender, EventArgs e)
         {
             if (dgvHistory.SelectedRows.Count == 0)
@@ -1346,6 +1450,7 @@ namespace BarTenderPrinter
                 {
                     _history.Add(record.TemplateName, record.TemplatePath, values,
                         result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies);
+                    RestoreAutoIncrementInputsToPendingValues();
                     AddLog(result.Success ? "历史记录补打印完成" : $"历史记录补打印失败: {result.ErrorMessage}", result.Success ? "SUCCESS" : "ERROR");
                     SetPrintEnvironmentEnabled(true);
                     LoadHistory();
@@ -1357,6 +1462,7 @@ namespace BarTenderPrinter
         private void SetPrintEnvironmentEnabled(bool enabled)
         {
             btnPrint.Enabled = enabled;
+            btnImportHistory.Enabled = enabled;
             btnReprintHistory.Enabled = enabled;
             cmbTemplate.Enabled = enabled;
             cmbPrinter.Enabled = enabled;
@@ -1469,6 +1575,21 @@ namespace BarTenderPrinter
             }
         }
 
+        private void RestoreAutoIncrementInputsToPendingValues()
+        {
+            var enabled = _dataSources.Where(item => item.Enabled).ToList();
+            for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
+            {
+                if (!enabled[i].AutoIncrement || string.IsNullOrEmpty(enabled[i].LockedValue)) continue;
+                enabled[i].AutoIncrementLocked = true;
+                _inputTextBoxes[i].Text = enabled[i].LockedValue;
+                _inputTextBoxes[i].ReadOnly = true;
+                _inputTextBoxes[i].BackColor = SystemColors.Control;
+            }
+            SaveConfig();
+            SaveCurrentTemplateSettings();
+        }
+
         private bool RestoreTemplateSettings(string templateName, string templatePath)
         {
             if (!_templateSettings.TryGet(templateName, templatePath, out var settings)) return false;
@@ -1551,6 +1672,7 @@ namespace BarTenderPrinter
                 IniWriteValue($"DS{i}", "IsLocked", _dataSources[i].IsLocked.ToString(), _configFile);
                 IniWriteValue($"DS{i}", "LockAfterInput", _dataSources[i].LockAfterInput.ToString(), _configFile);
                 IniWriteValue($"DS{i}", "LockedValue", _dataSources[i].LockedValue ?? "", _configFile);
+                IniWriteValue($"DS{i}", "AutoIncrementLocked", _dataSources[i].AutoIncrementLocked.ToString(), _configFile);
                 IniWriteValue($"DS{i}", "ExpectedLength", _dataSources[i].ExpectedLength.ToString(), _configFile);
                 IniWriteValue($"DS{i}", "LengthRevision", _dataSources[i].LengthRevision.ToString(), _configFile);
             }
@@ -1584,6 +1706,7 @@ namespace BarTenderPrinter
                     var autoStep = 1; int.TryParse(IniReadValue($"DS{i}", "AutoStep", path), out autoStep);
                     var isLocked = false; bool.TryParse(IniReadValue($"DS{i}", "IsLocked", path), out isLocked);
                     var lockAfterInput = false; bool.TryParse(IniReadValue($"DS{i}", "LockAfterInput", path), out lockAfterInput);
+                    var autoIncrementLocked = false; bool.TryParse(IniReadValue($"DS{i}", "AutoIncrementLocked", path), out autoIncrementLocked);
                     int.TryParse(IniReadValue($"DS{i}", "ExpectedLength", path), out int expectedLength);
                     long.TryParse(IniReadValue($"DS{i}", "LengthRevision", path), out long lengthRevision);
                     _lengthRevisionCounter = Math.Max(_lengthRevisionCounter, lengthRevision);
@@ -1597,6 +1720,7 @@ namespace BarTenderPrinter
                         IsLocked = isLocked,
                         LockAfterInput = lockAfterInput,
                         LockedValue = IniReadValue($"DS{i}", "LockedValue", path),
+                        AutoIncrementLocked = autoIncrementLocked,
                         ExpectedLength = expectedLength,
                         LengthRevision = lengthRevision
                     });
@@ -1649,6 +1773,20 @@ namespace BarTenderPrinter
         #endregion
     }
 
+    public class HistoryImportField
+    {
+        public string Field { get; }
+        private readonly string _value;
+
+        public HistoryImportField(string field, string value)
+        {
+            Field = field ?? "";
+            _value = value ?? "";
+        }
+
+        public override string ToString() => $"{Field} = {_value}";
+    }
+
     public class DataSourceSelectDialog : Form
     {
         public List<DataSourceItem> SelectedSources { get; private set; }
@@ -1669,6 +1807,7 @@ namespace BarTenderPrinter
             public NumericUpDown NumExpectedLength;
             public bool LengthEdited;
             public bool WasInputLocked;
+            public bool AutoIncrementLocked;
             public Label Grip;
         }
 
@@ -1714,7 +1853,8 @@ namespace BarTenderPrinter
                 var existing = current.FirstOrDefault(d => string.Equals(d.Field, field, StringComparison.OrdinalIgnoreCase));
                 bool isChecked = existing != null ? existing.Enabled : (!preserveExistingOrder || current.Count == 0);
                 CreateRow(field, isChecked, existing?.Name ?? field, existing?.AutoIncrement ?? false, existing?.AutoStep ?? 1,
-                    existing?.IsLocked ?? false, existing?.LockAfterInput ?? false, existing?.LockedValue ?? "", existing?.ExpectedLength ?? 0);
+                    existing?.IsLocked ?? false, existing?.LockAfterInput ?? false, existing?.LockedValue ?? "",
+                    existing?.AutoIncrementLocked ?? false, existing?.ExpectedLength ?? 0);
             }
 
             RelayoutRows();
@@ -1741,9 +1881,10 @@ namespace BarTenderPrinter
                             AutoStep = (int)r.NumStep.Value,
                             IsLocked = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && r.WasInputLocked),
                             LockAfterInput = r.CmbLockMode.SelectedIndex == 2,
-                            LockedValue = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && r.WasInputLocked)
+                            LockedValue = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && r.WasInputLocked) || (r.CbAutoInc.Checked && r.AutoIncrementLocked)
                                 ? r.TxtLockedValue.Text.Trim()
                                 : "",
+                            AutoIncrementLocked = r.CbAutoInc.Checked && r.AutoIncrementLocked,
                             ExpectedLength = (int)r.NumExpectedLength.Value,
                             LengthEdited = r.LengthEdited
                         });
@@ -1755,9 +1896,9 @@ namespace BarTenderPrinter
         }
 
         private void CreateRow(string field, bool checkedVal, string displayName, bool autoInc, int autoStep,
-            bool isLocked, bool lockAfterInput, string lockedValue, int expectedLength)
+            bool isLocked, bool lockAfterInput, string lockedValue, bool autoIncrementLocked, int expectedLength)
         {
-            var row = new DataSourceRow { Field = field, WasInputLocked = isLocked && lockAfterInput };
+            var row = new DataSourceRow { Field = field, WasInputLocked = isLocked && lockAfterInput, AutoIncrementLocked = autoIncrementLocked };
 
             row.RowPanel = new Panel
             {

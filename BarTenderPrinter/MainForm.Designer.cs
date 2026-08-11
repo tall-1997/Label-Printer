@@ -17,7 +17,7 @@ namespace BarTenderPrinter
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.titlePanel.Height = 38;
             this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.21";
+            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.22";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
             this.titleLabel.Location = new System.Drawing.Point(10, 7);
@@ -119,9 +119,11 @@ namespace BarTenderPrinter
             this.btnClearHistory.Click += new System.EventHandler(this.btnClearHistory_Click);
             this.btnExportHistory = new System.Windows.Forms.Button { Text = "导出", Location = new System.Drawing.Point(416, 1), Size = new System.Drawing.Size(50, 24) };
             this.btnExportHistory.Click += new System.EventHandler(this.btnExportHistory_Click);
-            this.btnReprintHistory = new System.Windows.Forms.Button { Text = "补打印选中项", Location = new System.Drawing.Point(472, 1), Size = new System.Drawing.Size(100, 24) };
+            this.btnImportHistory = new System.Windows.Forms.Button { Text = "导入", Location = new System.Drawing.Point(472, 1), Size = new System.Drawing.Size(50, 24) };
+            this.btnImportHistory.Click += new System.EventHandler(this.btnImportHistory_Click);
+            this.btnReprintHistory = new System.Windows.Forms.Button { Text = "补打印选中项", Location = new System.Drawing.Point(528, 1), Size = new System.Drawing.Size(100, 24) };
             this.btnReprintHistory.Click += new System.EventHandler(this.btnReprintHistory_Click);
-            this.historyPanel.Controls.AddRange(new System.Windows.Forms.Control[] { this.lblSearch, this.txtSearch, this.btnClearSearch, this.chkExactSearch, this.btnClearHistory, this.btnExportHistory, this.btnReprintHistory });
+            this.historyPanel.Controls.AddRange(new System.Windows.Forms.Control[] { this.lblSearch, this.txtSearch, this.btnClearSearch, this.chkExactSearch, this.btnClearHistory, this.btnExportHistory, this.btnImportHistory, this.btnReprintHistory });
             this.tabHistory.Controls.Add(this.dgvHistory); this.tabHistory.Controls.Add(this.historyPanel);
 
             // Stats
@@ -177,7 +179,7 @@ namespace BarTenderPrinter
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.MinimumSize = new System.Drawing.Size(1080, 900);
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "BarTender 标签打印工具 v5.7.21";
+            this.Text = "BarTender 标签打印工具 v5.7.22";
             this.ResumeLayout(false); this.PerformLayout();
         }
 
@@ -206,7 +208,7 @@ namespace BarTenderPrinter
         private System.Windows.Forms.Label lblSearch;
         private System.Windows.Forms.TextBox txtSearch;
         private System.Windows.Forms.CheckBox chkExactSearch;
-        private System.Windows.Forms.Button btnClearSearch, btnClearHistory, btnExportHistory, btnReprintHistory;
+        private System.Windows.Forms.Button btnClearSearch, btnClearHistory, btnExportHistory, btnImportHistory, btnReprintHistory;
         private System.Windows.Forms.Label lblTodayTitle, lblTodayCount, lblTotalTitle, lblTotalCount;
         private System.Windows.Forms.GroupBox groupBoxLog;
         private System.Windows.Forms.TextBox txtLog;
