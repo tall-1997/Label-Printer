@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.24** - C# WinForms 安装版
+**v5.7.25** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -69,7 +69,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender 标签打印工具 v5.7.24    [导出日志]  │
+│ BarTender 标签打印工具 v5.7.25    [导出日志]  │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -104,6 +104,8 @@
 9. 需要复用历史数据时，在历史记录中选择记录并点击“导入”或“补打印选中项”
 10. 需要直接打开模板时，右键 `.btw` 文件选择“使用 BarTenderPrinter 打开”
 
+> Windows 11 可能需要先点击“显示更多选项”，再选择“使用 BarTenderPrinter 打开”。
+
 ## 环境要求
 
 - Windows 10/11 x64
@@ -116,7 +118,8 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
-| [v5.7.24](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.24) | ~49 MB | C# WinForms 当前用户安装版 |
+| [v5.7.25](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.25) | ~49 MB | C# WinForms 当前用户安装版 |
+| [v5.7.24](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.24) | ~49 MB | 右键打开模板和历史单条删除版 |
 | [v5.7.23](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.23) | ~49 MB | 数据源锁定工作流优化版 |
 | [v5.7.18](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.18) | ~155 MB | 历史自包含单文件版 |
 | [v2.6.5](https://github.com/tall-1997/Label-Printer/releases/download/v2.6.5/bartender-printer.exe) | 38 KB | Python 版（需 Python 环境） |

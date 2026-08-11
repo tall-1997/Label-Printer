@@ -71,7 +71,8 @@ namespace BarTenderPrinter
             {
                 var lines = File.ReadAllLines(_recordsFile, Encoding.UTF8);
                 _usesCurrentFormat = lines.Length > 0 && string.Equals(lines[0].TrimStart('\uFEFF'), Header, StringComparison.Ordinal);
-                for (int i = 1; i < lines.Length; i++)
+                var startIndex = _usesCurrentFormat ? 1 : 0;
+                for (int i = startIndex; i < lines.Length; i++)
                 {
                     var parts = ParseCsvLine(lines[i]);
                     if (parts.Count >= 8)

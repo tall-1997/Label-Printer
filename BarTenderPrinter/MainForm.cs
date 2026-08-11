@@ -19,7 +19,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.24";
+        private readonly string _version = "v5.7.25";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -54,6 +54,7 @@ namespace BarTenderPrinter
             dgvHistory.CellMouseDown += DgvHistory_CellMouseDown;
             var historyMenu = new ContextMenuStrip();
             historyMenu.Items.Add("删除此条记录", null, DeleteSelectedHistoryRecord_Click);
+            historyMenu.Opening += HistoryMenu_Opening;
             dgvHistory.ContextMenuStrip = historyMenu;
             _historySearchTimer.Tick += (s, e) => { _historySearchTimer.Stop(); LoadHistory(); };
         }
@@ -80,8 +81,8 @@ namespace BarTenderPrinter
 
                 ApplyBarTenderConnection(connectTask.Result);
                 PopulateTemplateList(templatesTask.Result);
-                ApplyStartupTemplateSelection();
                 PopulatePrinters(printersTask.Result);
+                ApplyStartupTemplateSelection();
                 LoadHistory();
                 RefreshStats();
                 _isInitializing = false;
@@ -195,6 +196,7 @@ namespace BarTenderPrinter
             cmbTemplate.SelectedItem = match;
             _selectedTemplatePath = match.FullPath;
             lblSelectedTemplate.Text = match.Name;
+            SaveConfig();
             AddLog($"已通过右键菜单打开模板: {match.Name}", "INFO");
         }
 
@@ -1623,10 +1625,24 @@ namespace BarTenderPrinter
 
         private void DgvHistory_CellMouseDown(object sender, DataGridViewCellMouseEventArgs e)
         {
-            if (e.Button != MouseButtons.Right || e.RowIndex < 0) return;
+            if (e.Button != MouseButtons.Right) return;
+            if (e.RowIndex < 0)
+            {
+                dgvHistory.ClearSelection();
+                return;
+            }
             dgvHistory.ClearSelection();
             dgvHistory.Rows[e.RowIndex].Selected = true;
             dgvHistory.CurrentCell = dgvHistory.Rows[e.RowIndex].Cells[Math.Max(0, e.ColumnIndex)];
+        }
+
+        private void HistoryMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            if (dgvHistory.HitTest(dgvHistory.PointToClient(Cursor.Position).X, dgvHistory.PointToClient(Cursor.Position).Y).RowIndex < 0)
+            {
+                dgvHistory.ClearSelection();
+                e.Cancel = true;
+            }
         }
 
         private void DeleteSelectedHistoryRecord_Click(object sender, EventArgs e)
