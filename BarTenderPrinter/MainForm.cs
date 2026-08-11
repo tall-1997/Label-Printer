@@ -17,7 +17,7 @@ namespace BarTenderPrinter
         private readonly TemplateSettingsManager _templateSettings = new TemplateSettingsManager();
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _configFile;
-        private readonly string _version = "v5.7.20";
+        private readonly string _version = "v5.7.21";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -1267,32 +1267,85 @@ namespace BarTenderPrinter
             if (record == null || record.FieldValues == null || record.FieldValues.Count == 0)
             { MessageBox.Show(this, "该历史记录缺少完整字段数据，无法直接补打印"); return; }
 
-            var details = record.FieldValues.Select(item => $"{item.Key}: {item.Value}");
-            var message = $"确认补打印选中的历史记录？\n\n模板: {record.TemplateName}\n打印机: {record.Printer}\n份数: {record.Copies}\n\n{string.Join("\n", details)}";
-            if (MessageBox.Show(this, message, "确认补打印", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                PrintHistoryRecord(record);
+            var printer = ShowReprintConfirmDialog(record);
+            if (!string.IsNullOrEmpty(printer)) PrintHistoryRecord(record, printer);
         }
 
-        private void PrintHistoryRecord(PrintRecord record)
+        private string ShowReprintConfirmDialog(PrintRecord record)
+        {
+            if (cmbPrinter.Items.Count == 0)
+            { MessageBox.Show(this, "当前没有可用打印机，无法补打印"); return null; }
+
+            using (var form = new Form())
+            {
+                form.Text = "确认补打印";
+                form.Size = new Size(520, 430);
+                form.FormBorderStyle = FormBorderStyle.FixedDialog;
+                form.StartPosition = FormStartPosition.CenterParent;
+                form.MaximizeBox = false;
+                form.MinimizeBox = false;
+
+                var summary = $"模板: {record.TemplateName}\r\n历史打印机: {record.Printer}\r\n份数: {record.Copies}\r\n\r\n字段数据:";
+                var lblDetails = new Label
+                {
+                    Text = summary,
+                    Location = new Point(12, 12),
+                    Size = new Size(480, 85),
+                    AutoEllipsis = true
+                };
+                var txtDetails = new TextBox
+                {
+                    Text = string.Join(Environment.NewLine, record.FieldValues.Select(item => $"{item.Key}: {item.Value}")),
+                    Location = new Point(12, 100),
+                    Size = new Size(480, 185),
+                    Multiline = true,
+                    ReadOnly = true,
+                    ScrollBars = ScrollBars.Vertical
+                };
+                var lblPrinter = new Label { Text = "本次补打印机：", Location = new Point(12, 300), Size = new Size(110, 22) };
+                var cmbReprintPrinter = new ComboBox
+                {
+                    Location = new Point(125, 297),
+                    Size = new Size(365, 25),
+                    DropDownStyle = ComboBoxStyle.DropDownList
+                };
+                foreach (var item in cmbPrinter.Items) cmbReprintPrinter.Items.Add(item);
+
+                if (!string.IsNullOrEmpty(record.Printer) && cmbReprintPrinter.Items.Contains(record.Printer))
+                    cmbReprintPrinter.SelectedItem = record.Printer;
+                else if (cmbPrinter.SelectedItem != null && cmbReprintPrinter.Items.Contains(cmbPrinter.SelectedItem))
+                    cmbReprintPrinter.SelectedItem = cmbPrinter.SelectedItem;
+                else
+                    cmbReprintPrinter.SelectedIndex = 0;
+
+                var ok = new Button { Text = "补打印", Location = new Point(325, 345), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(415, 345), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+                form.Controls.AddRange(new Control[] { lblDetails, txtDetails, lblPrinter, cmbReprintPrinter, ok, cancel });
+                form.AcceptButton = ok;
+                form.CancelButton = cancel;
+
+                return form.ShowDialog(this) == DialogResult.OK ? cmbReprintPrinter.SelectedItem?.ToString() : null;
+            }
+        }
+
+        private void PrintHistoryRecord(PrintRecord record, string printer)
         {
             if (!File.Exists(record.TemplatePath))
             { MessageBox.Show(this, $"历史模板文件不存在：\n{record.TemplatePath}"); return; }
-            if (string.IsNullOrEmpty(record.Printer))
-            { MessageBox.Show(this, "历史记录缺少打印机信息，无法直接补打印"); return; }
-            if (!cmbPrinter.Items.Contains(record.Printer))
-            { MessageBox.Show(this, $"历史打印机当前不可用：{record.Printer}"); return; }
+            if (string.IsNullOrEmpty(printer) || !cmbPrinter.Items.Contains(printer))
+            { MessageBox.Show(this, $"本次补打印机当前不可用：{printer}"); return; }
             SetPrintEnvironmentEnabled(false);
             SetStatus("补打印中...");
             var values = new Dictionary<string, string>(record.FieldValues, StringComparer.OrdinalIgnoreCase);
             Task.Run(() =>
             {
                 PrintResult result;
-                try { result = _btService.Print(record.TemplatePath, values, record.Printer, record.Copies); }
+                try { result = _btService.Print(record.TemplatePath, values, printer, record.Copies); }
                 catch (Exception ex) { result = new PrintResult(false, ex.Message); }
                 BeginInvoke((Action)(() =>
                 {
                     _history.Add(record.TemplateName, record.TemplatePath, values,
-                        result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", record.Printer, record.Copies);
+                        result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies);
                     AddLog(result.Success ? "历史记录补打印完成" : $"历史记录补打印失败: {result.ErrorMessage}", result.Success ? "SUCCESS" : "ERROR");
                     SetPrintEnvironmentEnabled(true);
                     LoadHistory();
