@@ -169,6 +169,15 @@ namespace BarTenderPrinter
             return Records.FirstOrDefault(record => string.Equals(record.RecordId, recordId, StringComparison.Ordinal));
         }
 
+        public bool Delete(string recordId)
+        {
+            var removed = Records.RemoveAll(record => string.Equals(record.RecordId, recordId, StringComparison.Ordinal)) > 0;
+            if (!removed) return false;
+            RebuildIndexes();
+            Save();
+            return true;
+        }
+
         public void Clear()
         {
             Records.Clear();

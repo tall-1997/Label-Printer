@@ -17,8 +17,9 @@ namespace BarTenderPrinter
         private readonly HistoryManager _history = new HistoryManager();
         private readonly TemplateSettingsManager _templateSettings = new TemplateSettingsManager();
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
+        private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.23";
+        private readonly string _version = "v5.7.24";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -37,8 +38,9 @@ namespace BarTenderPrinter
         private long _globalLengthRevision;
         private long _lengthRevisionCounter;
 
-        public MainForm()
+        public MainForm(string startupTemplatePath = null)
         {
+            _startupTemplatePath = NormalizeStartupTemplatePath(startupTemplatePath);
             InitializeComponent();
             _configFile = AppPaths.ConfigFile;
             Text = $"BarTender 标签打印工具 {_version}";
@@ -49,6 +51,10 @@ namespace BarTenderPrinter
             FormClosing += (s, e) => { SaveCurrentTemplateSettings(); _historySearchTimer.Dispose(); _btService.Dispose(); };
             inputPanel.SizeChanged += InputPanel_SizeChanged;
             dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
+            dgvHistory.CellMouseDown += DgvHistory_CellMouseDown;
+            var historyMenu = new ContextMenuStrip();
+            historyMenu.Items.Add("删除此条记录", null, DeleteSelectedHistoryRecord_Click);
+            dgvHistory.ContextMenuStrip = historyMenu;
             _historySearchTimer.Tick += (s, e) => { _historySearchTimer.Stop(); LoadHistory(); };
         }
 
@@ -74,6 +80,7 @@ namespace BarTenderPrinter
 
                 ApplyBarTenderConnection(connectTask.Result);
                 PopulateTemplateList(templatesTask.Result);
+                ApplyStartupTemplateSelection();
                 PopulatePrinters(printersTask.Result);
                 LoadHistory();
                 RefreshStats();
@@ -163,6 +170,33 @@ namespace BarTenderPrinter
         #endregion
 
         #region Template
+
+        private static string NormalizeStartupTemplatePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return "";
+            try { return Path.GetFullPath(path.Trim('"')); }
+            catch { return path.Trim('"'); }
+        }
+
+        private void ApplyStartupTemplateSelection()
+        {
+            if (string.IsNullOrEmpty(_startupTemplatePath) || !File.Exists(_startupTemplatePath)) return;
+            _templatesFolder = Path.GetDirectoryName(_startupTemplatePath) ?? "";
+            txtTemplateDir.Text = _templatesFolder;
+            PopulateTemplateList(GetTemplateFiles(_templatesFolder));
+
+            var match = cmbTemplate.Items.Cast<TemplateItem>()
+                .FirstOrDefault(item => string.Equals(item.FullPath, _startupTemplatePath, StringComparison.OrdinalIgnoreCase));
+            if (match == null)
+            {
+                match = new TemplateItem(Path.GetFileName(_startupTemplatePath), _startupTemplatePath);
+                cmbTemplate.Items.Add(match);
+            }
+            cmbTemplate.SelectedItem = match;
+            _selectedTemplatePath = match.FullPath;
+            lblSelectedTemplate.Text = match.Name;
+            AddLog($"已通过右键菜单打开模板: {match.Name}", "INFO");
+        }
 
         private void btnBrowseDir_Click(object sender, EventArgs e)
         {
@@ -1585,6 +1619,33 @@ namespace BarTenderPrinter
                 sb.AppendLine($"  {i + 1}. {parts[i]}");
 
             MessageBox.Show(this, sb.ToString(), "打印详情", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void DgvHistory_CellMouseDown(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right || e.RowIndex < 0) return;
+            dgvHistory.ClearSelection();
+            dgvHistory.Rows[e.RowIndex].Selected = true;
+            dgvHistory.CurrentCell = dgvHistory.Rows[e.RowIndex].Cells[Math.Max(0, e.ColumnIndex)];
+        }
+
+        private void DeleteSelectedHistoryRecord_Click(object sender, EventArgs e)
+        {
+            if (dgvHistory.SelectedRows.Count == 0)
+            { MessageBox.Show(this, "请先选择一条历史记录"); return; }
+
+            var row = dgvHistory.SelectedRows[0];
+            var recordId = row.Cells["记录ID"].Value?.ToString() ?? "";
+            var data = row.Cells["数据"].Value?.ToString() ?? "";
+            if (MessageBox.Show(this, $"确定删除这条打印记录？\n\n{data}", "删除历史记录", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            if (_history.Delete(recordId))
+            {
+                AddLog("已删除单条历史记录", "INFO");
+                LoadHistory();
+                RefreshStats();
+            }
         }
 
         #endregion
