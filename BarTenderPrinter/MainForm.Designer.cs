@@ -17,7 +17,7 @@ namespace BarTenderPrinter
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.titlePanel.Height = 38;
             this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.19";
+            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.20";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
             this.titleLabel.Location = new System.Drawing.Point(10, 7);
@@ -42,10 +42,12 @@ namespace BarTenderPrinter
             this.btnLoadLocalData.Click += new System.EventHandler(this.btnLoadLocalData_Click);
             this.btnDiagnostics = new System.Windows.Forms.Button { Text = "诊断", Location = new System.Drawing.Point(345, 42), Size = new System.Drawing.Size(50, 24) };
             this.btnDiagnostics.Click += new System.EventHandler(this.btnDiagnostics_Click);
-            this.chkUseLocalData = new System.Windows.Forms.CheckBox { Text = "启用校验", Location = new System.Drawing.Point(405, 44), Size = new System.Drawing.Size(80, 20), Checked = false };
+            this.chkUseLocalData = new System.Windows.Forms.CheckBox { Text = "启用数据校验", Location = new System.Drawing.Point(405, 44), Size = new System.Drawing.Size(100, 20), Checked = false };
             this.chkUseLocalData.CheckedChanged += new System.EventHandler(this.chkUseLocalData_CheckedChanged);
-            this.chkAllowDuplicate = new System.Windows.Forms.CheckBox { Text = "允许重复打印", Location = new System.Drawing.Point(490, 44), Size = new System.Drawing.Size(95, 20), Checked = false };
-            this.chkAllowDuplicate.CheckedChanged += new System.EventHandler(this.chkAllowDuplicate_CheckedChanged);
+            this.chkLengthValidation = new System.Windows.Forms.CheckBox { Text = "长度校验", Location = new System.Drawing.Point(510, 44), Size = new System.Drawing.Size(80, 20), Checked = false };
+            this.chkLengthValidation.CheckedChanged += new System.EventHandler(this.chkLengthValidation_CheckedChanged);
+            this.btnGlobalLength = new System.Windows.Forms.Button { Text = "设置全局长度", Location = new System.Drawing.Point(595, 42), Size = new System.Drawing.Size(95, 24), Enabled = false };
+            this.btnGlobalLength.Click += new System.EventHandler(this.btnGlobalLength_Click);
             this.lblLocalData = new System.Windows.Forms.Label { Text = "", Location = new System.Drawing.Point(870, 45), Size = new System.Drawing.Size(200, 18) };
             this.lblLocalData.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             MiuiTheme.StyleButton(this.btnSaveConfig);
@@ -53,6 +55,7 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(this.btnEditDataSources);
             MiuiTheme.StyleButton(this.btnLoadLocalData);
             MiuiTheme.StyleButton(this.btnDiagnostics);
+            MiuiTheme.StyleButton(this.btnGlobalLength);
             MiuiTheme.StyleLabel(this.lblLocalData, true);
 
             // === Template Row (y=72) ===
@@ -82,6 +85,7 @@ namespace BarTenderPrinter
             this.lblCopies.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             this.numCopies = new System.Windows.Forms.NumericUpDown { Location = new System.Drawing.Point(1020, 157), Size = new System.Drawing.Size(50, 25), Minimum = 1, Maximum = 99, Value = 1 };
             this.numCopies.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+            this.numCopies.ValueChanged += new System.EventHandler(this.numCopies_ValueChanged);
             MiuiTheme.StyleLabel(this.lblPrinter); MiuiTheme.StyleLabel(this.lblCopies); MiuiTheme.StyleButton(this.btnRefreshPrinter);
 
             // === Input Panel (y=190) ===
@@ -102,18 +106,22 @@ namespace BarTenderPrinter
             this.tabStats = new System.Windows.Forms.TabPage { Text = "统计" };
 
             // History
-            this.dgvHistory = new System.Windows.Forms.DataGridView { Dock = System.Windows.Forms.DockStyle.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true, SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = System.Windows.Forms.DataGridViewAutoSizeColumnsMode.Fill };
+            this.dgvHistory = new System.Windows.Forms.DataGridView { Dock = System.Windows.Forms.DockStyle.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true, MultiSelect = false, SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = System.Windows.Forms.DataGridViewAutoSizeColumnsMode.Fill };
             this.historyPanel = new System.Windows.Forms.Panel { Dock = System.Windows.Forms.DockStyle.Top, Height = 28 };
             this.lblSearch = new System.Windows.Forms.Label { Text = "搜索：", Location = new System.Drawing.Point(2, 5), Size = new System.Drawing.Size(40, 18) };
             this.txtSearch = new System.Windows.Forms.TextBox { Location = new System.Drawing.Point(42, 2), Size = new System.Drawing.Size(180, 25) };
             this.txtSearch.TextChanged += new System.EventHandler(this.txtSearch_TextChanged);
-            this.btnClearSearch = new System.Windows.Forms.Button { Text = "搜索", Location = new System.Drawing.Point(226, 1), Size = new System.Drawing.Size(50, 24) };
+            this.btnClearSearch = new System.Windows.Forms.Button { Text = "清空", Location = new System.Drawing.Point(226, 1), Size = new System.Drawing.Size(50, 24) };
             this.btnClearSearch.Click += new System.EventHandler(this.btnClearSearch_Click);
-            this.btnClearHistory = new System.Windows.Forms.Button { Text = "清空记录", Location = new System.Drawing.Point(282, 1), Size = new System.Drawing.Size(70, 24) };
+            this.chkExactSearch = new System.Windows.Forms.CheckBox { Text = "精确", Location = new System.Drawing.Point(282, 4), Size = new System.Drawing.Size(55, 20) };
+            this.chkExactSearch.CheckedChanged += new System.EventHandler(this.chkExactSearch_CheckedChanged);
+            this.btnClearHistory = new System.Windows.Forms.Button { Text = "清空记录", Location = new System.Drawing.Point(340, 1), Size = new System.Drawing.Size(70, 24) };
             this.btnClearHistory.Click += new System.EventHandler(this.btnClearHistory_Click);
-            this.btnExportHistory = new System.Windows.Forms.Button { Text = "导出", Location = new System.Drawing.Point(358, 1), Size = new System.Drawing.Size(50, 24) };
+            this.btnExportHistory = new System.Windows.Forms.Button { Text = "导出", Location = new System.Drawing.Point(416, 1), Size = new System.Drawing.Size(50, 24) };
             this.btnExportHistory.Click += new System.EventHandler(this.btnExportHistory_Click);
-            this.historyPanel.Controls.AddRange(new System.Windows.Forms.Control[] { this.lblSearch, this.txtSearch, this.btnClearSearch, this.btnClearHistory, this.btnExportHistory });
+            this.btnReprintHistory = new System.Windows.Forms.Button { Text = "补打印选中项", Location = new System.Drawing.Point(472, 1), Size = new System.Drawing.Size(100, 24) };
+            this.btnReprintHistory.Click += new System.EventHandler(this.btnReprintHistory_Click);
+            this.historyPanel.Controls.AddRange(new System.Windows.Forms.Control[] { this.lblSearch, this.txtSearch, this.btnClearSearch, this.chkExactSearch, this.btnClearHistory, this.btnExportHistory, this.btnReprintHistory });
             this.tabHistory.Controls.Add(this.dgvHistory); this.tabHistory.Controls.Add(this.historyPanel);
 
             // Stats
@@ -153,10 +161,11 @@ namespace BarTenderPrinter
             this.Controls.Add(this.txtTemplateDir);
             this.Controls.Add(this.lblTemplateDir);
             this.Controls.Add(this.lblLocalData);
-            this.Controls.Add(this.chkAllowDuplicate);
             this.Controls.Add(this.chkUseLocalData);
             this.Controls.Add(this.btnLoadLocalData);
             this.Controls.Add(this.btnEditDataSources);
+            this.Controls.Add(this.btnGlobalLength);
+            this.Controls.Add(this.chkLengthValidation);
             this.Controls.Add(this.btnLoadConfig);
             this.Controls.Add(this.btnSaveConfig);
             this.Controls.Add(this.groupBoxLog);
@@ -168,15 +177,15 @@ namespace BarTenderPrinter
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.MinimumSize = new System.Drawing.Size(1080, 900);
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "BarTender 标签打印工具 v5.7.19";
+            this.Text = "BarTender 标签打印工具 v5.7.20";
             this.ResumeLayout(false); this.PerformLayout();
         }
 
         private System.Windows.Forms.Panel titlePanel;
         private System.Windows.Forms.Label titleLabel;
         private System.Windows.Forms.Button btnExportLog;
-        private System.Windows.Forms.Button btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData, btnDiagnostics;
-        private System.Windows.Forms.CheckBox chkUseLocalData, chkAllowDuplicate;
+        private System.Windows.Forms.Button btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData, btnDiagnostics, btnGlobalLength;
+        private System.Windows.Forms.CheckBox chkUseLocalData, chkLengthValidation;
         private System.Windows.Forms.Label lblLocalData;
         private System.Windows.Forms.Label lblTemplateDir;
         private System.Windows.Forms.TextBox txtTemplateDir;
@@ -196,7 +205,8 @@ namespace BarTenderPrinter
         private System.Windows.Forms.Panel historyPanel;
         private System.Windows.Forms.Label lblSearch;
         private System.Windows.Forms.TextBox txtSearch;
-        private System.Windows.Forms.Button btnClearSearch, btnClearHistory, btnExportHistory;
+        private System.Windows.Forms.CheckBox chkExactSearch;
+        private System.Windows.Forms.Button btnClearSearch, btnClearHistory, btnExportHistory, btnReprintHistory;
         private System.Windows.Forms.Label lblTodayTitle, lblTodayCount, lblTotalTitle, lblTotalCount;
         private System.Windows.Forms.GroupBox groupBoxLog;
         private System.Windows.Forms.TextBox txtLog;

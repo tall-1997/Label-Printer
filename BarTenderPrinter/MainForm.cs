@@ -14,8 +14,10 @@ namespace BarTenderPrinter
     {
         private readonly BarTenderService _btService = new BarTenderService();
         private readonly HistoryManager _history = new HistoryManager();
+        private readonly TemplateSettingsManager _templateSettings = new TemplateSettingsManager();
+        private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _configFile;
-        private readonly string _version = "v5.7.19";
+        private readonly string _version = "v5.7.20";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -26,9 +28,13 @@ namespace BarTenderPrinter
         private HashSet<string> _localData = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string _localDataPath = "";
         private bool _useLocalDataValidation = false;
-        private bool _allowDuplicatePrint = false;
         private bool _isInitializing = true;
+        private bool _isLoadingConfig;
         private bool _hasSavedDataSourceOrder;
+        private bool _lengthValidationEnabled;
+        private int _globalExpectedLength;
+        private long _globalLengthRevision;
+        private long _lengthRevisionCounter;
 
         public MainForm()
         {
@@ -39,9 +45,10 @@ namespace BarTenderPrinter
             MiuiTheme.ApplyTheme(this);
             Load += MainForm_Load;
             Shown += MainForm_Shown;
-            FormClosing += (s, e) => { _btService.Dispose(); };
+            FormClosing += (s, e) => { SaveCurrentTemplateSettings(); _historySearchTimer.Dispose(); _btService.Dispose(); };
             inputPanel.SizeChanged += InputPanel_SizeChanged;
             dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
+            _historySearchTimer.Tick += (s, e) => { _historySearchTimer.Stop(); LoadHistory(); };
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -73,7 +80,9 @@ namespace BarTenderPrinter
 
                 if (!string.IsNullOrEmpty(_selectedTemplatePath) && File.Exists(_selectedTemplatePath) && _btService.IsConnected)
                 {
-                    LoadTemplateDataSources(_selectedTemplatePath);
+                    var item = cmbTemplate.SelectedItem as TemplateItem;
+                    if (item == null || !RestoreTemplateSettings(item.Name, item.FullPath))
+                        LoadTemplateDataSources(_selectedTemplatePath);
                 }
 
                 AddLog("系统启动完成", "INFO");
@@ -193,12 +202,17 @@ namespace BarTenderPrinter
         {
             var item = cmbTemplate.SelectedItem as TemplateItem;
             if (item == null) return;
+            if (!_isInitializing && !string.IsNullOrEmpty(_selectedTemplatePath)) SaveCurrentTemplateSettings();
             _selectedTemplatePath = item.FullPath;
             lblSelectedTemplate.Text = item.Name;
 
             if (_isInitializing) return;
 
-            LoadTemplateDataSources(_selectedTemplatePath);
+            var restored = RestoreTemplateSettings(item.Name, item.FullPath);
+            if (!restored) ResetTemplateState();
+            LoadHistory();
+            RefreshStats();
+            if (!restored) LoadTemplateDataSources(_selectedTemplatePath);
         }
 
         private void LoadTemplateDataSources(string path)
@@ -213,19 +227,46 @@ namespace BarTenderPrinter
                 var names = _btService.GetTemplateDataSources(path);
                 BeginInvoke((Action)(() =>
                 {
+                    if (!string.Equals(path, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)) return;
                     if (names.Count == 0) return;
-                    var existingValues = GetCurrentInputValues();
+                    var previousSources = _dataSources.ToList();
                     var dlg = new DataSourceSelectDialog(names, _dataSources, _hasSavedDataSourceOrder);
                     if (dlg.ShowDialog(this) == DialogResult.OK)
                     {
                         _dataSources = dlg.SelectedSources;
+                        UpdateLengthRevisions(previousSources, _dataSources);
                         _hasSavedDataSourceOrder = true;
                         RebuildInputFields();
+                        SaveConfig();
                         AddLog($"已加载 {names.Count} 个数据源，选择了 {_dataSources.Count} 个", "SUCCESS");
-                        ShowDataSourceInputDialog(existingValues);
                     }
                 }));
             });
+        }
+
+        private void ResetTemplateState()
+        {
+            _dataSources = new List<DataSourceItem>();
+            _hasSavedDataSourceOrder = false;
+            _useLocalDataValidation = false;
+            _lengthValidationEnabled = false;
+            _globalExpectedLength = 0;
+            _globalLengthRevision = 0;
+            _lengthRevisionCounter = 0;
+            _localDataPath = "";
+            _localData.Clear();
+            _isLoadingConfig = true;
+            try
+            {
+                chkUseLocalData.Checked = false;
+                chkLengthValidation.Checked = false;
+                btnGlobalLength.Enabled = false;
+                numCopies.Value = 1;
+                if (cmbPrinter.Items.Count > 0) cmbPrinter.SelectedIndex = 0;
+                UpdateLocalDataLabel("");
+                RebuildInputFields();
+            }
+            finally { _isLoadingConfig = false; }
         }
 
         private class TemplateItem
@@ -250,12 +291,15 @@ namespace BarTenderPrinter
                 if (result != null && result.Count > 0) fields = result;
                 else fields = new List<string> { "IMEI1" };
             }
+            var previousSources = _dataSources.ToList();
             var dlg = new DataSourceSelectDialog(fields, _dataSources);
             if (dlg.ShowDialog(this) == DialogResult.OK)
             {
                 _dataSources = dlg.SelectedSources;
+                UpdateLengthRevisions(previousSources, _dataSources);
                 _hasSavedDataSourceOrder = true;
                 RebuildInputFields();
+                SaveConfig();
             }
         }
 
@@ -295,23 +339,67 @@ namespace BarTenderPrinter
         private void ShowDataSourceInputDialog(Dictionary<string, string> existingValues)
         {
             var enabled = _dataSources.Where(d => d.Enabled).ToList();
+            if (!ValidateConfiguredInputs(enabled, existingValues)) return;
             var editable = enabled.Where(d => !d.IsLocked && !d.AutoIncrementLocked).ToList();
+            var acceptedValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var source in enabled.Where(d => d.IsLocked || d.AutoIncrementLocked))
+            {
+                var lockedValue = source.LockedValue ?? "";
+                if (existingValues != null && existingValues.TryGetValue(source.Field, out var currentValue))
+                    lockedValue = currentValue;
+                if (!string.IsNullOrWhiteSpace(lockedValue)) acceptedValues.Add(lockedValue.Trim());
+            }
             for (int i = 0; i < editable.Count; i++)
             {
                 var source = editable[i];
                 var existingValue = "";
                 if (existingValues != null)
                     existingValues.TryGetValue(source.Field, out existingValue);
-                using (var dlg = new DataSourceInputDialog(source, existingValue ?? "", i + 1, editable.Count))
+                var expectedLength = GetExpectedLength(source);
+                var inputIndex = enabled.FindIndex(d => string.Equals(d.Field, source.Field, StringComparison.OrdinalIgnoreCase));
+                using (var dlg = new DataSourceInputDialog(source, existingValue ?? "", i + 1, editable.Count, expectedLength,
+                    value =>
+                    {
+                        var message = GetDuplicateValidationMessage(source, value, acceptedValues);
+                        if (!string.IsNullOrEmpty(message) && inputIndex >= 0 && inputIndex < _inputTextBoxes.Length)
+                            _inputTextBoxes[inputIndex].Text = "";
+                        return message;
+                    }))
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                    var inputIndex = enabled.FindIndex(d => string.Equals(d.Field, source.Field, StringComparison.OrdinalIgnoreCase));
                     if (inputIndex >= 0 && inputIndex < _inputTextBoxes.Length)
                         _inputTextBoxes[inputIndex].Text = dlg.Value;
+                    acceptedValues.Add(dlg.Value);
                 }
             }
 
             DoPrint();
+        }
+
+        private bool ValidateConfiguredInputs(List<DataSourceItem> enabled, Dictionary<string, string> values)
+        {
+            var configuredValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var source in enabled.Where(item => item.IsLocked || item.AutoIncrementLocked))
+            {
+                var value = source.LockedValue ?? "";
+                if (values != null && values.TryGetValue(source.Field, out var currentValue)) value = currentValue;
+                value = value.Trim();
+                if (string.IsNullOrEmpty(value)) continue;
+
+                var expectedLength = GetExpectedLength(source);
+                if (expectedLength > 0 && value.Length != expectedLength)
+                {
+                    MessageBox.Show(this, $"锁定数据源 \"{source.Name}\" 必须为 {expectedLength} 位。请在数据源配置中修正锁定值。", "长度校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+                if (_useLocalDataValidation && configuredValues.Contains(value))
+                {
+                    MessageBox.Show(this, $"锁定数据重复：{value}\n请在数据源配置中修正锁定值。", "数据校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+                configuredValues.Add(value);
+            }
+            return true;
         }
 
         private void RebuildInputFields()
@@ -552,7 +640,7 @@ namespace BarTenderPrinter
 
             if (nextIdx < _inputTextBoxes.Length)
             { _inputTextBoxes[nextIdx].Focus(); _inputTextBoxes[nextIdx].SelectAll(); }
-            else DoPrint();
+            else btnPrint.PerformClick();
         }
 
         private void ClearInputs()
@@ -856,11 +944,107 @@ namespace BarTenderPrinter
         private void chkUseLocalData_CheckedChanged(object sender, EventArgs e)
         {
             _useLocalDataValidation = chkUseLocalData.Checked;
+            if (!_isInitializing) SaveConfig();
         }
 
-        private void chkAllowDuplicate_CheckedChanged(object sender, EventArgs e)
+        private void chkLengthValidation_CheckedChanged(object sender, EventArgs e)
         {
-            _allowDuplicatePrint = chkAllowDuplicate.Checked;
+            _lengthValidationEnabled = chkLengthValidation.Checked;
+            btnGlobalLength.Enabled = chkLengthValidation.Checked;
+            if (_isInitializing || _isLoadingConfig) return;
+            if (!chkLengthValidation.Checked)
+            {
+                SaveConfig();
+                return;
+            }
+            if (_globalExpectedLength == 0 && !PromptForGlobalLength())
+            {
+                chkLengthValidation.Checked = false;
+                return;
+            }
+            SaveConfig();
+        }
+
+        private void btnGlobalLength_Click(object sender, EventArgs e)
+        {
+            if (PromptForGlobalLength()) SaveConfig();
+        }
+
+        private void numCopies_ValueChanged(object sender, EventArgs e)
+        {
+            if (!_isInitializing && !_isLoadingConfig) SaveConfig();
+        }
+
+        private bool PromptForGlobalLength()
+        {
+            using (var form = new Form())
+            {
+                form.Text = "设置全局数据长度";
+                form.Size = new Size(460, 170);
+                form.FormBorderStyle = FormBorderStyle.FixedDialog;
+                form.StartPosition = FormStartPosition.CenterParent;
+                form.MaximizeBox = false;
+                form.MinimizeBox = false;
+                var label = new Label { Text = "请输入一条符合模板要求的样例数据，系统将使用样例位数作为全局长度：", Location = new Point(12, 12), Size = new Size(420, 38) };
+                var input = new TextBox { Location = new Point(12, 52), Size = new Size(420, 25), MaxLength = 512 };
+                var ok = new Button { Text = "确定", Location = new Point(272, 92), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(357, 92), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+                form.Controls.AddRange(new Control[] { label, input, ok, cancel });
+                form.AcceptButton = ok;
+                form.CancelButton = cancel;
+                form.Shown += (s, e) => input.Focus();
+                ok.Click += (s, e) =>
+                {
+                    if (string.IsNullOrEmpty(input.Text))
+                    {
+                        MessageBox.Show(form, "样例数据不能为空", "长度校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        form.DialogResult = DialogResult.None;
+                    }
+                };
+                if (form.ShowDialog(this) != DialogResult.OK) return false;
+                _globalExpectedLength = input.Text.Length;
+                _globalLengthRevision = ++_lengthRevisionCounter;
+                AddLog($"全局数据长度已设置为 {_globalExpectedLength} 位", "SUCCESS");
+                return true;
+            }
+        }
+
+        private int GetExpectedLength(DataSourceItem source)
+        {
+            if (!_lengthValidationEnabled) return 0;
+            if (source.ExpectedLength > 0 && source.LengthRevision > _globalLengthRevision)
+                return source.ExpectedLength;
+            return _globalExpectedLength > 0 ? _globalExpectedLength : source.ExpectedLength;
+        }
+
+        private string GetDuplicateValidationMessage(DataSourceItem source, string value, HashSet<string> acceptedValues)
+        {
+            if (!_useLocalDataValidation) return null;
+            if (acceptedValues.Contains(value))
+                return $"输入数据重复：{value}\n请重新输入 {source.Name}。";
+            if (_history.ContainsAnyValue(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, value))
+                return $"该数据已存在于打印历史：{value}\n请重新输入 {source.Name}。";
+            return null;
+        }
+
+        private void UpdateLengthRevisions(List<DataSourceItem> previous, List<DataSourceItem> current)
+        {
+            foreach (var source in current)
+            {
+                var old = previous.FirstOrDefault(item => string.Equals(item.Field, source.Field, StringComparison.OrdinalIgnoreCase));
+                if (source.ExpectedLength <= 0)
+                {
+                    source.LengthRevision = 0;
+                }
+                else if (source.LengthEdited || old == null || old.ExpectedLength != source.ExpectedLength)
+                {
+                    source.LengthRevision = ++_lengthRevisionCounter;
+                }
+                else
+                {
+                    source.LengthRevision = old.LengthRevision;
+                }
+            }
         }
 
         private void UpdateLocalDataLabel(string text)
@@ -896,7 +1080,24 @@ namespace BarTenderPrinter
 
         #region Print
 
-        private void btnPrint_Click(object sender, EventArgs e) => DoPrint();
+        private void btnPrint_Click(object sender, EventArgs e)
+        {
+            if (!CanStartPrint()) return;
+            ShowDataSourceInputDialog(GetCurrentInputValues());
+        }
+
+        private bool CanStartPrint()
+        {
+            if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath))
+            { MessageBox.Show(this, "请先选择模板文件"); return false; }
+            if (!_btService.IsConnected)
+            { MessageBox.Show(this, "BarTender 未连接，请确认已安装 BarTender"); return false; }
+            if (cmbPrinter.SelectedItem == null)
+            { MessageBox.Show(this, "请选择打印机"); return false; }
+            if (!_dataSources.Any(d => d.Enabled))
+            { MessageBox.Show(this, "请配置数据源"); return false; }
+            return true;
+        }
 
         private void DoPrint()
         {
@@ -914,46 +1115,15 @@ namespace BarTenderPrinter
             if (enabled.Count == 0) { MessageBox.Show(this, "请配置数据源"); return; }
 
             var fieldValues = new Dictionary<string, string>();
-            var currentValues = new Dictionary<string, DataSourceItem>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < enabled.Count; i++)
             {
                 var val = _inputTextBoxes[i]?.Text?.Trim() ?? "";
                 if (string.IsNullOrEmpty(val) && !enabled[i].IsLocked)
                 { MessageBox.Show(this, $"\"{enabled[i].Name}\" 不能为空"); _inputTextBoxes[i]?.Focus(); return; }
-
-                if (!string.IsNullOrEmpty(val) && currentValues.TryGetValue(val, out var previousSource))
-                {
-                    MessageBox.Show(this,
-                        $"\"{enabled[i].Name}\" 与前面的 \"{previousSource.Name}\" 输入重复：{val}",
-                        "当前输入重复", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    _inputTextBoxes[i]?.Focus();
-                    _inputTextBoxes[i]?.SelectAll();
-                    AddLog($"当前输入重复: {enabled[i].Field} 与 {previousSource.Field} = {val}", "WARNING");
-                    return;
-                }
-
-                if (!string.IsNullOrEmpty(val))
-                    currentValues[val] = enabled[i];
                 fieldValues[enabled[i].Field] = val;
             }
 
-            // Historical duplicate check - check each field against all records
-            if (!_allowDuplicatePrint)
-            {
-                var duplicates = new List<string>();
-                foreach (var kv in fieldValues)
-                {
-                    if (string.IsNullOrEmpty(kv.Value)) continue;
-                    if (_history.ContainsAnyValue(kv.Value))
-                        duplicates.Add($"{kv.Key}={kv.Value}");
-                }
-                if (duplicates.Count > 0)
-                {
-                    if (MessageBox.Show(this, $"以下数据已打印过：\n{string.Join("\n", duplicates)}\n\n是否继续？", "数据重复",
-                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
-                    { AddLog("用户取消（数据重复）", "WARNING"); return; }
-                }
-            }
+            if (!ValidateInputValues(enabled, fieldValues)) return;
 
             // Local data validation - only if enabled
             if (_useLocalDataValidation)
@@ -963,21 +1133,31 @@ namespace BarTenderPrinter
             }
 
             int copies = (int)numCopies.Value;
-            var historyKey = string.Join("|", fieldValues.Values);
+            var templatePath = _selectedTemplatePath;
+            var templateName = Path.GetFileName(templatePath);
             var readOnlyStates = _inputTextBoxes.Select(input => input?.ReadOnly ?? false).ToArray();
-            SetStatus("打印中..."); SetInputsReadOnly(true); btnPrint.Enabled = false;
+            SetStatus("打印中..."); SetInputsReadOnly(true); SetPrintEnvironmentEnabled(false);
             AddLog($"打印: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
 
             Task.Run(() =>
             {
-                var result = _btService.Print(_selectedTemplatePath, fieldValues, printer, copies);
+                PrintResult result;
+                try
+                {
+                    result = _btService.Print(templatePath, fieldValues, printer, copies);
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Error("打印失败", ex);
+                    result = new PrintResult(false, ex.Message);
+                }
                 BeginInvoke((Action)(() =>
                 {
                     if (result.Success)
                     {
                         SetStatus("打印完成");
                         AddLog("打印完成", "SUCCESS");
-                        _history.Add(historyKey, "PASS");
+                        _history.Add(templateName, templatePath, fieldValues, "PASS", printer, copies);
 
                         for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
                         {
@@ -988,87 +1168,203 @@ namespace BarTenderPrinter
                             }
                         }
 
-                        // Auto-increment enabled fields
                         AutoIncrementFields(enabled);
-
-                        // Clear non-auto-increment fields
                         ClearNonAutoIncrementInputs(enabled);
                         SaveConfig();
+                        SaveCurrentTemplateSettings();
                     }
                     else
                     {
                         SetStatus("打印失败");
-                        AddLog($"失败: {result.ErrorMessage}", "ERROR");
-                        _history.Add(historyKey, "FAIL");
+                        AddLog($"打印失败: {result.ErrorMessage}", "ERROR");
+                        _history.Add(templateName, templatePath, fieldValues, "FAIL", printer, copies);
                         RestoreInputReadOnlyStates(readOnlyStates);
                     }
-                    btnPrint.Enabled = true;
+                    SetPrintEnvironmentEnabled(true);
                     LoadHistory(); RefreshStats();
                 }));
             });
+        }
+
+        private bool ValidateInputValues(List<DataSourceItem> enabled, Dictionary<string, string> fieldValues)
+        {
+            if (_lengthValidationEnabled)
+            {
+                for (int i = 0; i < enabled.Count; i++)
+                {
+                    var value = fieldValues[enabled[i].Field];
+                    var expectedLength = GetExpectedLength(enabled[i]);
+                    if (expectedLength > 0 && value.Length != expectedLength)
+                    {
+                        MessageBox.Show(this, $"\"{enabled[i].Name}\" 必须为 {expectedLength} 位，当前为 {value.Length} 位。", "长度校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        if (!_inputTextBoxes[i].ReadOnly)
+                        {
+                            _inputTextBoxes[i].Text = "";
+                            _inputTextBoxes[i].Focus();
+                        }
+                        return false;
+                    }
+                }
+            }
+
+            if (!_useLocalDataValidation) return true;
+            var seen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < enabled.Count; i++)
+            {
+                var value = fieldValues[enabled[i].Field];
+                var isEditable = !enabled[i].IsLocked && !enabled[i].AutoIncrementLocked;
+                if (seen.ContainsKey(value) || (isEditable && _history.ContainsAnyValue(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, value)))
+                {
+                    MessageBox.Show(this, $"重复数据：{value}\n请重新输入 {enabled[i].Name}。", "数据校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    if (isEditable)
+                    {
+                        _inputTextBoxes[i].Text = "";
+                        _inputTextBoxes[i].Focus();
+                        _inputTextBoxes[i].SelectAll();
+                    }
+                    AddLog($"数据重复: {enabled[i].Field}={value}", "WARNING");
+                    return false;
+                }
+                seen[value] = i;
+            }
+            return true;
         }
 
         #endregion
 
         #region History
 
-        private void txtSearch_TextChanged(object sender, EventArgs e) => LoadHistory();
+        private void txtSearch_TextChanged(object sender, EventArgs e)
+        {
+            _historySearchTimer.Stop();
+            _historySearchTimer.Start();
+        }
+        private void chkExactSearch_CheckedChanged(object sender, EventArgs e) => LoadHistory();
         private void btnClearSearch_Click(object sender, EventArgs e) { txtSearch.Text = ""; }
         private void btnClearHistory_Click(object sender, EventArgs e)
         {
-            if (MessageBox.Show(this, "确定清空所有记录？", "确认", MessageBoxButtons.YesNo) == DialogResult.Yes)
-            { _history.Clear(); LoadHistory(); RefreshStats(); }
+            if (MessageBox.Show(this, "确定清空当前模板的全部记录？", "确认", MessageBoxButtons.YesNo) == DialogResult.Yes)
+            { _history.Clear(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath); LoadHistory(); RefreshStats(); }
         }
         private void btnExportHistory_Click(object sender, EventArgs e)
         {
-            if (_history.Records.Count == 0) { MessageBox.Show(this, "没有记录"); return; }
+            var records = GetCurrentHistoryRecords();
+            if (records.Count == 0) { MessageBox.Show(this, "当前模板没有可导出的记录"); return; }
             using (var sfd = new SaveFileDialog { Filter = "CSV|*.csv", FileName = $"records_{DateTime.Now:yyyyMMdd_HHmmss}.csv" })
             {
                 if (sfd.ShowDialog(this) == DialogResult.OK)
-                { try { _history.Export(sfd.FileName, txtSearch?.Text?.Trim() ?? ""); MessageBox.Show(this, "导出成功"); } catch (Exception ex) { MessageBox.Show(this, ex.Message); } }
+                { try { _history.Export(sfd.FileName, records); MessageBox.Show(this, "导出成功"); } catch (Exception ex) { MessageBox.Show(this, ex.Message); } }
             }
         }
+        private void btnReprintHistory_Click(object sender, EventArgs e)
+        {
+            if (dgvHistory.SelectedRows.Count == 0)
+            { MessageBox.Show(this, "请先选择一条历史记录"); return; }
+
+            var row = dgvHistory.SelectedRows[0];
+            var recordId = row.Cells["记录ID"].Value?.ToString() ?? "";
+            var record = _history.GetById(recordId);
+            if (record == null || record.FieldValues == null || record.FieldValues.Count == 0)
+            { MessageBox.Show(this, "该历史记录缺少完整字段数据，无法直接补打印"); return; }
+
+            var details = record.FieldValues.Select(item => $"{item.Key}: {item.Value}");
+            var message = $"确认补打印选中的历史记录？\n\n模板: {record.TemplateName}\n打印机: {record.Printer}\n份数: {record.Copies}\n\n{string.Join("\n", details)}";
+            if (MessageBox.Show(this, message, "确认补打印", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                PrintHistoryRecord(record);
+        }
+
+        private void PrintHistoryRecord(PrintRecord record)
+        {
+            if (!File.Exists(record.TemplatePath))
+            { MessageBox.Show(this, $"历史模板文件不存在：\n{record.TemplatePath}"); return; }
+            if (string.IsNullOrEmpty(record.Printer))
+            { MessageBox.Show(this, "历史记录缺少打印机信息，无法直接补打印"); return; }
+            if (!cmbPrinter.Items.Contains(record.Printer))
+            { MessageBox.Show(this, $"历史打印机当前不可用：{record.Printer}"); return; }
+            SetPrintEnvironmentEnabled(false);
+            SetStatus("补打印中...");
+            var values = new Dictionary<string, string>(record.FieldValues, StringComparer.OrdinalIgnoreCase);
+            Task.Run(() =>
+            {
+                PrintResult result;
+                try { result = _btService.Print(record.TemplatePath, values, record.Printer, record.Copies); }
+                catch (Exception ex) { result = new PrintResult(false, ex.Message); }
+                BeginInvoke((Action)(() =>
+                {
+                    _history.Add(record.TemplateName, record.TemplatePath, values,
+                        result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", record.Printer, record.Copies);
+                    AddLog(result.Success ? "历史记录补打印完成" : $"历史记录补打印失败: {result.ErrorMessage}", result.Success ? "SUCCESS" : "ERROR");
+                    SetPrintEnvironmentEnabled(true);
+                    LoadHistory();
+                    RefreshStats();
+                }));
+            });
+        }
+
+        private void SetPrintEnvironmentEnabled(bool enabled)
+        {
+            btnPrint.Enabled = enabled;
+            btnReprintHistory.Enabled = enabled;
+            cmbTemplate.Enabled = enabled;
+            cmbPrinter.Enabled = enabled;
+            numCopies.Enabled = enabled;
+            btnEditDataSources.Enabled = enabled;
+            btnBrowseDir.Enabled = enabled;
+            btnLoadConfig.Enabled = enabled;
+            inputPanel.Enabled = enabled;
+        }
+
+        private List<PrintRecord> GetCurrentHistoryRecords()
+        {
+            return _history.Search(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, txtSearch?.Text ?? "", chkExactSearch.Checked);
+        }
+
         private void LoadHistory()
         {
             dgvHistory.DataSource = null;
-            var dt = new DataTable(); dt.Columns.Add("IMEI"); dt.Columns.Add("打印时间"); dt.Columns.Add("状态");
-            var kw = txtSearch?.Text?.Trim().ToLower() ?? "";
-            foreach (var r in _history.Records.AsEnumerable().Reverse())
+            var dt = new DataTable(); dt.Columns.Add("记录ID"); dt.Columns.Add("数据"); dt.Columns.Add("打印时间"); dt.Columns.Add("状态"); dt.Columns.Add("打印机"); dt.Columns.Add("份数");
+            foreach (var r in GetCurrentHistoryRecords().AsEnumerable().Reverse())
             {
-                if (!string.IsNullOrEmpty(kw) && !r.Imei.ToLower().Contains(kw) && !r.PrintTime.ToLower().Contains(kw) && !r.Status.ToLower().Contains(kw)) continue;
-                var status = r.Status == "PASS" ? "PASS" : "FAIL";
-                dt.Rows.Add(r.Imei, r.PrintTime, status);
+                var values = r.FieldValues != null && r.FieldValues.Count > 0
+                    ? string.Join(" | ", r.FieldValues.Select(item => $"{item.Key}={item.Value}"))
+                    : r.Imei;
+                dt.Rows.Add(r.RecordId, values, r.PrintTime, r.Status, r.Printer, r.Copies);
             }
             dgvHistory.DataSource = dt;
+            dgvHistory.Columns["记录ID"].Visible = false;
 
             // Apply color formatting to status column
             foreach (DataGridViewRow row in dgvHistory.Rows)
             {
                 var statusCell = row.Cells["状态"];
-                if (statusCell?.Value?.ToString() == "PASS")
+                if (statusCell?.Value?.ToString().EndsWith("PASS", StringComparison.Ordinal) == true)
                 {
                     statusCell.Style.ForeColor = Color.Green;
                     statusCell.Style.Font = new Font(dgvHistory.Font, FontStyle.Bold);
                 }
-                else if (statusCell?.Value?.ToString() == "FAIL")
+                else if (statusCell?.Value?.ToString().EndsWith("FAIL", StringComparison.Ordinal) == true)
                 {
                     statusCell.Style.ForeColor = Color.Red;
                     statusCell.Style.Font = new Font(dgvHistory.Font, FontStyle.Bold);
                 }
             }
+            dgvHistory.ClearSelection();
         }
         private void RefreshStats()
         {
-            lblTodayCount.Text = _history.TodayCount().ToString();
-            lblTotalCount.Text = _history.TotalCount().ToString();
-            SetStatus($"就绪 | 今日: {_history.TodayCount()} | 总计: {_history.TotalCount()}");
+            var records = _history.Search(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, "", false);
+            var today = DateTime.Now.ToString("yyyy-MM-dd");
+            var todayCount = records.Count(record => record.PrintTime.StartsWith(today));
+            lblTodayCount.Text = todayCount.ToString();
+            lblTotalCount.Text = records.Count.ToString();
+            SetStatus($"就绪 | 今日: {todayCount} | 总计: {records.Count}");
         }
 
         private void DgvHistory_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0) return;
             var row = dgvHistory.Rows[e.RowIndex];
-            var imei = row.Cells["IMEI"].Value?.ToString() ?? "";
+            var imei = row.Cells["数据"].Value?.ToString() ?? "";
             var time = row.Cells["打印时间"].Value?.ToString() ?? "";
             var status = row.Cells["状态"].Value?.ToString() ?? "";
 
@@ -1089,9 +1385,88 @@ namespace BarTenderPrinter
         #region Config
 
         private void btnSaveConfig_Click(object sender, EventArgs e)
-        { SaveConfig(); MessageBox.Show(this, "配置已保存"); AddLog("配置已保存", "SUCCESS"); }
+        { SaveConfig(); SaveCurrentTemplateSettings(); MessageBox.Show(this, "配置已保存"); AddLog("配置已保存", "SUCCESS"); }
         private void btnLoadConfig_Click(object sender, EventArgs e)
         { LoadConfig(_configFile); PopulateTemplateList(_templatesFolder); RebuildInputFields(); MessageBox.Show(this, "配置已加载"); }
+
+        private void SaveCurrentTemplateSettings()
+        {
+            if (string.IsNullOrEmpty(_selectedTemplatePath)) return;
+            try
+            {
+                _templateSettings.Save(new TemplateSettings
+                {
+                    TemplateName = Path.GetFileName(_selectedTemplatePath),
+                    TemplatePath = _selectedTemplatePath,
+                    Printer = cmbPrinter.SelectedItem?.ToString() ?? "",
+                    Copies = (int)numCopies.Value,
+                    InputValidation = _useLocalDataValidation,
+                    LengthValidation = _lengthValidationEnabled,
+                    GlobalExpectedLength = _globalExpectedLength,
+                    GlobalLengthRevision = _globalLengthRevision,
+                    LengthRevisionCounter = _lengthRevisionCounter,
+                    LocalDataPath = _localDataPath,
+                    LocalData = _localData.ToList(),
+                    DataSources = _dataSources.Select(CloneDataSource).ToList()
+                });
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error("保存模板设置失败", ex);
+            }
+        }
+
+        private bool RestoreTemplateSettings(string templateName, string templatePath)
+        {
+            if (!_templateSettings.TryGet(templateName, templatePath, out var settings)) return false;
+            _isLoadingConfig = true;
+            try
+            {
+                _dataSources = (settings.DataSources ?? new List<DataSourceItem>()).Select(CloneDataSource).ToList();
+                _hasSavedDataSourceOrder = _dataSources.Count > 0;
+                _useLocalDataValidation = settings.InputValidation;
+                _lengthValidationEnabled = settings.LengthValidation;
+                _globalExpectedLength = settings.GlobalExpectedLength;
+                _globalLengthRevision = settings.GlobalLengthRevision;
+                _lengthRevisionCounter = settings.LengthRevisionCounter;
+                _localDataPath = settings.LocalDataPath ?? "";
+                _localData = new HashSet<string>(settings.LocalData ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+                chkUseLocalData.Checked = _useLocalDataValidation;
+                chkLengthValidation.Checked = _lengthValidationEnabled;
+                btnGlobalLength.Enabled = _lengthValidationEnabled;
+                numCopies.Value = Math.Max(1, Math.Min(99, settings.Copies));
+                if (!string.IsNullOrEmpty(settings.Printer) && cmbPrinter.Items.Contains(settings.Printer))
+                    cmbPrinter.SelectedItem = settings.Printer;
+                else if (cmbPrinter.Items.Count > 0)
+                    cmbPrinter.SelectedIndex = 0;
+                UpdateLocalDataLabel(_localData.Count > 0 ? $"已恢复: {_localData.Count} 条" : "");
+                RebuildInputFields();
+                AddLog($"已恢复模板设置: {templateName}", "INFO");
+                return true;
+            }
+            finally
+            {
+                _isLoadingConfig = false;
+            }
+        }
+
+        private static DataSourceItem CloneDataSource(DataSourceItem source)
+        {
+            return new DataSourceItem
+            {
+                Name = source.Name,
+                Field = source.Field,
+                Enabled = source.Enabled,
+                AutoIncrement = source.AutoIncrement,
+                AutoStep = source.AutoStep,
+                IsLocked = source.IsLocked,
+                LockAfterInput = source.LockAfterInput,
+                LockedValue = source.LockedValue,
+                AutoIncrementLocked = source.AutoIncrementLocked,
+                ExpectedLength = source.ExpectedLength,
+                LengthRevision = source.LengthRevision
+            };
+        }
 
         private void SaveConfig()
         {
@@ -1107,6 +1482,11 @@ namespace BarTenderPrinter
             IniWriteValue("General", "TemplatesFolder", _templatesFolder ?? "", _configFile);
             IniWriteValue("General", "Printer", cmbPrinter.SelectedItem?.ToString() ?? "", _configFile);
             IniWriteValue("General", "Copies", numCopies.Value.ToString(), _configFile);
+            IniWriteValue("General", "InputValidation", _useLocalDataValidation.ToString(), _configFile);
+            IniWriteValue("General", "LengthValidation", _lengthValidationEnabled.ToString(), _configFile);
+            IniWriteValue("General", "GlobalExpectedLength", _globalExpectedLength.ToString(), _configFile);
+            IniWriteValue("General", "GlobalLengthRevision", _globalLengthRevision.ToString(), _configFile);
+            IniWriteValue("General", "LengthRevisionCounter", _lengthRevisionCounter.ToString(), _configFile);
             IniWriteValue("General", "DSCount", _dataSources.Count.ToString(), _configFile);
             for (int i = 0; i < _dataSources.Count; i++)
             {
@@ -1118,38 +1498,62 @@ namespace BarTenderPrinter
                 IniWriteValue($"DS{i}", "IsLocked", _dataSources[i].IsLocked.ToString(), _configFile);
                 IniWriteValue($"DS{i}", "LockAfterInput", _dataSources[i].LockAfterInput.ToString(), _configFile);
                 IniWriteValue($"DS{i}", "LockedValue", _dataSources[i].LockedValue ?? "", _configFile);
+                IniWriteValue($"DS{i}", "ExpectedLength", _dataSources[i].ExpectedLength.ToString(), _configFile);
+                IniWriteValue($"DS{i}", "LengthRevision", _dataSources[i].LengthRevision.ToString(), _configFile);
             }
         }
 
         private void LoadConfig(string path)
         {
-            _templatesFolder = IniReadValue("General", "TemplatesFolder", path);
-            if (string.IsNullOrWhiteSpace(_templatesFolder)) _templatesFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "templates");
-            txtTemplateDir.Text = _templatesFolder;
-            var copies = 1; int.TryParse(IniReadValue("General", "Copies", path), out copies); numCopies.Value = Math.Max(1, Math.Min(99, copies));
-            int.TryParse(IniReadValue("General", "DSCount", path), out int count);
-            _hasSavedDataSourceOrder = count > 0;
-            _dataSources = new List<DataSourceItem>();
-            for (int i = 0; i < count; i++)
+            _isLoadingConfig = true;
+            try
             {
-                var en = true; bool.TryParse(IniReadValue($"DS{i}", "Enabled", path), out en);
-                var autoInc = false; bool.TryParse(IniReadValue($"DS{i}", "AutoIncrement", path), out autoInc);
-                var autoStep = 1; int.TryParse(IniReadValue($"DS{i}", "AutoStep", path), out autoStep);
-                var isLocked = false; bool.TryParse(IniReadValue($"DS{i}", "IsLocked", path), out isLocked);
-                var lockAfterInput = false; bool.TryParse(IniReadValue($"DS{i}", "LockAfterInput", path), out lockAfterInput);
-                _dataSources.Add(new DataSourceItem
+                _templatesFolder = IniReadValue("General", "TemplatesFolder", path);
+                if (string.IsNullOrWhiteSpace(_templatesFolder)) _templatesFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "templates");
+                txtTemplateDir.Text = _templatesFolder;
+                var copies = 1; int.TryParse(IniReadValue("General", "Copies", path), out copies); numCopies.Value = Math.Max(1, Math.Min(99, copies));
+                bool.TryParse(IniReadValue("General", "InputValidation", path), out _useLocalDataValidation);
+                chkUseLocalData.Checked = _useLocalDataValidation;
+                bool.TryParse(IniReadValue("General", "LengthValidation", path), out _lengthValidationEnabled);
+                int.TryParse(IniReadValue("General", "GlobalExpectedLength", path), out _globalExpectedLength);
+                long.TryParse(IniReadValue("General", "GlobalLengthRevision", path), out _globalLengthRevision);
+                long.TryParse(IniReadValue("General", "LengthRevisionCounter", path), out _lengthRevisionCounter);
+                _lengthRevisionCounter = Math.Max(_lengthRevisionCounter, _globalLengthRevision);
+                chkLengthValidation.Checked = _lengthValidationEnabled;
+                btnGlobalLength.Enabled = _lengthValidationEnabled;
+                int.TryParse(IniReadValue("General", "DSCount", path), out int count);
+                _hasSavedDataSourceOrder = count > 0;
+                _dataSources = new List<DataSourceItem>();
+                for (int i = 0; i < count; i++)
                 {
-                    Name = IniReadValue($"DS{i}", "Name", path),
-                    Field = IniReadValue($"DS{i}", "Field", path),
-                    Enabled = en,
-                    AutoIncrement = autoInc,
-                    AutoStep = autoStep,
-                    IsLocked = isLocked,
-                    LockAfterInput = lockAfterInput,
-                    LockedValue = IniReadValue($"DS{i}", "LockedValue", path)
-                });
+                    var en = true; bool.TryParse(IniReadValue($"DS{i}", "Enabled", path), out en);
+                    var autoInc = false; bool.TryParse(IniReadValue($"DS{i}", "AutoIncrement", path), out autoInc);
+                    var autoStep = 1; int.TryParse(IniReadValue($"DS{i}", "AutoStep", path), out autoStep);
+                    var isLocked = false; bool.TryParse(IniReadValue($"DS{i}", "IsLocked", path), out isLocked);
+                    var lockAfterInput = false; bool.TryParse(IniReadValue($"DS{i}", "LockAfterInput", path), out lockAfterInput);
+                    int.TryParse(IniReadValue($"DS{i}", "ExpectedLength", path), out int expectedLength);
+                    long.TryParse(IniReadValue($"DS{i}", "LengthRevision", path), out long lengthRevision);
+                    _lengthRevisionCounter = Math.Max(_lengthRevisionCounter, lengthRevision);
+                    _dataSources.Add(new DataSourceItem
+                    {
+                        Name = IniReadValue($"DS{i}", "Name", path),
+                        Field = IniReadValue($"DS{i}", "Field", path),
+                        Enabled = en,
+                        AutoIncrement = autoInc,
+                        AutoStep = autoStep,
+                        IsLocked = isLocked,
+                        LockAfterInput = lockAfterInput,
+                        LockedValue = IniReadValue($"DS{i}", "LockedValue", path),
+                        ExpectedLength = expectedLength,
+                        LengthRevision = lengthRevision
+                    });
+                }
+                if (_dataSources.Count == 0) _dataSources.Add(new DataSourceItem { Name = "IMEI", Field = "IMEI1", Enabled = true });
             }
-            if (_dataSources.Count == 0) _dataSources.Add(new DataSourceItem { Name = "IMEI", Field = "IMEI1", Enabled = true });
+            finally
+            {
+                _isLoadingConfig = false;
+            }
         }
 
         #endregion
@@ -1209,17 +1613,19 @@ namespace BarTenderPrinter
             public NumericUpDown NumStep;
             public ComboBox CmbLockMode;
             public TextBox TxtLockedValue;
+            public NumericUpDown NumExpectedLength;
+            public bool LengthEdited;
             public bool WasInputLocked;
             public Label Grip;
         }
 
         public DataSourceSelectDialog(List<string> fields, List<DataSourceItem> current, bool preserveExistingOrder = true)
         {
-            Text = "选择数据源 - 拖拽排序"; Size = new Size(850, 460);
+            Text = "选择数据源 - 拖拽排序"; Size = new Size(980, 460);
             FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false;
 
-            var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，拖拽 ≡ 排序，勾选使用：", Location = new Point(10, 10), Size = new Size(810, 20) };
+            var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，拖拽 ≡ 排序，勾选使用：", Location = new Point(10, 10), Size = new Size(940, 20) };
 
             chkSelectAll = new CheckBox { Text = "全选/全不选", Location = new Point(10, 32), Size = new Size(100, 20), Checked = true };
             chkSelectAll.CheckedChanged += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = chkSelectAll.Checked; };
@@ -1231,8 +1637,9 @@ namespace BarTenderPrinter
             var hdrStep = new Label { Text = "步长", Location = new Point(380, 55), Size = new Size(60, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
             var hdrLock = new Label { Text = "锁定方式", Location = new Point(440, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
             var hdrLockedValue = new Label { Text = "锁定值（可空）", Location = new Point(565, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrLength = new Label { Text = "单项长度", Location = new Point(795, 55), Size = new Size(70, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
 
-            _scrollPanel = new Panel { Location = new Point(10, 75), Size = new Size(810, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
+            _scrollPanel = new Panel { Location = new Point(10, 75), Size = new Size(940, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
 
             var fieldSet = new HashSet<string>(fields, StringComparer.OrdinalIgnoreCase);
             var orderedFields = new List<string>();
@@ -1254,19 +1661,19 @@ namespace BarTenderPrinter
                 var existing = current.FirstOrDefault(d => string.Equals(d.Field, field, StringComparison.OrdinalIgnoreCase));
                 bool isChecked = existing != null ? existing.Enabled : (!preserveExistingOrder || current.Count == 0);
                 CreateRow(field, isChecked, existing?.Name ?? field, existing?.AutoIncrement ?? false, existing?.AutoStep ?? 1,
-                    existing?.IsLocked ?? false, existing?.LockAfterInput ?? false, existing?.LockedValue ?? "");
+                    existing?.IsLocked ?? false, existing?.LockAfterInput ?? false, existing?.LockedValue ?? "", existing?.ExpectedLength ?? 0);
             }
 
             RelayoutRows();
 
-            var infoLbl = new Label { Text = "拖拽 ≡ 图标可调整排序，增序示例：AC20260616 → AC20260617", Location = new Point(10, 340), Size = new Size(400, 16), ForeColor = Color.Gray };
+            var infoLbl = new Label { Text = "拖拽 ≡ 可调整排序；单项长度 0 表示引用当前全局长度规则", Location = new Point(10, 340), Size = new Size(500, 16), ForeColor = Color.Gray };
 
             var btnSelectAll = new Button { Text = "全选", Location = new Point(10, 365), Size = new Size(50, 25) };
             btnSelectAll.Click += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = true; };
             var btnSelectNone = new Button { Text = "全不选", Location = new Point(65, 365), Size = new Size(55, 25) };
             btnSelectNone.Click += (s, e) => { foreach (var r in _rows) r.CbEnabled.Checked = false; };
 
-            var ok = new Button { Text = "确定", Location = new Point(650, 365), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+            var ok = new Button { Text = "确定", Location = new Point(780, 365), Size = new Size(75, 28), DialogResult = DialogResult.OK };
             ok.Click += (s, e) =>
             {
                 SelectedSources = new List<DataSourceItem>();
@@ -1283,23 +1690,25 @@ namespace BarTenderPrinter
                             LockAfterInput = r.CmbLockMode.SelectedIndex == 2,
                             LockedValue = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && r.WasInputLocked)
                                 ? r.TxtLockedValue.Text.Trim()
-                                : ""
+                                : "",
+                            ExpectedLength = (int)r.NumExpectedLength.Value,
+                            LengthEdited = r.LengthEdited
                         });
             };
-            var cancel = new Button { Text = "取消", Location = new Point(735, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+            var cancel = new Button { Text = "取消", Location = new Point(865, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
 
-            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrDisplay, hdrAuto, hdrStep, hdrLock, hdrLockedValue, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
+            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrDisplay, hdrAuto, hdrStep, hdrLock, hdrLockedValue, hdrLength, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
             AcceptButton = ok; CancelButton = cancel;
         }
 
         private void CreateRow(string field, bool checkedVal, string displayName, bool autoInc, int autoStep,
-            bool isLocked, bool lockAfterInput, string lockedValue)
+            bool isLocked, bool lockAfterInput, string lockedValue, int expectedLength)
         {
             var row = new DataSourceRow { Field = field, WasInputLocked = isLocked && lockAfterInput };
 
             row.RowPanel = new Panel
             {
-                Size = new Size(800, 28),
+                Size = new Size(930, 28),
                 AllowDrop = true,
                 Tag = _rows.Count,
                 BackColor = Color.Transparent
@@ -1332,6 +1741,8 @@ namespace BarTenderPrinter
             row.CmbLockMode.Items.AddRange(new object[] { "不锁定", "固定锁定", "输入后锁定" });
             row.CmbLockMode.SelectedIndex = lockAfterInput ? 2 : isLocked ? 1 : 0;
             row.TxtLockedValue = new TextBox { Location = new Point(565, 0), Size = new Size(220, 25), Text = lockedValue ?? "" };
+            row.NumExpectedLength = new NumericUpDown { Location = new Point(795, 0), Size = new Size(70, 25), Minimum = 0, Maximum = 512, Value = Math.Max(0, Math.Min(512, expectedLength)) };
+            row.NumExpectedLength.ValueChanged += (s, e) => row.LengthEdited = true;
             row.TxtLockedValue.Enabled = row.CmbLockMode.SelectedIndex == 1;
             row.CmbLockMode.SelectedIndexChanged += (s, e) =>
             {
@@ -1352,7 +1763,7 @@ namespace BarTenderPrinter
                 }
             };
 
-            row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.TxtName, row.CbAutoInc, row.NumStep, row.CmbLockMode, row.TxtLockedValue });
+            row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.TxtName, row.CbAutoInc, row.NumStep, row.CmbLockMode, row.TxtLockedValue, row.NumExpectedLength });
             _scrollPanel.Controls.Add(row.RowPanel);
 
             _rows.Add(row);
@@ -1415,10 +1826,14 @@ namespace BarTenderPrinter
         public string Value { get; private set; }
         private readonly DataSourceItem _source;
         private readonly TextBox _input;
+        private readonly int _expectedLength;
+        private readonly Func<string, string> _validateDuplicate;
 
-        public DataSourceInputDialog(DataSourceItem source, string existingValue, int position, int total)
+        public DataSourceInputDialog(DataSourceItem source, string existingValue, int position, int total, int expectedLength, Func<string, string> validateDuplicate)
         {
             _source = source;
+            _expectedLength = expectedLength;
+            _validateDuplicate = validateDuplicate;
             Value = existingValue ?? "";
             Text = $"输入数据源 ({position}/{total})";
             Size = new Size(500, 190);
@@ -1436,7 +1851,7 @@ namespace BarTenderPrinter
             };
             var progress = new Label
             {
-                Text = $"当前第 {position} 项，共 {total} 项",
+                Text = $"当前第 {position} 项，共 {total} 项" + (expectedLength > 0 ? $"，要求 {expectedLength} 位" : ""),
                 Location = new Point(12, 38),
                 Size = new Size(455, 18),
                 ForeColor = Color.Gray
@@ -1501,6 +1916,21 @@ namespace BarTenderPrinter
             if (string.IsNullOrEmpty(value))
             {
                 MessageBox.Show(this, $"\"{_source.Name}\" 不能为空", "数据源输入", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _input.Focus();
+                return;
+            }
+            if (_expectedLength > 0 && value.Length != _expectedLength)
+            {
+                MessageBox.Show(this, $"\"{_source.Name}\" 必须为 {_expectedLength} 位，当前为 {value.Length} 位。", "长度校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _input.Clear();
+                _input.Focus();
+                return;
+            }
+            var duplicateMessage = _validateDuplicate?.Invoke(value);
+            if (!string.IsNullOrEmpty(duplicateMessage))
+            {
+                MessageBox.Show(this, duplicateMessage, "数据校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _input.Clear();
                 _input.Focus();
                 return;
             }
@@ -1574,5 +2004,8 @@ namespace BarTenderPrinter
         public bool LockAfterInput { get; set; }
         public string LockedValue { get; set; } = "";
         public bool AutoIncrementLocked { get; set; }
+        public int ExpectedLength { get; set; }
+        public long LengthRevision { get; set; }
+        public bool LengthEdited { get; set; }
     }
 }
