@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.30** - C# WinForms 安装版
+**v5.7.31** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -74,7 +74,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender 标签打印工具 v5.7.30    [导出日志]  │
+│ BarTender 标签打印工具 v5.7.31    [导出日志]  │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -125,6 +125,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
+| [v5.7.31](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.31) | ~49 MB | 订单完整设置平铺编辑版 |
 | [v5.7.30](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.30) | ~49 MB | 多模板订单、模板更新检测和页面布局修复版 |
 | [v5.7.29](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.29) | ~49 MB | C# WinForms 当前用户安装版 |
 | [v5.7.28](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.28) | ~49 MB | 订单添加页面内嵌数据源设置版 |

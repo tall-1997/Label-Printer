@@ -20,7 +20,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.30";
+        private readonly string _version = "v5.7.31";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -57,12 +57,17 @@ namespace BarTenderPrinter
         private TextBox _txtOrderNumber;
         private TextBox _txtOrderTemplate;
         private TextBox _txtManualOrderDataSource;
-        private ComboBox _cmbOrderTemplates;
+        private FlowLayoutPanel _orderTemplateCards;
         private ComboBox _cmbOrderPrinter;
         private NumericUpDown _numOrderCopies;
+        private CheckBox _chkOrderInputValidation;
+        private CheckBox _chkOrderLengthValidation;
+        private NumericUpDown _numOrderGlobalLength;
+        private Label _lblOrderLocalData;
         private DataGridView _orderDataSourcesGrid;
         private readonly List<OrderTemplate> _orderTemplateDrafts = new List<OrderTemplate>();
         private OrderTemplate _selectedOrderTemplateDraft;
+        private PackagingOrder _editingOrder;
         private PackagingOrder _activeOrder;
         private OrderTemplate _activeOrderTemplate;
         private bool _loadingOrderTemplate;
@@ -212,6 +217,13 @@ namespace BarTenderPrinter
             _orderPagePanel.BringToFront();
             MiuiTheme.StyleButton(_btnOrderPage, true);
             MiuiTheme.StyleButton(_btnPrintPage);
+            if (_activeOrder != null) ShowOrderSettingsPage(_activeOrder);
+            else if (HasCompleteOrderSelection())
+            {
+                var order = _orders.Find(_cmbOrderCustomer.SelectedItem?.ToString(), _cmbOrderModel.SelectedItem?.ToString(),
+                    _cmbOrderColor.SelectedItem?.ToString(), _cmbOrderNumber.SelectedItem?.ToString());
+                if (order != null) ShowOrderSettingsPage(order);
+            }
         }
 
         private void RefreshPrintOrderSelector()
@@ -261,7 +273,7 @@ namespace BarTenderPrinter
 
         private enum OrderFilterLevel { All, Customer, Model, Color }
 
-        private void RefreshOrderFilters(OrderFilterLevel level = OrderFilterLevel.All)
+        private void RefreshOrderFilters(OrderFilterLevel level = OrderFilterLevel.All, bool applySelection = true)
         {
             _loadingOrderFilters = true;
             try
@@ -285,7 +297,7 @@ namespace BarTenderPrinter
                 _loadingOrderFilters = false;
             }
             RefreshPrintOrderSelector();
-            if (HasCompleteOrderSelection()) ApplySelectedOrder();
+            if (applySelection && HasCompleteOrderSelection()) ApplySelectedOrder();
         }
 
         private bool HasCompleteOrderSelection()
@@ -358,12 +370,18 @@ namespace BarTenderPrinter
                 if (previousOrder != null) SelectOrder(previousOrder);
                 else ClearOrderSelection();
             }
+            else if (_orderPagePanel.Visible)
+            {
+                ShowOrderSettingsPage(order);
+            }
         }
 
-        private bool ApplyOrder(PackagingOrder order)
+        private bool ApplyOrder(PackagingOrder order, bool saveCurrentSettings = true, string preferredTemplateId = null)
         {
-            if (!string.IsNullOrEmpty(_selectedTemplatePath)) SaveCurrentTemplateSettings();
-            var template = order.Templates.FirstOrDefault(item => File.Exists(item.ArchivedPath)) ?? order.Templates.FirstOrDefault();
+            if (saveCurrentSettings && !string.IsNullOrEmpty(_selectedTemplatePath)) SaveCurrentTemplateSettings();
+            var template = order.Templates.FirstOrDefault(item => string.Equals(item.Id, preferredTemplateId, StringComparison.OrdinalIgnoreCase) && File.Exists(item.ArchivedPath))
+                ?? order.Templates.FirstOrDefault(item => File.Exists(item.ArchivedPath))
+                ?? order.Templates.FirstOrDefault();
             if (template == null || string.IsNullOrEmpty(template.ArchivedPath) || !File.Exists(template.ArchivedPath))
             { MessageBox.Show(this, "订单归档模板文件不存在，请重新添加订单。", "订单模板", MessageBoxButtons.OK, MessageBoxIcon.Warning); return false; }
             if (!ResolveTemplateUpdate(order, template)) return false;
@@ -454,44 +472,74 @@ namespace BarTenderPrinter
 
         private void ShowAddOrderPage()
         {
+            BuildOrderEditor(null);
+        }
+
+        private void ShowOrderSettingsPage(PackagingOrder order)
+        {
+            if (order == null) return;
+            BuildOrderEditor(order);
+        }
+
+        private void BuildOrderEditor(PackagingOrder order)
+        {
             _orderContentPanel.Controls.Clear();
+            _orderContentPanel.AutoScrollMinSize = new Size(0, 775);
             _orderTemplateDrafts.Clear();
             _selectedOrderTemplateDraft = null;
+            _editingOrder = order;
             var contentWidth = Math.Max(700, _orderContentPanel.ClientSize.Width - 25);
             var fieldGap = 10;
             var fieldWidth = (contentWidth - 30 - fieldGap * 3) / 4;
-            var title = new Label { Text = "添加订单", Location = new Point(10, 10), Size = new Size(500, 28), Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold) };
+            var title = new Label
+            {
+                Text = order == null ? "添加订单" : $"订单设置 · {order.OrderNumber}",
+                Location = new Point(10, 10), Size = new Size(contentWidth, 28),
+                Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold)
+            };
             _orderContentPanel.Controls.Add(title);
 
-            _txtOrderCustomer = AddOrderPageComboBox("客户", 10, 50, fieldWidth, _orders.Orders.Select(order => order.Customer));
-            _txtOrderModel = AddOrderPageComboBox("机型", 10 + (fieldWidth + fieldGap), 50, fieldWidth, _orders.Orders.Select(order => order.ProductModel));
-            _txtOrderColor = AddOrderPageComboBox("颜色", 10 + (fieldWidth + fieldGap) * 2, 50, fieldWidth, _orders.Orders.Select(order => order.Color));
+            _txtOrderCustomer = AddOrderPageComboBox("客户", 10, 50, fieldWidth, _orders.Orders.Select(item => item.Customer));
+            _txtOrderModel = AddOrderPageComboBox("机型", 10 + (fieldWidth + fieldGap), 50, fieldWidth, _orders.Orders.Select(item => item.ProductModel));
+            _txtOrderColor = AddOrderPageComboBox("颜色", 10 + (fieldWidth + fieldGap) * 2, 50, fieldWidth, _orders.Orders.Select(item => item.Color));
             _txtOrderNumber = AddOrderPageTextBox("订单号", 10 + (fieldWidth + fieldGap) * 3, 50, fieldWidth);
-            var templateListWidth = Math.Min(240, contentWidth / 3);
-            const int actionWidth = 90;
-            _cmbOrderTemplates = new ComboBox { Location = new Point(10, 127), Size = new Size(templateListWidth, 25), DropDownStyle = ComboBoxStyle.DropDownList };
-            var templateLabel = new Label { Text = "订单模板：", Location = new Point(10, 105), Size = new Size(templateListWidth, 18) };
-            _cmbOrderTemplates.SelectedIndexChanged += (s, e) => SelectOrderTemplateDraft();
+            if (order != null)
+            {
+                _txtOrderCustomer.Text = order.Customer;
+                _txtOrderModel.Text = order.ProductModel;
+                _txtOrderColor.Text = order.Color;
+                _txtOrderNumber.Text = order.OrderNumber;
+                _txtOrderNumber.ReadOnly = true;
+                foreach (var template in order.Templates ?? new List<OrderTemplate>()) _orderTemplateDrafts.Add(CloneOrderTemplate(template));
+            }
+
+            var templateLabel = new Label { Text = "模板配置（点击卡片切换，每个模板独立保存设置）", Location = new Point(10, 105), Size = new Size(contentWidth, 20), Font = new Font(Font, FontStyle.Bold) };
+            _orderTemplateCards = new FlowLayoutPanel
+            {
+                Location = new Point(10, 130), Size = new Size(contentWidth, 130),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                AutoScroll = true, WrapContents = true, Padding = new Padding(2)
+            };
             _orderContentPanel.Controls.Add(templateLabel);
-            _orderContentPanel.Controls.Add(_cmbOrderTemplates);
+            _orderContentPanel.Controls.Add(_orderTemplateCards);
             MiuiTheme.StyleLabel(templateLabel);
-            var templatePathX = 10 + templateListWidth + fieldGap;
+
+            const int actionWidth = 90;
             var templateActionX = 10 + contentWidth - actionWidth;
-            _txtOrderTemplate = AddOrderPageTextBox("外部模板", templatePathX, 105, templateActionX - templatePathX - fieldGap);
+            _txtOrderTemplate = AddOrderPageTextBox("当前模板外部路径", 10, 268, contentWidth - actionWidth - fieldGap);
             _txtOrderTemplate.ReadOnly = true;
-            _txtOrderTemplate.Text = File.Exists(_selectedTemplatePath) ? _selectedTemplatePath : "";
-            var browseTemplate = new Button { Text = "添加模板", Location = new Point(templateActionX, 125), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            var browseTemplate = new Button { Text = "添加模板", Location = new Point(templateActionX, 288), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             browseTemplate.Click += (s, e) => BrowseOrderTemplate();
-            var loadFields = new Button { Text = "重新读取", Location = new Point(templateActionX, 160), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            var loadFields = new Button { Text = "读取数据源", Location = new Point(templateActionX, 323), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             loadFields.Click += (s, e) => LoadOrderDataSourceRows();
             _orderContentPanel.Controls.Add(browseTemplate);
             _orderContentPanel.Controls.Add(loadFields);
             MiuiTheme.StyleButton(browseTemplate);
             MiuiTheme.StyleButton(loadFields);
 
-            var manualWidth = Math.Min(220, contentWidth / 3);
-            _txtManualOrderDataSource = new TextBox { Location = new Point(10, 163), Size = new Size(manualWidth, 25) };
-            var addManualField = new Button { Text = "添加数据源", Location = new Point(20 + manualWidth, 161), Size = new Size(95, 28) };
+            var manualWidth = Math.Min(190, contentWidth / 4);
+            _txtManualOrderDataSource = new TextBox { Location = new Point(10, 325), Size = new Size(manualWidth, 25) };
+            var addManualField = new Button { Text = "添加数据源", Location = new Point(20 + manualWidth, 323), Size = new Size(95, 28) };
             addManualField.Click += (s, e) => AddManualOrderDataSource();
             _orderContentPanel.Controls.Add(_txtManualOrderDataSource);
             _orderContentPanel.Controls.Add(addManualField);
@@ -499,14 +547,14 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(addManualField);
 
             var printerLabelX = 125 + manualWidth;
-            var printerLabel = new Label { Text = "打印机：", Location = new Point(printerLabelX, 165), Size = new Size(65, 18) };
+            var printerLabel = new Label { Text = "打印机：", Location = new Point(printerLabelX, 329), Size = new Size(65, 18) };
             var copiesX = templateActionX - 105;
-            _cmbOrderPrinter = new ComboBox { Location = new Point(printerLabelX + 65, 161), Size = new Size(Math.Max(120, copiesX - printerLabelX - 75), 25), DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            _cmbOrderPrinter = new ComboBox { Location = new Point(printerLabelX + 65, 325), Size = new Size(Math.Max(120, copiesX - printerLabelX - 75), 25), DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             foreach (var printer in cmbPrinter.Items) _cmbOrderPrinter.Items.Add(printer);
             if (cmbPrinter.SelectedItem != null && _cmbOrderPrinter.Items.Contains(cmbPrinter.SelectedItem)) _cmbOrderPrinter.SelectedItem = cmbPrinter.SelectedItem;
             else if (_cmbOrderPrinter.Items.Count > 0) _cmbOrderPrinter.SelectedIndex = 0;
-            var copiesLabel = new Label { Text = "份数：", Location = new Point(copiesX, 165), Size = new Size(50, 18), Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            _numOrderCopies = new NumericUpDown { Location = new Point(copiesX + 50, 161), Size = new Size(55, 25), Minimum = 1, Maximum = 99, Value = numCopies.Value, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            var copiesLabel = new Label { Text = "份数：", Location = new Point(copiesX, 329), Size = new Size(50, 18), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            _numOrderCopies = new NumericUpDown { Location = new Point(copiesX + 50, 325), Size = new Size(55, 25), Minimum = 1, Maximum = 99, Value = numCopies.Value, Anchor = AnchorStyles.Top | AnchorStyles.Right };
             _orderContentPanel.Controls.Add(printerLabel);
             _orderContentPanel.Controls.Add(_cmbOrderPrinter);
             _orderContentPanel.Controls.Add(copiesLabel);
@@ -514,10 +562,35 @@ namespace BarTenderPrinter
             MiuiTheme.StyleLabel(printerLabel);
             MiuiTheme.StyleLabel(copiesLabel);
 
+            _chkOrderInputValidation = new CheckBox { Text = "启用本地数据校验", Location = new Point(10, 363), Size = new Size(135, 22) };
+            _chkOrderLengthValidation = new CheckBox { Text = "启用长度校验", Location = new Point(155, 363), Size = new Size(120, 22) };
+            var globalLengthLabel = new Label { Text = "全局长度：", Location = new Point(285, 366), Size = new Size(75, 18) };
+            _numOrderGlobalLength = new NumericUpDown { Location = new Point(360, 361), Size = new Size(70, 25), Minimum = 0, Maximum = 512 };
+            var chooseValidationData = new Button { Text = "选择校验数据", Location = new Point(445, 359), Size = new Size(100, 28) };
+            chooseValidationData.Click += (s, e) => SelectOrderValidationData();
+            _lblOrderLocalData = new Label { Text = "校验数据：未配置", Location = new Point(555, 366), Size = new Size(Math.Max(180, contentWidth - 545), 18), AutoEllipsis = true };
+            _orderContentPanel.Controls.Add(_chkOrderInputValidation);
+            _orderContentPanel.Controls.Add(_chkOrderLengthValidation);
+            _orderContentPanel.Controls.Add(globalLengthLabel);
+            _orderContentPanel.Controls.Add(_numOrderGlobalLength);
+            _orderContentPanel.Controls.Add(chooseValidationData);
+            _orderContentPanel.Controls.Add(_lblOrderLocalData);
+            MiuiTheme.StyleLabel(globalLengthLabel);
+            MiuiTheme.StyleLabel(_lblOrderLocalData, true);
+
+            var dataSourceTitle = new Label
+            {
+                Text = "数据源详细设置",
+                Location = new Point(10, 398), Size = new Size(contentWidth, 20),
+                Font = new Font(Font, FontStyle.Bold)
+            };
+            _orderContentPanel.Controls.Add(dataSourceTitle);
+            MiuiTheme.StyleLabel(dataSourceTitle);
+
             _orderDataSourcesGrid = new DataGridView
             {
-                Location = new Point(10, 200),
-                Size = new Size(contentWidth, 260),
+                Location = new Point(10, 422),
+                Size = new Size(contentWidth, 285),
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
@@ -532,12 +605,13 @@ namespace BarTenderPrinter
             _orderDataSourcesGrid.DataError += (s, e) => { e.ThrowException = false; };
             _orderContentPanel.Controls.Add(_orderDataSourcesGrid);
 
-            var save = new Button { Text = "保存订单", Location = new Point(10 + contentWidth - 95, 475), Size = new Size(95, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            var save = new Button { Text = order == null ? "保存订单" : "保存设置", Location = new Point(10 + contentWidth - 95, 722), Size = new Size(95, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             save.Click += (s, e) => SaveOrderFromPage();
             _orderContentPanel.Controls.Add(save);
             MiuiTheme.StyleButton(save, true);
 
-            if (File.Exists(_txtOrderTemplate.Text)) AddOrderTemplateDraft(_txtOrderTemplate.Text);
+            RefreshOrderTemplateCards();
+            if (_orderTemplateDrafts.Count > 0) SelectOrderTemplateDraft(_orderTemplateDrafts[0]);
         }
 
         private TextBox AddOrderPageTextBox(string labelText, int x, int y, int width = 200)
@@ -577,12 +651,78 @@ namespace BarTenderPrinter
             if (_orderTemplateDrafts.Any(item => string.Equals(item.SourcePath, path, StringComparison.OrdinalIgnoreCase)))
             { MessageBox.Show(this, "该模板已添加。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
             SaveSelectedOrderTemplateDraft();
-            var draft = new OrderTemplate { SourcePath = path, Settings = BuildOrderTemplateSettings(path, new List<DataSourceItem>()) };
+            var draft = new OrderTemplate
+            {
+                SourcePath = path,
+                Settings = new TemplateSettings
+                {
+                    TemplateName = Path.GetFileName(path),
+                    TemplatePath = path,
+                    Printer = cmbPrinter.SelectedItem?.ToString() ?? "",
+                    Copies = (int)numCopies.Value,
+                    DataSources = new List<DataSourceItem>()
+                }
+            };
             _orderTemplateDrafts.Add(draft);
-            _cmbOrderTemplates.Items.Add(draft);
-            _cmbOrderTemplates.DisplayMember = nameof(OrderTemplate.DisplayName);
-            _cmbOrderTemplates.SelectedItem = draft;
+            RefreshOrderTemplateCards();
+            SelectOrderTemplateDraft(draft);
             LoadOrderDataSourceRows();
+        }
+
+        private static OrderTemplate CloneOrderTemplate(OrderTemplate template)
+        {
+            return new OrderTemplate
+            {
+                Id = template.Id,
+                SourcePath = template.SourcePath,
+                ArchivedPath = template.ArchivedPath,
+                SourceLastWriteTimeUtcTicks = template.SourceLastWriteTimeUtcTicks,
+                SourceLength = template.SourceLength,
+                SourceSha256 = template.SourceSha256,
+                Settings = CloneTemplateSettings(template.Settings)
+            };
+        }
+
+        private static TemplateSettings CloneTemplateSettings(TemplateSettings settings)
+        {
+            settings ??= new TemplateSettings();
+            return new TemplateSettings
+            {
+                TemplateName = settings.TemplateName,
+                TemplatePath = settings.TemplatePath,
+                Printer = settings.Printer,
+                Copies = settings.Copies,
+                InputValidation = settings.InputValidation,
+                LengthValidation = settings.LengthValidation,
+                GlobalExpectedLength = settings.GlobalExpectedLength,
+                GlobalLengthRevision = settings.GlobalLengthRevision,
+                LengthRevisionCounter = settings.LengthRevisionCounter,
+                LocalDataPath = settings.LocalDataPath,
+                LocalData = (settings.LocalData ?? new List<string>()).ToList(),
+                DataSources = (settings.DataSources ?? new List<DataSourceItem>()).Select(CloneDataSource).ToList()
+            };
+        }
+
+        private void RefreshOrderTemplateCards()
+        {
+            if (_orderTemplateCards == null) return;
+            _orderTemplateCards.Controls.Clear();
+            foreach (var template in _orderTemplateDrafts)
+            {
+                var selected = ReferenceEquals(template, _selectedOrderTemplateDraft);
+                var card = new Button
+                {
+                    Text = $"{template.DisplayName}\r\n{template.Settings?.DataSources?.Count ?? 0} 个数据源",
+                    Size = new Size(210, 52),
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    Tag = template,
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = selected ? Color.FromArgb(225, 238, 255) : Color.White
+                };
+                card.FlatAppearance.BorderColor = selected ? Color.FromArgb(55, 115, 205) : Color.FromArgb(205, 210, 220);
+                card.Click += (s, e) => SelectOrderTemplateDraft((OrderTemplate)((Button)s).Tag);
+                _orderTemplateCards.Controls.Add(card);
+            }
         }
 
         private void AddManualOrderDataSource()
@@ -596,19 +736,70 @@ namespace BarTenderPrinter
             _txtManualOrderDataSource.Clear();
         }
 
-        private void SelectOrderTemplateDraft()
+        private void SelectOrderValidationData()
+        {
+            if (_selectedOrderTemplateDraft == null)
+            { MessageBox.Show(this, "请先选择一个模板卡片。", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            using (var dialog = new OpenFileDialog { Filter = "CSV|*.csv|文本|*.txt|所有文件|*.*" })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                try
+                {
+                    var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var lines = File.ReadAllLines(dialog.FileName);
+                    if (string.Equals(Path.GetExtension(dialog.FileName), ".csv", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var start = lines.Length > 1 ? 1 : 0;
+                        for (var i = start; i < lines.Length; i++)
+                        {
+                            var columns = ParseCsvLine(lines[i]);
+                            if (columns.Count > 0 && !string.IsNullOrWhiteSpace(columns[0])) values.Add(columns[0].Trim());
+                        }
+                    }
+                    else
+                    {
+                        foreach (var line in lines)
+                            if (!string.IsNullOrWhiteSpace(line)) values.Add(line.Trim());
+                    }
+                    _selectedOrderTemplateDraft.Settings.LocalDataPath = dialog.FileName;
+                    _selectedOrderTemplateDraft.Settings.LocalData = values.ToList();
+                    _chkOrderInputValidation.Checked = true;
+                    _lblOrderLocalData.Text = $"校验数据：{dialog.FileName}（{values.Count} 条）";
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, $"读取校验数据失败：{ex.Message}", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void SelectOrderTemplateDraft(OrderTemplate template)
         {
             if (_loadingOrderTemplate) return;
             SaveSelectedOrderTemplateDraft();
-            _selectedOrderTemplateDraft = _cmbOrderTemplates.SelectedItem as OrderTemplate;
-            _txtOrderTemplate.Text = _selectedOrderTemplateDraft?.SourcePath ?? "";
+            _selectedOrderTemplateDraft = template;
+            _txtOrderTemplate.Text = !string.IsNullOrWhiteSpace(_selectedOrderTemplateDraft?.SourcePath)
+                ? _selectedOrderTemplateDraft.SourcePath
+                : _selectedOrderTemplateDraft?.ArchivedPath ?? "";
             var settings = _selectedOrderTemplateDraft?.Settings;
             if (settings != null)
             {
-                if (!string.IsNullOrWhiteSpace(settings.Printer) && _cmbOrderPrinter.Items.Contains(settings.Printer)) _cmbOrderPrinter.SelectedItem = settings.Printer;
+                _cmbOrderPrinter.SelectedIndex = -1;
+                if (!string.IsNullOrWhiteSpace(settings.Printer))
+                {
+                    if (!_cmbOrderPrinter.Items.Contains(settings.Printer)) _cmbOrderPrinter.Items.Add(settings.Printer);
+                    _cmbOrderPrinter.SelectedItem = settings.Printer;
+                }
                 _numOrderCopies.Value = Math.Max(_numOrderCopies.Minimum, Math.Min(_numOrderCopies.Maximum, settings.Copies));
+                _chkOrderInputValidation.Checked = settings.InputValidation;
+                _chkOrderLengthValidation.Checked = settings.LengthValidation;
+                _numOrderGlobalLength.Value = Math.Max(_numOrderGlobalLength.Minimum, Math.Min(_numOrderGlobalLength.Maximum, settings.GlobalExpectedLength));
+                _lblOrderLocalData.Text = string.IsNullOrWhiteSpace(settings.LocalDataPath)
+                    ? "校验数据：未配置"
+                    : $"校验数据：{settings.LocalDataPath}（{settings.LocalData?.Count ?? 0} 条）";
             }
             LoadOrderSettingsIntoGrid(_selectedOrderTemplateDraft?.Settings);
+            RefreshOrderTemplateCards();
         }
 
         private void SaveSelectedOrderTemplateDraft()
@@ -622,6 +813,16 @@ namespace BarTenderPrinter
             var settings = BuildTemplateSettings(templatePath, dataSources);
             settings.Printer = _cmbOrderPrinter?.SelectedItem?.ToString() ?? settings.Printer;
             settings.Copies = _numOrderCopies == null ? settings.Copies : (int)_numOrderCopies.Value;
+            settings.InputValidation = _chkOrderInputValidation?.Checked ?? settings.InputValidation;
+            settings.LengthValidation = _chkOrderLengthValidation?.Checked ?? settings.LengthValidation;
+            settings.GlobalExpectedLength = _numOrderGlobalLength == null ? settings.GlobalExpectedLength : (int)_numOrderGlobalLength.Value;
+            if (_selectedOrderTemplateDraft?.Settings != null)
+            {
+                settings.LocalDataPath = _selectedOrderTemplateDraft.Settings.LocalDataPath;
+                settings.LocalData = (_selectedOrderTemplateDraft.Settings.LocalData ?? new List<string>()).ToList();
+                settings.GlobalLengthRevision = _selectedOrderTemplateDraft.Settings.GlobalLengthRevision;
+                settings.LengthRevisionCounter = _selectedOrderTemplateDraft.Settings.LengthRevisionCounter;
+            }
             return settings;
         }
 
@@ -680,17 +881,30 @@ namespace BarTenderPrinter
 
         private void LoadOrderDataSourceRows()
         {
-            if (string.IsNullOrWhiteSpace(_txtOrderTemplate.Text) || !File.Exists(_txtOrderTemplate.Text))
+            var templatePath = !string.IsNullOrWhiteSpace(_selectedOrderTemplateDraft?.SourcePath) && File.Exists(_selectedOrderTemplateDraft.SourcePath)
+                ? _selectedOrderTemplateDraft.SourcePath
+                : _selectedOrderTemplateDraft?.ArchivedPath;
+            if (string.IsNullOrWhiteSpace(templatePath) || !File.Exists(templatePath))
             { MessageBox.Show(this, "请先选择有效模板文件。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            var fields = _btService.IsConnected ? _btService.GetTemplateDataSources(_txtOrderTemplate.Text) : new List<string>();
+            var fields = _btService.IsConnected ? _btService.GetTemplateDataSources(templatePath) : new List<string>();
             if (fields.Count == 0)
             {
                 MessageBox.Show(this, "未读取到模板数据源，可在页面中手动添加数据源。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            var current = BuildDataSourcesFromOrderGrid();
             _orderDataSourcesGrid.Rows.Clear();
             foreach (var field in fields.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(field => field, NaturalStringComparer.Instance))
-                AddOrderDataSourceRow(new DataSourceItem { Name = field, Field = field, Enabled = true, ExpectedLength = _lengthValidationEnabled ? _globalExpectedLength : 0 });
+            {
+                var existing = current.FirstOrDefault(item => string.Equals(item.Field, field, StringComparison.OrdinalIgnoreCase));
+                AddOrderDataSourceRow(existing ?? new DataSourceItem
+                {
+                    Name = field,
+                    Field = field,
+                    Enabled = true,
+                    ExpectedLength = _chkOrderLengthValidation.Checked ? (int)_numOrderGlobalLength.Value : 0
+                });
+            }
         }
 
         private void AddOrderDataSourceRow(DataSourceItem source)
@@ -714,30 +928,39 @@ namespace BarTenderPrinter
             };
             if (new[] { input.Customer, input.ProductModel, input.Color, input.OrderNumber }.Any(string.IsNullOrWhiteSpace) || _orderTemplateDrafts.Count == 0)
             { MessageBox.Show(this, "客户、机型、颜色、订单号和模板都不能为空。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            if (_orderTemplateDrafts.Any(template => !File.Exists(template.SourcePath)))
+            if (_orderTemplateDrafts.Any(template => string.IsNullOrWhiteSpace(template.ArchivedPath) && !File.Exists(template.SourcePath)))
             { MessageBox.Show(this, "模板文件不存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            if (_orders.Contains(input.Customer, input.ProductModel, input.Color, input.OrderNumber))
+            if (_editingOrder == null && _orders.Contains(input.Customer, input.ProductModel, input.Color, input.OrderNumber))
             { MessageBox.Show(this, "订单号已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            if (_orderTemplateDrafts.Any(template => template.Settings?.DataSources == null || template.Settings.DataSources.Count == 0))
+            if (_orderTemplateDrafts.Any(template => template.Settings?.DataSources == null || !template.Settings.DataSources.Any(source => source.Enabled)))
             { MessageBox.Show(this, "请至少选择一个数据源。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            var order = new PackagingOrder
+            var savedOrder = new PackagingOrder
             {
                 Customer = input.Customer,
                 ProductModel = input.ProductModel,
                 Color = input.Color,
                 OrderNumber = input.OrderNumber
             };
+            SaveCurrentTemplateSettings();
             try
             {
                 foreach (var draft in _orderTemplateDrafts)
                 {
-                    var archived = _orders.ArchiveTemplate(draft.SourcePath, input.Customer, input.ProductModel, input.Color, input.OrderNumber, draft.Id);
-                    archived.Settings = draft.Settings ?? new TemplateSettings();
+                    OrderTemplate archived;
+                    if (!string.IsNullOrWhiteSpace(draft.ArchivedPath) && File.Exists(draft.ArchivedPath))
+                    {
+                        archived = CloneOrderTemplate(draft);
+                    }
+                    else
+                    {
+                        archived = _orders.ArchiveTemplate(draft.SourcePath, input.Customer, input.ProductModel, input.Color, input.OrderNumber, draft.Id);
+                    }
+                    archived.Settings = CloneTemplateSettings(draft.Settings);
                     archived.Settings.TemplateName = Path.GetFileName(archived.ArchivedPath);
                     archived.Settings.TemplatePath = archived.ArchivedPath;
-                    order.Templates.Add(archived);
+                    savedOrder.Templates.Add(archived);
                 }
-                _orders.Add(order);
+                _orders.Add(savedOrder);
             }
             catch (Exception ex)
             {
@@ -745,10 +968,15 @@ namespace BarTenderPrinter
                 MessageBox.Show(this, $"保存订单模板失败：{ex.Message}", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-            RefreshOrderFilters();
-            SelectOrder(order);
-            ApplySelectedOrder();
-            AddLog($"已添加订单: {order.DisplayName}", "SUCCESS");
+            RefreshOrderFilters(OrderFilterLevel.All, false);
+            _editingOrder = savedOrder;
+            SelectOrder(savedOrder);
+            var applied = ApplyOrder(savedOrder, false, _selectedOrderTemplateDraft?.Id);
+            ShowOrderSettingsPage(savedOrder);
+            AddLog($"已保存订单设置: {savedOrder.DisplayName}", "SUCCESS");
+            MessageBox.Show(this,
+                applied ? "订单设置已保存，打印页面已加载最新模板设置。" : "订单设置已保存，打印页面暂未切换到该订单，请检查模板文件。",
+                "订单设置", MessageBoxButtons.OK, applied ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
         private void SyncPrintOrderSelection(PackagingOrder order)
@@ -766,27 +994,32 @@ namespace BarTenderPrinter
         private List<DataSourceItem> BuildDataSourcesFromOrderGrid()
         {
             var result = new List<DataSourceItem>();
+            var original = _selectedOrderTemplateDraft?.Settings?.DataSources ?? new List<DataSourceItem>();
             foreach (DataGridViewRow row in _orderDataSourcesGrid.Rows)
             {
-                if (row.IsNewRow || Convert.ToBoolean(row.Cells["Enabled"].Value) != true) continue;
+                if (row.IsNewRow) continue;
                 var field = row.Cells["Field"].Value?.ToString() ?? "";
                 if (string.IsNullOrWhiteSpace(field)) continue;
+                var existing = original.FirstOrDefault(item => string.Equals(item.Field, field, StringComparison.OrdinalIgnoreCase));
                 int.TryParse(row.Cells["AutoStep"].Value?.ToString(), out var step);
                 int.TryParse(row.Cells["ExpectedLength"].Value?.ToString(), out var expectedLength);
                 var lockEnabled = Convert.ToBoolean(row.Cells["LockEnabled"].Value ?? false);
                 var autoIncrement = lockEnabled && bool.TryParse(row.Cells["AutoIncrement"].Value?.ToString(), out var incrementEnabled) && incrementEnabled;
                 var lockMode = lockEnabled ? row.Cells["LockMode"].Value?.ToString() ?? "输入后锁定" : "";
+                var preserveInputLock = lockMode == "输入后锁定" && existing?.LockAfterInput == true && existing.IsLocked;
                 result.Add(new DataSourceItem
                 {
                     Name = field,
                     Field = field,
-                    Enabled = true,
+                    Enabled = Convert.ToBoolean(row.Cells["Enabled"].Value ?? false),
                     AutoIncrement = autoIncrement,
                     AutoStep = step == 0 ? 1 : Math.Max(-99, Math.Min(99, step)),
-                    IsLocked = lockMode == "固定锁定",
+                    IsLocked = lockMode == "固定锁定" || preserveInputLock,
                     LockAfterInput = lockMode == "输入后锁定",
                     LockedValue = row.Cells["LockedValue"].Value?.ToString() ?? "",
+                    AutoIncrementLocked = autoIncrement && existing?.AutoIncrementLocked == true,
                     ExpectedLength = Math.Max(0, Math.Min(512, expectedLength)),
+                    LengthRevision = existing?.LengthRevision ?? 0,
                     LengthEdited = expectedLength > 0
                 });
             }
@@ -884,14 +1117,26 @@ namespace BarTenderPrinter
 
         private void PopulatePrinters(string[] printers)
         {
-            cmbPrinter.Items.Clear();
-            foreach (var p in printers)
-                cmbPrinter.Items.Add(p);
-            var saved = IniReadValue("General", "Printer", _configFile);
-            if (!string.IsNullOrEmpty(saved) && cmbPrinter.Items.Contains(saved))
-                cmbPrinter.SelectedItem = saved;
-            else if (cmbPrinter.Items.Count > 0)
-                cmbPrinter.SelectedIndex = 0;
+            var configuredPrinter = _activeOrderTemplate?.Settings?.Printer;
+            if (string.IsNullOrWhiteSpace(configuredPrinter)) configuredPrinter = cmbPrinter.SelectedItem?.ToString();
+            if (string.IsNullOrWhiteSpace(configuredPrinter)) configuredPrinter = IniReadValue("General", "Printer", _configFile);
+            var wasLoading = _isLoadingConfig;
+            _isLoadingConfig = true;
+            try
+            {
+                cmbPrinter.Items.Clear();
+                foreach (var printer in printers) cmbPrinter.Items.Add(printer);
+                if (!string.IsNullOrWhiteSpace(configuredPrinter))
+                {
+                    if (!cmbPrinter.Items.Contains(configuredPrinter)) cmbPrinter.Items.Add(configuredPrinter);
+                    cmbPrinter.SelectedItem = configuredPrinter;
+                }
+                else if (cmbPrinter.Items.Count > 0)
+                {
+                    cmbPrinter.SelectedIndex = 0;
+                }
+            }
+            finally { _isLoadingConfig = wasLoading; }
         }
 
         private async void btnRefreshPrinter_Click(object sender, EventArgs e) => await RefreshPrintersAsync();
@@ -2569,8 +2814,11 @@ namespace BarTenderPrinter
                 chkLengthValidation.Checked = _lengthValidationEnabled;
                 btnGlobalLength.Enabled = _lengthValidationEnabled;
                 numCopies.Value = Math.Max(1, Math.Min(99, settings.Copies));
-                if (!string.IsNullOrEmpty(settings.Printer) && cmbPrinter.Items.Contains(settings.Printer))
+                if (!string.IsNullOrEmpty(settings.Printer))
+                {
+                    if (!cmbPrinter.Items.Contains(settings.Printer)) cmbPrinter.Items.Add(settings.Printer);
                     cmbPrinter.SelectedItem = settings.Printer;
+                }
                 else if (cmbPrinter.Items.Count > 0)
                     cmbPrinter.SelectedIndex = 0;
                 UpdateLocalDataLabel(_localData.Count > 0 ? $"已恢复: {_localData.Count} 条" : "");
