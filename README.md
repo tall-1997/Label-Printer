@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.43** - C# WinForms 安装版
+**v5.7.44** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -74,7 +74,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender 标签打印工具 v5.7.43    [导出日志]  │
+│ BarTender 标签打印工具 v5.7.44    [导出日志]  │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -125,6 +125,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
+| [v5.7.44](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.44) | ~49 MB | 打印页订单级联选择和锁定图标优化版 |
 | [v5.7.43](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.43) | ~49 MB | 订单草稿和打印回调编译修复版 |
 | [v5.7.42](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.42) | ~49 MB | 订单草稿放弃和打印回调安全修复版 |
 | [v5.7.41](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.41) | ~49 MB | BarTender STA 调用和历史一致性修复版 |

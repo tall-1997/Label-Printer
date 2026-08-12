@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.43";
+        private readonly string _version = "v5.7.44";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -54,7 +54,10 @@ namespace BarTenderPrinter
         private Button _btnOrderPage;
         private bool _sidebarExpanded;
         private Panel _printOrderPanel;
-        private ComboBox _cmbPrintOrder;
+        private ComboBox _cmbPrintCustomer;
+        private ComboBox _cmbPrintModel;
+        private ComboBox _cmbPrintColor;
+        private ComboBox _cmbPrintOrderNumber;
         private Panel _orderPagePanel;
         private Panel _orderContentPanel;
         private ComboBox _txtOrderCustomer;
@@ -78,6 +81,7 @@ namespace BarTenderPrinter
         private OrderTemplate _activeOrderTemplate;
         private bool _loadingOrderTemplate;
         private bool _loadingOrderFilters;
+        private bool _loadingPrintOrderFilters;
         private bool _loadingOrderEditor;
         private bool _orderEditorDirty;
         private bool _applyingOrderGlobalLength;
@@ -103,6 +107,8 @@ namespace BarTenderPrinter
                 _btService.Dispose();
             };
             inputPanel.SizeChanged += InputPanel_SizeChanged;
+            inputPanel.Scroll += (s, e) => ClampInputPanelScroll();
+            inputPanel.MouseWheel += (s, e) => BeginInvoke((Action)ClampInputPanelScroll);
             SizeChanged += (s, e) => RebuildPrintPageLayout();
             dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
             dgvHistory.CellMouseDown += DgvHistory_CellMouseDown;
@@ -167,18 +173,17 @@ namespace BarTenderPrinter
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 BackColor = BackColor
             };
+            _printOrderPanel.Height = 62;
             var printOrderLabel = new Label { Text = "当前订单：", Location = new Point(0, 8), Size = new Size(72, 20) };
-            _cmbPrintOrder = new ComboBox
-            {
-                Location = new Point(75, 4),
-                Size = new Size(_printOrderPanel.Width - 75, 25),
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                DisplayMember = nameof(PackagingOrder.DisplayName)
-            };
-            _cmbPrintOrder.SelectedIndexChanged += (s, e) => ApplyPrintOrderSelection();
+            _cmbPrintCustomer = AddPrintOrderCombo("客户", 75, 4, 150);
+            _cmbPrintModel = AddPrintOrderCombo("机型", 235, 4, 150);
+            _cmbPrintColor = AddPrintOrderCombo("颜色", 395, 4, 150);
+            _cmbPrintOrderNumber = AddPrintOrderCombo("订单号", 555, 4, Math.Max(150, _printOrderPanel.Width - 555));
+            _cmbPrintCustomer.SelectedIndexChanged += (s, e) => { if (!_loadingPrintOrderFilters) RefreshPrintOrderSelector(PrintOrderFilterLevel.Customer, false); };
+            _cmbPrintModel.SelectedIndexChanged += (s, e) => { if (!_loadingPrintOrderFilters) RefreshPrintOrderSelector(PrintOrderFilterLevel.Model, false); };
+            _cmbPrintColor.SelectedIndexChanged += (s, e) => { if (!_loadingPrintOrderFilters) RefreshPrintOrderSelector(PrintOrderFilterLevel.Color, false); };
+            _cmbPrintOrderNumber.SelectedIndexChanged += (s, e) => ApplyPrintOrderSelection();
             _printOrderPanel.Controls.Add(printOrderLabel);
-            _printOrderPanel.Controls.Add(_cmbPrintOrder);
             Controls.Add(_printOrderPanel);
             MiuiTheme.StyleLabel(printOrderLabel);
 
@@ -227,7 +232,17 @@ namespace BarTenderPrinter
             })
                 control.Visible = false;
             RebuildPrintPageLayout();
-            RefreshPrintOrderSelector();
+            RefreshPrintOrderSelector(PrintOrderFilterLevel.All, false);
+        }
+
+        private ComboBox AddPrintOrderCombo(string labelText, int x, int y, int width)
+        {
+            var label = new Label { Text = labelText + "：", Location = new Point(x, y), Size = new Size(width, 18) };
+            var combo = new ComboBox { Location = new Point(x, y + 22), Size = new Size(width, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            _printOrderPanel.Controls.Add(label);
+            _printOrderPanel.Controls.Add(combo);
+            MiuiTheme.StyleLabel(label);
+            return combo;
         }
 
         private void RebuildPrintPageLayout()
@@ -235,7 +250,17 @@ namespace BarTenderPrinter
             if (_printOrderPanel == null) return;
             var left = _printOrderPanel.Left;
             var width = Math.Max(500, ClientSize.Width - left - 10);
-            cmbTemplate.Location = new Point(left, titlePanel.Bottom + 44);
+            _printOrderPanel.Width = width;
+            var comboWidth = Math.Max(120, (width - 95) / 4);
+            _cmbPrintCustomer.Size = new Size(comboWidth, 25);
+            _cmbPrintModel.Left = _cmbPrintCustomer.Right + 10;
+            _cmbPrintModel.Size = new Size(comboWidth, 25);
+            _cmbPrintColor.Left = _cmbPrintModel.Right + 10;
+            _cmbPrintColor.Size = new Size(comboWidth, 25);
+            _cmbPrintOrderNumber.Left = _cmbPrintColor.Right + 10;
+            _cmbPrintOrderNumber.Size = new Size(Math.Max(120, width - _cmbPrintOrderNumber.Left), 25);
+
+            cmbTemplate.Location = new Point(left, _printOrderPanel.Bottom + 8);
             cmbTemplate.Size = new Size(width, 25);
             lblSelectedTemplate.Location = new Point(left, cmbTemplate.Bottom + 4);
             lblSelectedTemplate.Size = new Size(Math.Min(420, width), 18);
@@ -311,33 +336,82 @@ namespace BarTenderPrinter
             else BuildOrderEditor(null);
         }
 
-        private void RefreshPrintOrderSelector()
+        private enum PrintOrderFilterLevel { All, Customer, Model, Color }
+
+        private void RefreshPrintOrderSelector(PrintOrderFilterLevel level = PrintOrderFilterLevel.All, bool syncActiveOrder = true)
         {
-            if (_cmbPrintOrder == null) return;
-            _loadingOrderFilters = true;
+            if (_cmbPrintOrderNumber == null) return;
+            _loadingPrintOrderFilters = true;
             try
             {
-                _cmbPrintOrder.Items.Clear();
-                foreach (var order in _orders.Orders) _cmbPrintOrder.Items.Add(order);
-                if (_activeOrder != null) _cmbPrintOrder.SelectedItem = _activeOrder;
+                var selectedCustomer = _cmbPrintCustomer.SelectedItem?.ToString() ?? "";
+                var selectedModel = _cmbPrintModel.SelectedItem?.ToString() ?? "";
+                var selectedColor = _cmbPrintColor.SelectedItem?.ToString() ?? "";
+                var selectedOrder = _cmbPrintOrderNumber.SelectedItem?.ToString() ?? "";
+                if (level == PrintOrderFilterLevel.All)
+                    FillCombo(_cmbPrintCustomer, _orders.Orders.Select(order => order.Customer), selectedCustomer);
+                if (level <= PrintOrderFilterLevel.Customer)
+                    FillCombo(_cmbPrintModel, _orders.Orders.Where(order => IsSelectedOrEmpty(_cmbPrintCustomer, order.Customer)).Select(order => order.ProductModel), selectedModel);
+                if (level <= PrintOrderFilterLevel.Model)
+                    FillCombo(_cmbPrintColor, _orders.Orders.Where(order => IsSelectedOrEmpty(_cmbPrintCustomer, order.Customer) && IsSelectedOrEmpty(_cmbPrintModel, order.ProductModel)).Select(order => order.Color), selectedColor);
+                FillCombo(_cmbPrintOrderNumber, _orders.Orders.Where(order =>
+                    IsSelectedOrEmpty(_cmbPrintCustomer, order.Customer) &&
+                    IsSelectedOrEmpty(_cmbPrintModel, order.ProductModel) &&
+                    IsSelectedOrEmpty(_cmbPrintColor, order.Color)).Select(order => order.OrderNumber), selectedOrder);
+                if (syncActiveOrder && level == PrintOrderFilterLevel.All && _activeOrder != null) SelectPrintOrder(_activeOrder);
             }
-            finally { _loadingOrderFilters = false; }
+            finally { _loadingPrintOrderFilters = false; }
+            if (!syncActiveOrder && HasCompletePrintOrderSelection()) ApplyPrintOrderSelection();
+            else if (!syncActiveOrder)
+            {
+                _activeOrder = null;
+                _activeOrderTemplate = null;
+                _selectedTemplatePath = "";
+                cmbTemplate.Items.Clear();
+                lblSelectedTemplate.Text = "请选择完整订单";
+                ResetTemplateState();
+                LoadHistory();
+                RefreshStats();
+            }
+        }
+
+        private bool HasCompletePrintOrderSelection()
+        {
+            return _cmbPrintCustomer?.SelectedItem != null &&
+                   _cmbPrintModel?.SelectedItem != null &&
+                   _cmbPrintColor?.SelectedItem != null &&
+                   _cmbPrintOrderNumber?.SelectedItem != null;
         }
 
         private void ApplyPrintOrderSelection()
         {
-            if (_loadingOrderFilters || !(_cmbPrintOrder?.SelectedItem is PackagingOrder order)) return;
+            if (_loadingPrintOrderFilters) return;
+            var order = _orders.Find(_cmbPrintCustomer.SelectedItem?.ToString(), _cmbPrintModel.SelectedItem?.ToString(),
+                _cmbPrintColor.SelectedItem?.ToString(), _cmbPrintOrderNumber.SelectedItem?.ToString());
+            if (order == null) return;
             var previousOrder = _activeOrder;
             SelectOrder(order);
             if (ApplyOrder(order)) return;
-            _loadingOrderFilters = true;
+            _loadingPrintOrderFilters = true;
             try
             {
-                _cmbPrintOrder.SelectedItem = previousOrder;
-                if (previousOrder != null) SelectOrder(previousOrder);
+                if (previousOrder != null) { SelectOrder(previousOrder); SelectPrintOrder(previousOrder); }
                 else ClearOrderSelection();
             }
-            finally { _loadingOrderFilters = false; }
+            finally { _loadingPrintOrderFilters = false; }
+        }
+
+        private void SelectPrintOrder(PackagingOrder order)
+        {
+            if (order == null) return;
+            FillCombo(_cmbPrintCustomer, _orders.Orders.Select(item => item.Customer), order.Customer);
+            _cmbPrintCustomer.SelectedItem = order.Customer;
+            FillCombo(_cmbPrintModel, _orders.Orders.Where(item => string.Equals(item.Customer, order.Customer, StringComparison.OrdinalIgnoreCase)).Select(item => item.ProductModel), order.ProductModel);
+            _cmbPrintModel.SelectedItem = order.ProductModel;
+            FillCombo(_cmbPrintColor, _orders.Orders.Where(item => string.Equals(item.Customer, order.Customer, StringComparison.OrdinalIgnoreCase) && string.Equals(item.ProductModel, order.ProductModel, StringComparison.OrdinalIgnoreCase)).Select(item => item.Color), order.Color);
+            _cmbPrintColor.SelectedItem = order.Color;
+            FillCombo(_cmbPrintOrderNumber, _orders.Orders.Where(item => string.Equals(item.Customer, order.Customer, StringComparison.OrdinalIgnoreCase) && string.Equals(item.ProductModel, order.ProductModel, StringComparison.OrdinalIgnoreCase) && string.Equals(item.Color, order.Color, StringComparison.OrdinalIgnoreCase)).Select(item => item.OrderNumber), order.OrderNumber);
+            _cmbPrintOrderNumber.SelectedItem = order.OrderNumber;
         }
 
         private void ClearOrderSelection()
@@ -640,64 +714,6 @@ namespace BarTenderPrinter
             _orderContentPanel.Controls.Add(addOrderTop);
             MiuiTheme.StyleButton(addOrderTop, order == null);
 
-            var orderSelectLabel = new Label
-            {
-                Text = "选择订单：",
-                Location = new Point(110, 16), Size = new Size(75, 18)
-            };
-            var orderSelector = new ComboBox
-            {
-                Location = new Point(185, 12),
-                Size = new Size(Math.Max(220, contentWidth - 185), 25),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                DisplayMember = nameof(PackagingOrder.DisplayName),
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
-            };
-            foreach (var item in _orders.Orders) orderSelector.Items.Add(item);
-            if (order != null)
-            {
-                var selected = orderSelector.Items.Cast<PackagingOrder>().FirstOrDefault(item => string.Equals(item.Key, order.Key, StringComparison.OrdinalIgnoreCase));
-                if (selected != null) orderSelector.SelectedItem = selected;
-            }
-            orderSelector.SelectedIndexChanged += (s, e) =>
-            {
-                if (_loadingOrderEditor || !(orderSelector.SelectedItem is PackagingOrder selectedOrder)) return;
-                if (!ConfirmOrderEditorChanges())
-                {
-                    _loadingOrderEditor = true;
-                    try
-                    {
-                        if (order != null)
-                            orderSelector.SelectedItem = orderSelector.Items.Cast<PackagingOrder>().FirstOrDefault(item => string.Equals(item.Key, order.Key, StringComparison.OrdinalIgnoreCase));
-                        else
-                            orderSelector.SelectedIndex = -1;
-                    }
-                    finally { _loadingOrderEditor = false; }
-                    return;
-                }
-                var previousOrder = _activeOrder ?? order;
-                SelectOrder(selectedOrder);
-                if (!ApplyOrder(selectedOrder))
-                {
-                    _loadingOrderEditor = true;
-                    try
-                    {
-                        if (previousOrder != null)
-                        {
-                            SelectOrder(previousOrder);
-                            orderSelector.SelectedItem = orderSelector.Items.Cast<PackagingOrder>().FirstOrDefault(item => string.Equals(item.Key, previousOrder.Key, StringComparison.OrdinalIgnoreCase));
-                        }
-                        else orderSelector.SelectedIndex = -1;
-                    }
-                    finally { _loadingOrderEditor = false; }
-                    return;
-                }
-                ShowOrderSettingsPage(selectedOrder);
-            };
-            _orderContentPanel.Controls.Add(orderSelectLabel);
-            _orderContentPanel.Controls.Add(orderSelector);
-            MiuiTheme.StyleLabel(orderSelectLabel);
-
             _txtOrderCustomer = AddOrderPageComboBox("客户", 10, 50, fieldWidth, _orders.Orders.Select(item => item.Customer));
             _txtOrderModel = AddOrderPageComboBox("机型", 10 + (fieldWidth + fieldGap), 50, fieldWidth, _orders.Orders.Select(item => item.ProductModel));
             _txtOrderColor = AddOrderPageComboBox("颜色", 10 + (fieldWidth + fieldGap) * 2, 50, fieldWidth, _orders.Orders.Select(item => item.Color));
@@ -812,6 +828,7 @@ namespace BarTenderPrinter
             };
             _orderDataSourcesGrid.CellValueChanged += OrderDataSourcesGrid_CellValueChanged;
             _orderDataSourcesGrid.CellContentClick += OrderDataSourcesGrid_CellContentClick;
+            _orderDataSourcesGrid.CellPainting += OrderDataSourcesGrid_CellPainting;
             _orderDataSourcesGrid.DataError += (s, e) => { e.ThrowException = false; };
             _orderContentPanel.Controls.Add(_orderDataSourcesGrid);
 
@@ -1454,7 +1471,7 @@ namespace BarTenderPrinter
         private void UpdateOrderDataSourceRowState(DataGridViewRow row)
         {
             var lockEnabled = ToBoolean(row.Cells["LockEnabled"].Value);
-            row.Cells["LockToggle"].Value = lockEnabled ? "锁" : "开";
+            row.Cells["LockToggle"].Value = "";
             row.Cells["LockedValue"].ReadOnly = !lockEnabled;
             row.Cells["LockedValue"].Style.BackColor = lockEnabled ? SystemColors.Window : SystemColors.Control;
             if (!lockEnabled)
@@ -1483,6 +1500,27 @@ namespace BarTenderPrinter
                 if (savedState != null) row.Cells["LockedValue"].Value = savedState.LockedValue;
                 row.Tag = null;
             }
+        }
+
+        private void OrderDataSourcesGrid_CellPainting(object sender, DataGridViewCellPaintingEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0 || _orderDataSourcesGrid.Columns[e.ColumnIndex].Name != "LockToggle") return;
+            e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.Border);
+            var row = _orderDataSourcesGrid.Rows[e.RowIndex];
+            var locked = ToBoolean(row.Cells["LockEnabled"].Value);
+            var color = locked ? Color.FromArgb(45, 105, 210) : Color.FromArgb(150, 150, 150);
+            var centerX = e.CellBounds.Left + e.CellBounds.Width / 2;
+            var top = e.CellBounds.Top + Math.Max(4, (e.CellBounds.Height - 22) / 2);
+            using (var pen = new Pen(color, 1.7F) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            using (var brush = new SolidBrush(color))
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                DrawRoundedRectangle(e.Graphics, pen, new RectangleF(centerX - 7, top + 8, 14, 11), 2.2F);
+                if (locked) e.Graphics.DrawArc(pen, centerX - 5, top + 1, 10, 11, 180, 180);
+                else e.Graphics.DrawArc(pen, centerX - 2, top + 1, 10, 11, 190, 230);
+                e.Graphics.FillEllipse(brush, centerX - 1.2F, top + 12.5F, 2.5F, 2.5F);
+            }
+            e.Handled = true;
         }
 
         private sealed class OrderRowLockState
@@ -1530,7 +1568,7 @@ namespace BarTenderPrinter
         {
             var lockEnabled = source.IsLocked || source.LockAfterInput || source.AutoIncrement;
             var rowIndex = _orderDataSourcesGrid.Rows.Add(source.Enabled, source.Field, lockEnabled,
-                lockEnabled ? "锁" : "开",
+                "",
                 source.AutoIncrement,
                 source.AutoStep == 0 ? 1 : source.AutoStep, source.LockedValue, source.ExpectedLength);
             _orderDataSourcesGrid.Rows[rowIndex].Cells["ExpectedLength"].Tag = source.LengthEdited;
@@ -1606,14 +1644,13 @@ namespace BarTenderPrinter
 
         private void SyncPrintOrderSelection(PackagingOrder order)
         {
-            if (_cmbPrintOrder == null || order == null || ReferenceEquals(_cmbPrintOrder.SelectedItem, order)) return;
-            _loadingOrderFilters = true;
+            if (_cmbPrintOrderNumber == null || order == null) return;
+            _loadingPrintOrderFilters = true;
             try
             {
-                var match = _cmbPrintOrder.Items.Cast<PackagingOrder>().FirstOrDefault(item => string.Equals(item.Key, order.Key, StringComparison.OrdinalIgnoreCase));
-                if (match != null) _cmbPrintOrder.SelectedItem = match;
+                SelectPrintOrder(order);
             }
-            finally { _loadingOrderFilters = false; }
+            finally { _loadingPrintOrderFilters = false; }
         }
 
         private List<DataSourceItem> BuildDataSourcesFromOrderGrid()
@@ -1863,13 +1900,16 @@ namespace BarTenderPrinter
             if (orderTemplate == null && _activeOrder != null)
             {
                 _activeOrder = null;
-                _loadingOrderFilters = true;
+                _loadingPrintOrderFilters = true;
                 try
                 {
-                    _cmbPrintOrder.SelectedIndex = -1;
+                    _cmbPrintCustomer.SelectedIndex = -1;
+                    _cmbPrintModel.SelectedIndex = -1;
+                    _cmbPrintColor.SelectedIndex = -1;
+                    _cmbPrintOrderNumber.SelectedIndex = -1;
                     ClearOrderSelection();
                 }
-                finally { _loadingOrderFilters = false; }
+                finally { _loadingPrintOrderFilters = false; }
             }
             lblSelectedTemplate.Text = item.Name;
 
@@ -2226,6 +2266,16 @@ namespace BarTenderPrinter
             btnPrint.Width = inputPanel.Width;
             tabBottom.Top = btnPrint.Bottom + 8;
             tabBottom.Height = groupBoxLog.Top - tabBottom.Top - 8;
+            ClampInputPanelScroll();
+        }
+
+        private void ClampInputPanelScroll()
+        {
+            if (inputPanel == null || !inputPanel.AutoScroll) return;
+            var maxScroll = Math.Max(0, inputPanel.AutoScrollMinSize.Height - inputPanel.ClientSize.Height);
+            var current = -inputPanel.AutoScrollPosition.Y;
+            if (current < 0) inputPanel.AutoScrollPosition = new Point(0, 0);
+            else if (current > maxScroll) inputPanel.AutoScrollPosition = new Point(0, maxScroll);
         }
 
         private void InputPanel_SizeChanged(object sender, EventArgs e)
