@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.44";
+        private readonly string _version = "v5.7.45";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -85,6 +85,8 @@ namespace BarTenderPrinter
         private bool _loadingOrderEditor;
         private bool _orderEditorDirty;
         private bool _applyingOrderGlobalLength;
+        private bool _updatingOrderToggleAll;
+        private CheckBox _chkOrderToggleAllSources;
 
         public MainForm(string startupTemplatePath = null)
         {
@@ -259,6 +261,10 @@ namespace BarTenderPrinter
             _cmbPrintColor.Size = new Size(comboWidth, 25);
             _cmbPrintOrderNumber.Left = _cmbPrintColor.Right + 10;
             _cmbPrintOrderNumber.Size = new Size(Math.Max(120, width - _cmbPrintOrderNumber.Left), 25);
+            SetPrintOrderLabelBounds("客户：", _cmbPrintCustomer);
+            SetPrintOrderLabelBounds("机型：", _cmbPrintModel);
+            SetPrintOrderLabelBounds("颜色：", _cmbPrintColor);
+            SetPrintOrderLabelBounds("订单号：", _cmbPrintOrderNumber);
 
             cmbTemplate.Location = new Point(left, _printOrderPanel.Bottom + 8);
             cmbTemplate.Size = new Size(width, 25);
@@ -278,6 +284,14 @@ namespace BarTenderPrinter
             btnPrint.Width = width;
             tabBottom.Location = new Point(left, btnPrint.Bottom + 8);
             tabBottom.Size = new Size(width, Math.Max(120, groupBoxLog.Top - tabBottom.Top - 8));
+        }
+
+        private void SetPrintOrderLabelBounds(string text, ComboBox combo)
+        {
+            var label = _printOrderPanel.Controls.OfType<Label>().FirstOrDefault(item => item.Text == text);
+            if (label == null) return;
+            label.Left = combo.Left;
+            label.Width = combo.Width;
         }
 
         private void SetSidebarExpanded(bool expanded)
@@ -304,7 +318,7 @@ namespace BarTenderPrinter
         {
             if (_orderPagePanel.Visible && !ConfirmOrderEditorChanges()) return;
             if (_activeOrderTemplate != null && !ResolveTemplateUpdate(_activeOrder, _activeOrderTemplate)) return;
-            SaveSelectedOrderTemplateDraft();
+            if (!SaveSelectedOrderTemplateDraft()) return;
             _orderPagePanel.Visible = false;
             _printOrderPanel.Visible = true;
             _printOrderPanel.BringToFront();
@@ -779,7 +793,7 @@ namespace BarTenderPrinter
             _numOrderGlobalLength = new NumericUpDown { Location = new Point(415, 361), Size = new Size(70, 25), Minimum = 0, Maximum = 512 };
             var chooseValidationData = new Button { Text = "选择校验数据", Location = new Point(500, 359), Size = new Size(100, 28) };
             chooseValidationData.Click += (s, e) => SelectOrderValidationData();
-            _lblOrderLocalData = new Label { Text = "校验数据：未配置", Location = new Point(555, 366), Size = new Size(Math.Max(180, contentWidth - 545), 18), AutoEllipsis = true };
+            _lblOrderLocalData = new Label { Text = "校验数据：未配置", Location = new Point(610, 366), Size = new Size(Math.Max(180, contentWidth - 600), 18), AutoEllipsis = true };
             _orderContentPanel.Controls.Add(_chkOrderInputValidation);
             _orderContentPanel.Controls.Add(_chkOrderDuplicateValidation);
             _orderContentPanel.Controls.Add(_chkOrderLengthValidation);
@@ -796,7 +810,10 @@ namespace BarTenderPrinter
                 Location = new Point(10, 398), Size = new Size(contentWidth, 20),
                 Font = new Font(Font, FontStyle.Bold)
             };
+            _chkOrderToggleAllSources = new CheckBox { Text = "全选数据源", Location = new Point(140, 397), Size = new Size(100, 22), Checked = true };
+            _chkOrderToggleAllSources.CheckedChanged += (s, e) => { if (!_updatingOrderToggleAll) ToggleOrderDataSources(_chkOrderToggleAllSources.Checked); };
             _orderContentPanel.Controls.Add(dataSourceTitle);
+            _orderContentPanel.Controls.Add(_chkOrderToggleAllSources);
             MiuiTheme.StyleLabel(dataSourceTitle);
 
             _orderDataSourcesGrid = new DataGridView
@@ -808,6 +825,7 @@ namespace BarTenderPrinter
                 AllowUserToDeleteRows = false,
                 AllowUserToResizeRows = false,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
+                ScrollBars = ScrollBars.Both,
                 BackgroundColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle,
                 RowHeadersVisible = false,
@@ -893,7 +911,8 @@ namespace BarTenderPrinter
             path = Path.GetFullPath(path);
             if (_orderTemplateDrafts.Any(item => string.Equals(item.SourcePath, path, StringComparison.OrdinalIgnoreCase)))
             { MessageBox.Show(this, "该模板已添加。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            SaveSelectedOrderTemplateDraft();
+            if (!ValidateOrderDataSourceGrid()) return;
+            if (!SaveSelectedOrderTemplateDraft()) return;
             if (_selectedOrderTemplateDraft != null && string.IsNullOrWhiteSpace(_selectedOrderTemplateDraft.SourcePath))
             {
                 _selectedOrderTemplateDraft.SourcePath = path;
@@ -1323,7 +1342,8 @@ namespace BarTenderPrinter
         private void SelectOrderTemplateDraft(OrderTemplate template)
         {
             if (_loadingOrderTemplate) return;
-            SaveSelectedOrderTemplateDraft();
+            if (!ValidateOrderDataSourceGrid()) return;
+            if (!SaveSelectedOrderTemplateDraft()) return;
             var wasLoadingEditor = _loadingOrderEditor;
             _loadingOrderEditor = true;
             _selectedOrderTemplateDraft = template;
@@ -1353,10 +1373,12 @@ namespace BarTenderPrinter
             RefreshOrderTemplateCards();
         }
 
-        private void SaveSelectedOrderTemplateDraft()
+        private bool SaveSelectedOrderTemplateDraft()
         {
-            if (_selectedOrderTemplateDraft == null || _orderDataSourcesGrid == null) return;
+            if (_selectedOrderTemplateDraft == null || _orderDataSourcesGrid == null) return true;
+            if (!ValidateOrderDataSourceGrid()) return false;
             _selectedOrderTemplateDraft.Settings = BuildOrderTemplateSettings(_selectedOrderTemplateDraft.SourcePath, BuildDataSourcesFromOrderGrid());
+            return true;
         }
 
         private TemplateSettings BuildOrderTemplateSettings(string templatePath, List<DataSourceItem> dataSources)
@@ -1387,19 +1409,44 @@ namespace BarTenderPrinter
             foreach (var source in settings?.DataSources ?? new List<DataSourceItem>())
                 AddOrderDataSourceRow(source);
             ApplyOrderGlobalLengthToGrid(false);
+            UpdateOrderToggleAllState();
         }
 
         private void ConfigureOrderDataSourceGrid()
         {
             _orderDataSourcesGrid.Columns.Clear();
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "使用", Width = 48 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Field", HeaderText = "字段名", ReadOnly = true, MinimumWidth = 140, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "使用", Width = 60 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Field", HeaderText = "字段名", ReadOnly = true, MinimumWidth = 180, Width = 220 });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "LockEnabled", HeaderText = "锁定", Visible = false });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewButtonColumn { Name = "LockToggle", HeaderText = "锁定", Width = 52, FlatStyle = FlatStyle.Flat });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "AutoIncrement", HeaderText = "增降序", Width = 66 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AutoStep", HeaderText = "步长", Width = 55 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LockedValue", HeaderText = "锁定后输入值", Width = 130 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ExpectedLength", HeaderText = "长度", Width = 55 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AutoStep", HeaderText = "步长（正增负减0不变）", Width = 150 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LockedValue", HeaderText = "锁定后输入值", Width = 180 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ExpectedLength", HeaderText = "长度", Width = 80 });
+        }
+
+        private void ToggleOrderDataSources(bool enabled)
+        {
+            if (_orderDataSourcesGrid == null) return;
+            if (!ValidateOrderDataSourceGrid()) { UpdateOrderToggleAllState(); return; }
+            foreach (DataGridViewRow row in _orderDataSourcesGrid.Rows)
+            {
+                if (row.IsNewRow) continue;
+                row.Cells["Enabled"].Value = enabled;
+            }
+            if (!SaveSelectedOrderTemplateDraft()) { UpdateOrderToggleAllState(); MarkOrderEditorDirty(); return; }
+            RefreshOrderTemplateCards();
+            MarkOrderEditorDirty();
+            UpdateOrderToggleAllState();
+        }
+
+        private void UpdateOrderToggleAllState()
+        {
+            if (_chkOrderToggleAllSources == null || _orderDataSourcesGrid == null) return;
+            var rows = _orderDataSourcesGrid.Rows.Cast<DataGridViewRow>().Where(row => !row.IsNewRow).ToList();
+            var allEnabled = rows.Count > 0 && rows.All(row => ToBoolean(row.Cells["Enabled"].Value));
+            _updatingOrderToggleAll = true;
+            try { _chkOrderToggleAllSources.Checked = allEnabled; }
+            finally { _updatingOrderToggleAll = false; }
         }
 
         private void UpdateOrderValidationControls()
@@ -1442,14 +1489,14 @@ namespace BarTenderPrinter
         {
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
             var columnName = _orderDataSourcesGrid.Columns[e.ColumnIndex].Name;
-            if (columnName == "LockEnabled")
-                UpdateOrderDataSourceRowState(_orderDataSourcesGrid.Rows[e.RowIndex]);
             if (columnName == "Enabled")
             {
-                SaveSelectedOrderTemplateDraft();
+                if (!ValidateOrderDataSourceGrid()) return;
+                if (!SaveSelectedOrderTemplateDraft()) { UpdateOrderToggleAllState(); MarkOrderEditorDirty(); return; }
                 RefreshOrderTemplateCards();
+                UpdateOrderToggleAllState();
             }
-            if (columnName == "ExpectedLength" || columnName == "LockedValue" || columnName == "AutoIncrement" || columnName == "AutoStep" || columnName == "Enabled")
+            if (columnName == "ExpectedLength" || columnName == "LockedValue" || columnName == "AutoStep" || columnName == "Enabled")
             {
                 if (columnName == "ExpectedLength" && !_applyingOrderGlobalLength)
                     _orderDataSourcesGrid.Rows[e.RowIndex].Cells["ExpectedLength"].Tag = true;
@@ -1476,16 +1523,12 @@ namespace BarTenderPrinter
             row.Cells["LockedValue"].Style.BackColor = lockEnabled ? SystemColors.Window : SystemColors.Control;
             if (!lockEnabled)
             {
-                var incrementIndex = _orderDataSourcesGrid.Columns["AutoIncrement"].Index;
                 var stepIndex = _orderDataSourcesGrid.Columns["AutoStep"].Index;
                 row.Tag = new OrderRowLockState
                 {
-                    AutoIncrement = ToBoolean(row.Cells["AutoIncrement"].Value),
                     AutoStep = row.Cells["AutoStep"].Value,
                     LockedValue = row.Cells["LockedValue"].Value?.ToString() ?? ""
                 };
-                row.Cells[incrementIndex] = new DataGridViewTextBoxCell { Value = "", Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
-                row.Cells[incrementIndex].ReadOnly = true;
                 row.Cells[stepIndex] = new DataGridViewTextBoxCell { Value = "", Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
                 row.Cells[stepIndex].ReadOnly = true;
                 row.Cells["LockedValue"].Value = "";
@@ -1493,8 +1536,6 @@ namespace BarTenderPrinter
             else
             {
                 var savedState = row.Tag as OrderRowLockState;
-                if (!(row.Cells["AutoIncrement"] is DataGridViewCheckBoxCell))
-                    row.Cells[_orderDataSourcesGrid.Columns["AutoIncrement"].Index] = new DataGridViewCheckBoxCell { Value = savedState?.AutoIncrement ?? false };
                 if (row.Cells["AutoStep"].ReadOnly)
                     row.Cells[_orderDataSourcesGrid.Columns["AutoStep"].Index] = new DataGridViewTextBoxCell { Value = savedState?.AutoStep ?? 1 };
                 if (savedState != null) row.Cells["LockedValue"].Value = savedState.LockedValue;
@@ -1525,7 +1566,6 @@ namespace BarTenderPrinter
 
         private sealed class OrderRowLockState
         {
-            public bool AutoIncrement { get; set; }
             public object AutoStep { get; set; }
             public string LockedValue { get; set; }
         }
@@ -1538,6 +1578,7 @@ namespace BarTenderPrinter
 
         private void LoadOrderDataSourceRows()
         {
+            if (!ValidateOrderDataSourceGrid()) return;
             var templatePath = _selectedOrderTemplateDraft?.SourcePath;
             if (string.IsNullOrWhiteSpace(templatePath) || !File.Exists(templatePath))
             { MessageBox.Show(this, "请先选择有效模板文件。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
@@ -1561,23 +1602,26 @@ namespace BarTenderPrinter
                 });
             }
             ApplyOrderGlobalLengthToGrid(false);
+            UpdateOrderToggleAllState();
             MarkOrderEditorDirty();
         }
 
         private void AddOrderDataSourceRow(DataSourceItem source)
         {
             var lockEnabled = source.IsLocked || source.LockAfterInput || source.AutoIncrement;
+            var displayStep = source.AutoIncrement ? source.AutoStep : 0;
             var rowIndex = _orderDataSourcesGrid.Rows.Add(source.Enabled, source.Field, lockEnabled,
                 "",
-                source.AutoIncrement,
-                source.AutoStep == 0 ? 1 : source.AutoStep, source.LockedValue, source.ExpectedLength);
+                displayStep, source.LockedValue, source.ExpectedLength);
             _orderDataSourcesGrid.Rows[rowIndex].Cells["ExpectedLength"].Tag = source.LengthEdited;
             UpdateOrderDataSourceRowState(_orderDataSourcesGrid.Rows[rowIndex]);
         }
 
         private void SaveOrderFromPage()
         {
-            SaveSelectedOrderTemplateDraft();
+            if (!ValidateOrderDataSourceGrid()) return;
+            if (!SaveSelectedOrderTemplateDraft()) return;
+            if (!ValidateOrderTemplateDrafts()) return;
             var input = new OrderInput
             {
                 Customer = _txtOrderCustomer.Text.Trim(),
@@ -1642,6 +1686,43 @@ namespace BarTenderPrinter
                 "订单设置", MessageBoxButtons.OK, applied ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
+        private bool ValidateOrderTemplateDrafts()
+        {
+            foreach (var template in _orderTemplateDrafts)
+            foreach (var source in template.Settings?.DataSources ?? new List<DataSourceItem>())
+            {
+                if (!source.LockAfterInput && !source.IsLocked && !source.AutoIncrement) continue;
+                if (source.AutoStep < -99 || source.AutoStep > 99)
+                {
+                    MessageBox.Show(this, $"模板“{template.DisplayName}”的数据源“{source.Name}”步长范围必须为 -99 到 99。", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private bool ValidateOrderDataSourceGrid()
+        {
+            if (_orderDataSourcesGrid == null) return true;
+            foreach (DataGridViewRow row in _orderDataSourcesGrid.Rows)
+            {
+                if (row.IsNewRow) continue;
+                if (!ToBoolean(row.Cells["LockEnabled"].Value)) continue;
+                if (!int.TryParse(row.Cells["AutoStep"].Value?.ToString(), out _))
+                {
+                    MessageBox.Show(this, $"数据源“{row.Cells["Field"].Value}”已锁定，请填写数字步长。正数为增序，负数为降序，0 为锁定不变。", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+                var step = int.Parse(row.Cells["AutoStep"].Value?.ToString() ?? "0");
+                if (step < -99 || step > 99)
+                {
+                    MessageBox.Show(this, $"数据源“{row.Cells["Field"].Value}”的步长范围必须为 -99 到 99。正数为增序，负数为降序，0 为锁定不变。", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private void SyncPrintOrderSelection(PackagingOrder order)
         {
             if (_cmbPrintOrderNumber == null || order == null) return;
@@ -1667,7 +1748,7 @@ namespace BarTenderPrinter
                 int.TryParse(row.Cells["ExpectedLength"].Value?.ToString(), out var expectedLength);
                 var hasIndividualLength = row.Cells["ExpectedLength"].Tag is bool value && value;
                 var lockEnabled = ToBoolean(row.Cells["LockEnabled"].Value);
-                var autoIncrement = lockEnabled && ToBoolean(row.Cells["AutoIncrement"].Value);
+                var autoIncrement = lockEnabled && step != 0;
                 var lockedValue = row.Cells["LockedValue"].Value?.ToString() ?? "";
                 result.Add(new DataSourceItem
                 {
@@ -1675,7 +1756,7 @@ namespace BarTenderPrinter
                     Field = field,
                     Enabled = ToBoolean(row.Cells["Enabled"].Value),
                     AutoIncrement = autoIncrement,
-                    AutoStep = step == 0 ? 1 : Math.Max(-99, Math.Min(99, step)),
+                    AutoStep = lockEnabled ? Math.Max(-99, Math.Min(99, step)) : 0,
                     IsLocked = lockEnabled && !string.IsNullOrWhiteSpace(lockedValue),
                     LockAfterInput = lockEnabled,
                     LockedValue = lockEnabled ? lockedValue : "",
