@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.27** - C# WinForms 安装版
+**v5.7.28** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -72,7 +72,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender 标签打印工具 v5.7.27    [导出日志]  │
+│ BarTender 标签打印工具 v5.7.28    [导出日志]  │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -123,7 +123,8 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
-| [v5.7.27](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.27) | ~49 MB | C# WinForms 当前用户安装版 |
+| [v5.7.28](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.28) | ~49 MB | C# WinForms 当前用户安装版 |
+| [v5.7.27](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.27) | ~49 MB | 包装 MES 订单管理初版 |
 | [v5.7.26](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.26) | ~49 MB | 打印流程健壮性修复版 |
 | [v5.7.25](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.25) | ~49 MB | 历史右键和模板菜单修复版 |
 | [v5.7.24](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.24) | ~49 MB | 右键打开模板和历史单条删除版 |

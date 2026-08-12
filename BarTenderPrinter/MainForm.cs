@@ -20,7 +20,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.27";
+        private readonly string _version = "v5.7.28";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -44,6 +44,13 @@ namespace BarTenderPrinter
         private ComboBox _cmbOrderColor;
         private ComboBox _cmbOrderNumber;
         private Button _btnAddOrder;
+        private Panel _orderContentPanel;
+        private TextBox _txtOrderCustomer;
+        private TextBox _txtOrderModel;
+        private TextBox _txtOrderColor;
+        private TextBox _txtOrderNumber;
+        private TextBox _txtOrderTemplate;
+        private DataGridView _orderDataSourcesGrid;
         private bool _loadingOrderFilters;
 
         public MainForm(string startupTemplatePath = null)
@@ -83,33 +90,38 @@ namespace BarTenderPrinter
             _orderPanel = new GroupBox
             {
                 Text = "包装 MES 订单",
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Left,
+                Width = 250,
                 Padding = new Padding(12)
             };
-            var y = 32;
-            _btnAddOrder = new Button { Text = "添加订单", Location = new Point(12, y), Size = new Size(100, 30) };
-            _btnAddOrder.Click += btnAddOrder_Click;
+            _orderContentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), AutoScroll = true };
+            var y = 28;
+            _btnAddOrder = new Button { Text = "添加订单", Location = new Point(12, y), Size = new Size(200, 30) };
+            _btnAddOrder.Click += (s, e) => ShowAddOrderPage();
+            y += 46;
 
-            _cmbOrderCustomer = AddOrderCombo("客户", 130, y);
-            _cmbOrderModel = AddOrderCombo("机型", 350, y);
-            _cmbOrderColor = AddOrderCombo("颜色", 570, y);
-            _cmbOrderNumber = AddOrderCombo("订单号", 790, y);
+            _cmbOrderCustomer = AddOrderCombo("客户", 12, y); y += 58;
+            _cmbOrderModel = AddOrderCombo("机型", 12, y); y += 58;
+            _cmbOrderColor = AddOrderCombo("颜色", 12, y); y += 58;
+            _cmbOrderNumber = AddOrderCombo("订单号", 12, y);
             _cmbOrderCustomer.SelectedIndexChanged += (s, e) => { if (!_loadingOrderFilters) RefreshOrderFilters(OrderFilterLevel.Customer); };
             _cmbOrderModel.SelectedIndexChanged += (s, e) => { if (!_loadingOrderFilters) RefreshOrderFilters(OrderFilterLevel.Model); };
             _cmbOrderColor.SelectedIndexChanged += (s, e) => { if (!_loadingOrderFilters) RefreshOrderFilters(OrderFilterLevel.Color); };
             _cmbOrderNumber.SelectedIndexChanged += (s, e) => { if (!_loadingOrderFilters) ApplySelectedOrder(); };
 
             _orderPanel.Controls.Add(_btnAddOrder);
+            orderTab.Controls.Add(_orderContentPanel);
             orderTab.Controls.Add(_orderPanel);
             tabBottom.TabPages.Add(orderTab);
             MiuiTheme.StyleGroupBox(_orderPanel);
             MiuiTheme.StyleButton(_btnAddOrder, true);
+            btnEditDataSources.Visible = false;
         }
 
         private ComboBox AddOrderCombo(string labelText, int x, int y)
         {
-            var label = new Label { Text = labelText + "：", Location = new Point(x, y - 2), Size = new Size(180, 18) };
-            var combo = new ComboBox { Location = new Point(x, y + 22), Size = new Size(190, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            var label = new Label { Text = labelText + "：", Location = new Point(x, y - 2), Size = new Size(200, 18) };
+            var combo = new ComboBox { Location = new Point(x, y + 22), Size = new Size(200, 25), DropDownStyle = ComboBoxStyle.DropDownList };
             _orderPanel.Controls.Add(label);
             _orderPanel.Controls.Add(combo);
             MiuiTheme.StyleLabel(label);
@@ -224,6 +236,161 @@ namespace BarTenderPrinter
             RefreshStats();
             AddLog($"已选择订单: {order.DisplayName}", "INFO");
         }
+
+        private void ShowAddOrderPage()
+        {
+            _orderContentPanel.Controls.Clear();
+            var title = new Label { Text = "添加订单", Location = new Point(10, 10), Size = new Size(500, 28), Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold) };
+            _orderContentPanel.Controls.Add(title);
+
+            _txtOrderCustomer = AddOrderPageTextBox("客户", 10, 50);
+            _txtOrderModel = AddOrderPageTextBox("机型", 260, 50);
+            _txtOrderColor = AddOrderPageTextBox("颜色", 510, 50);
+            _txtOrderNumber = AddOrderPageTextBox("订单号", 760, 50);
+            _txtOrderTemplate = AddOrderPageTextBox("模板", 10, 105, 700);
+            _txtOrderTemplate.ReadOnly = true;
+            _txtOrderTemplate.Text = File.Exists(_selectedTemplatePath) ? _selectedTemplatePath : "";
+            var browseTemplate = new Button { Text = "选择模板", Location = new Point(725, 125), Size = new Size(90, 28) };
+            browseTemplate.Click += (s, e) => BrowseOrderTemplate();
+            var loadFields = new Button { Text = "读取数据源", Location = new Point(825, 125), Size = new Size(95, 28) };
+            loadFields.Click += (s, e) => LoadOrderDataSourceRows();
+            _orderContentPanel.Controls.Add(browseTemplate);
+            _orderContentPanel.Controls.Add(loadFields);
+            MiuiTheme.StyleButton(browseTemplate);
+            MiuiTheme.StyleButton(loadFields);
+
+            _orderDataSourcesGrid = new DataGridView
+            {
+                Location = new Point(10, 170),
+                Size = new Size(930, 230),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+            };
+            ConfigureOrderDataSourceGrid();
+            _orderContentPanel.Controls.Add(_orderDataSourcesGrid);
+
+            var save = new Button { Text = "保存订单", Location = new Point(825, 415), Size = new Size(95, 30) };
+            save.Click += (s, e) => SaveOrderFromPage();
+            _orderContentPanel.Controls.Add(save);
+            MiuiTheme.StyleButton(save, true);
+        }
+
+        private TextBox AddOrderPageTextBox(string labelText, int x, int y, int width = 200)
+        {
+            var label = new Label { Text = labelText + "：", Location = new Point(x, y), Size = new Size(width, 18) };
+            var text = new TextBox { Location = new Point(x, y + 22), Size = new Size(width, 25) };
+            _orderContentPanel.Controls.Add(label);
+            _orderContentPanel.Controls.Add(text);
+            MiuiTheme.StyleLabel(label);
+            MiuiTheme.StyleTextBox(text);
+            return text;
+        }
+
+        private void BrowseOrderTemplate()
+        {
+            using (var ofd = new OpenFileDialog { Filter = "BarTender 模板|*.btw|所有文件|*.*", FileName = _txtOrderTemplate.Text })
+                if (ofd.ShowDialog(this) == DialogResult.OK)
+                {
+                    _txtOrderTemplate.Text = ofd.FileName;
+                    LoadOrderDataSourceRows();
+                }
+        }
+
+        private void ConfigureOrderDataSourceGrid()
+        {
+            _orderDataSourcesGrid.Columns.Clear();
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "使用", Width = 50 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Field", HeaderText = "字段名", ReadOnly = true });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "AutoIncrement", HeaderText = "增降序", Width = 70 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AutoStep", HeaderText = "步长", Width = 60 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewComboBoxColumn { Name = "LockMode", HeaderText = "锁定方式", DataSource = new[] { "不锁定", "固定锁定", "输入后锁定" } });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LockedValue", HeaderText = "锁定值" });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ExpectedLength", HeaderText = "长度", Width = 60 });
+        }
+
+        private void LoadOrderDataSourceRows()
+        {
+            if (string.IsNullOrWhiteSpace(_txtOrderTemplate.Text) || !File.Exists(_txtOrderTemplate.Text))
+            { MessageBox.Show(this, "请先选择有效模板文件。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            var fields = _btService.IsConnected ? _btService.GetTemplateDataSources(_txtOrderTemplate.Text) : new List<string>();
+            if (fields.Count == 0)
+            {
+                var manual = PromptForManualDataSources();
+                if (manual == null || manual.Count == 0) return;
+                fields = manual;
+            }
+            _orderDataSourcesGrid.Rows.Clear();
+            foreach (var field in fields.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(field => field, NaturalStringComparer.Instance))
+                _orderDataSourcesGrid.Rows.Add(true, field, false, 1, "不锁定", "", _lengthValidationEnabled ? _globalExpectedLength : 0);
+        }
+
+        private void SaveOrderFromPage()
+        {
+            var input = new OrderInput
+            {
+                Customer = _txtOrderCustomer.Text.Trim(),
+                ProductModel = _txtOrderModel.Text.Trim(),
+                Color = _txtOrderColor.Text.Trim(),
+                OrderNumber = _txtOrderNumber.Text.Trim(),
+                TemplatePath = _txtOrderTemplate.Text.Trim()
+            };
+            if (new[] { input.Customer, input.ProductModel, input.Color, input.OrderNumber, input.TemplatePath }.Any(string.IsNullOrWhiteSpace))
+            { MessageBox.Show(this, "客户、机型、颜色、订单号和模板都不能为空。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (!File.Exists(input.TemplatePath))
+            { MessageBox.Show(this, "模板文件不存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (_orders.Contains(input.Customer, input.ProductModel, input.Color, input.OrderNumber))
+            { MessageBox.Show(this, "客户、机型、颜色、订单号组合已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            var dataSources = BuildDataSourcesFromOrderGrid();
+            if (dataSources.Count == 0)
+            { MessageBox.Show(this, "请至少选择一个数据源。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            var archivedTemplate = _orders.CopyTemplateForOrder(input.TemplatePath, input.Customer, input.ProductModel, input.Color, input.OrderNumber);
+            var order = new PackagingOrder
+            {
+                Customer = input.Customer,
+                ProductModel = input.ProductModel,
+                Color = input.Color,
+                OrderNumber = input.OrderNumber,
+                TemplatePath = archivedTemplate,
+                Settings = BuildTemplateSettings(archivedTemplate, dataSources)
+            };
+            _orders.Add(order);
+            RefreshOrderFilters();
+            SelectOrder(order);
+            ApplySelectedOrder();
+            AddLog($"已添加订单: {order.DisplayName}", "SUCCESS");
+        }
+
+        private List<DataSourceItem> BuildDataSourcesFromOrderGrid()
+        {
+            var result = new List<DataSourceItem>();
+            foreach (DataGridViewRow row in _orderDataSourcesGrid.Rows)
+            {
+                if (row.IsNewRow || Convert.ToBoolean(row.Cells["Enabled"].Value) != true) continue;
+                var field = row.Cells["Field"].Value?.ToString() ?? "";
+                if (string.IsNullOrWhiteSpace(field)) continue;
+                int.TryParse(row.Cells["AutoStep"].Value?.ToString(), out var step);
+                int.TryParse(row.Cells["ExpectedLength"].Value?.ToString(), out var expectedLength);
+                var autoIncrement = Convert.ToBoolean(row.Cells["AutoIncrement"].Value);
+                var lockMode = row.Cells["LockMode"].Value?.ToString() ?? "不锁定";
+                result.Add(new DataSourceItem
+                {
+                    Name = field,
+                    Field = field,
+                    Enabled = true,
+                    AutoIncrement = autoIncrement,
+                    AutoStep = step == 0 ? 1 : Math.Max(-99, Math.Min(99, step)),
+                    IsLocked = lockMode == "固定锁定",
+                    LockAfterInput = lockMode == "输入后锁定",
+                    LockedValue = row.Cells["LockedValue"].Value?.ToString() ?? "",
+                    ExpectedLength = Math.Max(0, Math.Min(512, expectedLength)),
+                    LengthEdited = expectedLength > 0
+                });
+            }
+            return result;
+        }
+
 
         private async void MainForm_Shown(object sender, EventArgs e)
         {
@@ -519,111 +686,6 @@ namespace BarTenderPrinter
                 f.AcceptButton = ok; f.CancelButton = cancel;
                 return f.ShowDialog(this) == DialogResult.OK ? txt.Text.Split('\n').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList() : null;
             }
-        }
-
-        private void btnAddOrder_Click(object sender, EventArgs e)
-        {
-            var input = ShowAddOrderDialog();
-            if (input == null) return;
-            if (_orders.Contains(input.Customer, input.ProductModel, input.Color, input.OrderNumber))
-            { MessageBox.Show(this, "客户、机型、颜色、订单号组合已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-
-            var fields = new List<string>();
-            if (_btService.IsConnected)
-                fields = _btService.GetTemplateDataSources(input.TemplatePath);
-            if (fields.Count == 0)
-            {
-                var manual = PromptForManualDataSources();
-                if (manual == null || manual.Count == 0) return;
-                fields = manual;
-            }
-
-            var previousSources = _dataSources.ToList();
-            using (var dlg = new DataSourceSelectDialog(fields, previousSources, false, _lengthValidationEnabled, _globalExpectedLength))
-            {
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                var archivedTemplate = _orders.CopyTemplateForOrder(input.TemplatePath, input.Customer, input.ProductModel, input.Color, input.OrderNumber);
-                var settings = BuildTemplateSettings(archivedTemplate, dlg.SelectedSources);
-                var order = new PackagingOrder
-                {
-                    Customer = input.Customer,
-                    ProductModel = input.ProductModel,
-                    Color = input.Color,
-                    OrderNumber = input.OrderNumber,
-                    TemplatePath = archivedTemplate,
-                    Settings = settings
-                };
-                _orders.Add(order);
-                RefreshOrderFilters();
-                SelectOrder(order);
-                ApplySelectedOrder();
-                AddLog($"已添加订单: {order.DisplayName}", "SUCCESS");
-            }
-        }
-
-        private OrderInput ShowAddOrderDialog()
-        {
-            using (var form = new Form())
-            {
-                form.Text = "添加订单";
-                form.Size = new Size(520, 300);
-                form.FormBorderStyle = FormBorderStyle.FixedDialog;
-                form.StartPosition = FormStartPosition.CenterParent;
-                form.MaximizeBox = false;
-                form.MinimizeBox = false;
-
-                var txtCustomer = AddOrderTextBox(form, "客户", 12, 16);
-                var txtModel = AddOrderTextBox(form, "机型", 12, 56);
-                var txtColor = AddOrderTextBox(form, "颜色", 12, 96);
-                var txtOrderNumber = AddOrderTextBox(form, "订单号", 12, 136);
-                var txtTemplate = AddOrderTextBox(form, "模板", 12, 176);
-                txtTemplate.ReadOnly = true;
-                txtTemplate.Text = File.Exists(_selectedTemplatePath) ? _selectedTemplatePath : "";
-                var browse = new Button { Text = "选择", Location = new Point(420, 174), Size = new Size(65, 26) };
-                browse.Click += (s, e) =>
-                {
-                    using (var ofd = new OpenFileDialog { Filter = "BarTender 模板|*.btw|所有文件|*.*", FileName = txtTemplate.Text })
-                        if (ofd.ShowDialog(form) == DialogResult.OK) txtTemplate.Text = ofd.FileName;
-                };
-                var ok = new Button { Text = "下一步", Location = new Point(320, 225), Size = new Size(75, 28), DialogResult = DialogResult.OK };
-                var cancel = new Button { Text = "取消", Location = new Point(410, 225), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
-                form.Controls.AddRange(new Control[] { browse, ok, cancel });
-                form.AcceptButton = ok;
-                form.CancelButton = cancel;
-                ok.Click += (s, e) =>
-                {
-                    if (new[] { txtCustomer, txtModel, txtColor, txtOrderNumber, txtTemplate }.Any(text => string.IsNullOrWhiteSpace(text.Text)))
-                    {
-                        MessageBox.Show(form, "客户、机型、颜色、订单号和模板都不能为空。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        form.DialogResult = DialogResult.None;
-                    }
-                    else if (!File.Exists(txtTemplate.Text))
-                    {
-                        MessageBox.Show(form, "模板文件不存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        form.DialogResult = DialogResult.None;
-                    }
-                };
-                if (form.ShowDialog(this) != DialogResult.OK) return null;
-                return new OrderInput
-                {
-                    Customer = txtCustomer.Text.Trim(),
-                    ProductModel = txtModel.Text.Trim(),
-                    Color = txtColor.Text.Trim(),
-                    OrderNumber = txtOrderNumber.Text.Trim(),
-                    TemplatePath = txtTemplate.Text.Trim()
-                };
-            }
-        }
-
-        private TextBox AddOrderTextBox(Control form, string labelText, int x, int y)
-        {
-            var label = new Label { Text = labelText + "：", Location = new Point(x, y + 4), Size = new Size(70, 18), TextAlign = ContentAlignment.MiddleRight };
-            var textBox = new TextBox { Location = new Point(x + 75, y), Size = new Size(330, 25) };
-            form.Controls.Add(label);
-            form.Controls.Add(textBox);
-            MiuiTheme.StyleLabel(label);
-            MiuiTheme.StyleTextBox(textBox);
-            return textBox;
         }
 
         private TemplateSettings BuildTemplateSettings(string templatePath, List<DataSourceItem> dataSources)
