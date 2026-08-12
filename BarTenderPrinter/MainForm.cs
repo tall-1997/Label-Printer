@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.36";
+        private readonly string _version = "v5.7.37";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -62,7 +62,6 @@ namespace BarTenderPrinter
         private ComboBox _txtOrderColor;
         private TextBox _txtOrderNumber;
         private TextBox _txtOrderTemplate;
-        private TextBox _txtManualOrderDataSource;
         private FlowLayoutPanel _orderTemplateCards;
         private ComboBox _cmbOrderPrinter;
         private NumericUpDown _numOrderCopies;
@@ -587,16 +586,7 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(loadFields);
             MiuiTheme.StyleButton(removeTemplate);
 
-            var manualWidth = Math.Min(190, contentWidth / 4);
-            _txtManualOrderDataSource = new TextBox { Location = new Point(10, 325), Size = new Size(manualWidth, 25) };
-            var addManualField = new Button { Text = "添加数据源", Location = new Point(20 + manualWidth, 323), Size = new Size(95, 28) };
-            addManualField.Click += (s, e) => AddManualOrderDataSource();
-            _orderContentPanel.Controls.Add(_txtManualOrderDataSource);
-            _orderContentPanel.Controls.Add(addManualField);
-            MiuiTheme.StyleTextBox(_txtManualOrderDataSource);
-            MiuiTheme.StyleButton(addManualField);
-
-            var printerLabelX = 125 + manualWidth;
+            var printerLabelX = 10;
             var printerLabel = new Label { Text = "打印机：", Location = new Point(printerLabelX, 329), Size = new Size(65, 18) };
             var copiesX = templateActionX - 105;
             _cmbOrderPrinter = new ComboBox { Location = new Point(printerLabelX + 65, 325), Size = new Size(Math.Max(120, copiesX - printerLabelX - 75), 25), DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
@@ -679,7 +669,8 @@ namespace BarTenderPrinter
             _lblOrderLocalData.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             _chkOrderInputValidation.CheckedChanged += (s, e) => UpdateOrderValidationControls();
             _chkOrderDuplicateValidation.Checked = _duplicateValidationEnabled;
-            _chkOrderLengthValidation.CheckedChanged += (s, e) => UpdateOrderValidationControls();
+            _chkOrderLengthValidation.CheckedChanged += (s, e) => { UpdateOrderValidationControls(); ApplyOrderGlobalLengthToGrid(); };
+            _numOrderGlobalLength.ValueChanged += (s, e) => ApplyOrderGlobalLengthToGrid();
             UpdateOrderValidationControls();
 
             RefreshOrderTemplateCards();
@@ -853,17 +844,6 @@ namespace BarTenderPrinter
                 card.Click += (s, e) => SelectOrderTemplateDraft((OrderTemplate)((Button)s).Tag);
                 _orderTemplateCards.Controls.Add(card);
             }
-        }
-
-        private void AddManualOrderDataSource()
-        {
-            var field = _txtManualOrderDataSource?.Text.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(field))
-            { MessageBox.Show(this, "请输入数据源字段名。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            if (_orderDataSourcesGrid.Rows.Cast<DataGridViewRow>().Any(row => string.Equals(row.Cells["Field"].Value?.ToString(), field, StringComparison.OrdinalIgnoreCase)))
-            { MessageBox.Show(this, "该数据源已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            AddOrderDataSourceRow(new DataSourceItem { Name = field, Field = field, Enabled = true });
-            _txtManualOrderDataSource.Clear();
         }
 
         private void SelectOrderValidationData()
@@ -1220,6 +1200,7 @@ namespace BarTenderPrinter
             _orderDataSourcesGrid.Rows.Clear();
             foreach (var source in settings?.DataSources ?? new List<DataSourceItem>())
                 AddOrderDataSourceRow(source);
+            ApplyOrderGlobalLengthToGrid();
         }
 
         private void ConfigureOrderDataSourceGrid()
@@ -1228,10 +1209,9 @@ namespace BarTenderPrinter
             _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "使用", Width = 48 });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Field", HeaderText = "字段名", ReadOnly = true, MinimumWidth = 140, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "LockEnabled", HeaderText = "锁定", Width = 52 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewComboBoxColumn { Name = "LockMode", HeaderText = "锁定方式", Width = 105, DataSource = new[] { "固定锁定", "输入后锁定" } });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "AutoIncrement", HeaderText = "增降序", Width = 66 });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AutoStep", HeaderText = "步长", Width = 55 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LockedValue", HeaderText = "锁定值", Width = 120 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LockedValue", HeaderText = "锁定后输入值", Width = 130 });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ExpectedLength", HeaderText = "长度", Width = 55 });
         }
 
@@ -1241,6 +1221,17 @@ namespace BarTenderPrinter
             if (_chkOrderInputValidation != null && !_chkOrderInputValidation.Enabled) _chkOrderInputValidation.Checked = false;
             if (_lblOrderLocalData != null)
                 _lblOrderLocalData.ForeColor = _chkOrderInputValidation?.Checked == true ? MiuiTheme.TextPrimary : MiuiTheme.TextSecondary;
+        }
+
+        private void ApplyOrderGlobalLengthToGrid()
+        {
+            if (_orderDataSourcesGrid == null || _chkOrderLengthValidation?.Checked != true) return;
+            var expectedLength = (int)(_numOrderGlobalLength?.Value ?? 0);
+            foreach (DataGridViewRow row in _orderDataSourcesGrid.Rows)
+            {
+                if (row.IsNewRow) continue;
+                row.Cells["ExpectedLength"].Value = expectedLength;
+            }
         }
 
         private void OrderDataSourcesGrid_CellValueChanged(object sender, DataGridViewCellEventArgs e)
@@ -1259,10 +1250,8 @@ namespace BarTenderPrinter
         private void UpdateOrderDataSourceRowState(DataGridViewRow row)
         {
             var lockEnabled = Convert.ToBoolean(row.Cells["LockEnabled"].Value ?? false);
-            row.Cells["LockMode"].ReadOnly = !lockEnabled;
             row.Cells["LockedValue"].ReadOnly = !lockEnabled;
-            foreach (var name in new[] { "LockMode", "LockedValue" })
-                row.Cells[name].Style.BackColor = lockEnabled ? SystemColors.Window : SystemColors.Control;
+            row.Cells["LockedValue"].Style.BackColor = lockEnabled ? SystemColors.Window : SystemColors.Control;
             if (!lockEnabled)
             {
                 var incrementIndex = _orderDataSourcesGrid.Columns["AutoIncrement"].Index;
@@ -1287,8 +1276,6 @@ namespace BarTenderPrinter
                 if (row.Cells["AutoStep"].ReadOnly)
                     row.Cells[_orderDataSourcesGrid.Columns["AutoStep"].Index] = new DataGridViewTextBoxCell { Value = savedState?.AutoStep ?? 1 };
                 if (savedState != null) row.Cells["LockedValue"].Value = savedState.LockedValue;
-                if (string.IsNullOrWhiteSpace(row.Cells["LockMode"].Value?.ToString()))
-                    row.Cells["LockMode"].Value = "输入后锁定";
                 row.Tag = null;
             }
         }
@@ -1308,7 +1295,7 @@ namespace BarTenderPrinter
             var fields = _btService.IsConnected ? _btService.GetTemplateDataSources(templatePath) : new List<string>();
             if (fields.Count == 0)
             {
-                MessageBox.Show(this, "未读取到模板数据源，可在页面中手动添加数据源。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, "未读取到模板数据源，请检查模板文件中的命名数据源。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             var current = BuildDataSourcesFromOrderGrid();
@@ -1324,13 +1311,14 @@ namespace BarTenderPrinter
                     ExpectedLength = _chkOrderLengthValidation.Checked ? (int)_numOrderGlobalLength.Value : 0
                 });
             }
+            ApplyOrderGlobalLengthToGrid();
         }
 
         private void AddOrderDataSourceRow(DataSourceItem source)
         {
             var lockEnabled = source.IsLocked || source.LockAfterInput || source.AutoIncrement;
             var rowIndex = _orderDataSourcesGrid.Rows.Add(source.Enabled, source.Field, lockEnabled,
-                source.LockAfterInput || !source.IsLocked ? "输入后锁定" : "固定锁定", source.AutoIncrement,
+                source.AutoIncrement,
                 source.AutoStep == 0 ? 1 : source.AutoStep, source.LockedValue, source.ExpectedLength);
             UpdateOrderDataSourceRowState(_orderDataSourcesGrid.Rows[rowIndex]);
         }
@@ -1353,6 +1341,11 @@ namespace BarTenderPrinter
             { MessageBox.Show(this, "订单号已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (_orderTemplateDrafts.Any(template => template.Settings?.DataSources == null || !template.Settings.DataSources.Any(source => source.Enabled)))
             { MessageBox.Show(this, "请至少选择一个数据源。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            var missingLockValue = _orderTemplateDrafts
+                .SelectMany(template => template.Settings?.DataSources ?? new List<DataSourceItem>())
+                .FirstOrDefault(source => source.Enabled && source.LockAfterInput && string.IsNullOrWhiteSpace(source.LockedValue));
+            if (missingLockValue != null)
+            { MessageBox.Show(this, $"已勾选锁定的数据源“{missingLockValue.Name}”必须填写输入值。", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             var savedOrder = new PackagingOrder
             {
                 Customer = input.Customer,
@@ -1422,9 +1415,7 @@ namespace BarTenderPrinter
                 int.TryParse(row.Cells["ExpectedLength"].Value?.ToString(), out var expectedLength);
                 var lockEnabled = Convert.ToBoolean(row.Cells["LockEnabled"].Value ?? false);
                 var autoIncrement = lockEnabled && bool.TryParse(row.Cells["AutoIncrement"].Value?.ToString(), out var incrementEnabled) && incrementEnabled;
-                var lockMode = lockEnabled ? row.Cells["LockMode"].Value?.ToString() ?? "输入后锁定" : "";
                 var lockedValue = row.Cells["LockedValue"].Value?.ToString() ?? "";
-                var preserveInputLock = lockMode == "输入后锁定" && !string.IsNullOrWhiteSpace(lockedValue);
                 result.Add(new DataSourceItem
                 {
                     Name = field,
@@ -1432,8 +1423,8 @@ namespace BarTenderPrinter
                     Enabled = Convert.ToBoolean(row.Cells["Enabled"].Value ?? false),
                     AutoIncrement = autoIncrement,
                     AutoStep = step == 0 ? 1 : Math.Max(-99, Math.Min(99, step)),
-                    IsLocked = lockMode == "固定锁定" || preserveInputLock,
-                    LockAfterInput = lockMode == "输入后锁定",
+                    IsLocked = lockEnabled && !string.IsNullOrWhiteSpace(lockedValue),
+                    LockAfterInput = lockEnabled,
                     LockedValue = lockEnabled ? lockedValue : "",
                     AutoIncrementLocked = autoIncrement && existing?.AutoIncrementLocked == true,
                     ExpectedLength = Math.Max(0, Math.Min(512, expectedLength)),
