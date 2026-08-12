@@ -20,7 +20,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.34";
+        private readonly string _version = "v5.7.35";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -31,6 +31,7 @@ namespace BarTenderPrinter
         private HashSet<string> _localData = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string _localDataPath = "";
         private bool _useLocalDataValidation = false;
+        private bool _duplicateValidationEnabled = true;
         private bool _isInitializing = true;
         private bool _isLoadingConfig;
         private bool _hasSavedDataSourceOrder;
@@ -45,8 +46,10 @@ namespace BarTenderPrinter
         private ComboBox _cmbOrderNumber;
         private Button _btnAddOrder;
         private Panel _navPanel;
+        private Button _btnSidebarToggle;
         private Button _btnPrintPage;
         private Button _btnOrderPage;
+        private bool _sidebarExpanded;
         private Panel _printOrderPanel;
         private ComboBox _cmbPrintOrder;
         private Panel _orderPagePanel;
@@ -61,6 +64,7 @@ namespace BarTenderPrinter
         private ComboBox _cmbOrderPrinter;
         private NumericUpDown _numOrderCopies;
         private CheckBox _chkOrderInputValidation;
+        private CheckBox _chkOrderDuplicateValidation;
         private CheckBox _chkOrderLengthValidation;
         private NumericUpDown _numOrderGlobalLength;
         private Label _lblOrderLocalData;
@@ -107,41 +111,46 @@ namespace BarTenderPrinter
         private void InstallOrderSidebar()
         {
             const int navWidth = 150;
+            const int collapsedWidth = 44;
             const int orderSelectorHeight = 40;
             var printControls = Controls.Cast<Control>()
                 .Where(control => control != titlePanel && control != groupBoxLog && control != statusStrip)
                 .ToDictionary(control => control, control => control.Bounds);
-            ClientSize = new Size(ClientSize.Width + navWidth, ClientSize.Height);
-            MinimumSize = new Size(MinimumSize.Width + navWidth, MinimumSize.Height);
+            ClientSize = new Size(ClientSize.Width + collapsedWidth, ClientSize.Height);
+            MinimumSize = new Size(MinimumSize.Width + collapsedWidth, MinimumSize.Height);
             foreach (var item in printControls)
             {
                 var bounds = item.Value;
                 var top = bounds.Top >= 42 ? bounds.Top + orderSelectorHeight : bounds.Top;
                 var height = item.Key == tabBottom ? Math.Max(80, bounds.Height - orderSelectorHeight) : bounds.Height;
-                item.Key.Bounds = new Rectangle(bounds.Left + navWidth, top, bounds.Width, height);
+                item.Key.Bounds = new Rectangle(bounds.Left + collapsedWidth, top, bounds.Width, height);
             }
 
             _navPanel = new Panel
             {
                 Location = new Point(0, titlePanel.Bottom),
-                Size = new Size(navWidth, groupBoxLog.Top - titlePanel.Bottom),
+                Size = new Size(collapsedWidth, groupBoxLog.Top - titlePanel.Bottom),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left,
                 BackColor = Color.FromArgb(245, 246, 250)
             };
-            _btnPrintPage = new Button { Text = "打印页面", Location = new Point(12, 18), Size = new Size(120, 34) };
-            _btnOrderPage = new Button { Text = "订单管理", Location = new Point(12, 60), Size = new Size(120, 34) };
-            _btnPrintPage.Click += (s, e) => ShowPrintPage();
-            _btnOrderPage.Click += (s, e) => ShowOrderManagementPage();
-            _navPanel.Controls.AddRange(new Control[] { _btnPrintPage, _btnOrderPage });
+            _btnSidebarToggle = new Button { Text = "☰", Location = new Point(7, 12), Size = new Size(30, 30) };
+            _btnSidebarToggle.Click += (s, e) => SetSidebarExpanded(!_sidebarExpanded);
+            _btnPrintPage = new Button { Text = "打印页面", Location = new Point(12, 54), Size = new Size(120, 34), Visible = false };
+            _btnOrderPage = new Button { Text = "订单管理", Location = new Point(12, 96), Size = new Size(120, 34), Visible = false };
+            _btnPrintPage.Click += (s, e) => { ShowPrintPage(); SetSidebarExpanded(false); };
+            _btnOrderPage.Click += (s, e) => { ShowOrderManagementPage(); SetSidebarExpanded(false); };
+            _navPanel.Controls.AddRange(new Control[] { _btnSidebarToggle, _btnPrintPage, _btnOrderPage });
             Controls.Add(_navPanel);
             _navPanel.BringToFront();
+            MiuiTheme.StyleButton(_btnSidebarToggle);
             MiuiTheme.StyleButton(_btnPrintPage, true);
             MiuiTheme.StyleButton(_btnOrderPage);
+            LoadSidebarToggleIcon();
 
             _printOrderPanel = new Panel
             {
-                Location = new Point(navWidth + 10, titlePanel.Bottom + 4),
-                Size = new Size(ClientSize.Width - navWidth - 20, 34),
+                Location = new Point(collapsedWidth + 10, titlePanel.Bottom + 4),
+                Size = new Size(ClientSize.Width - collapsedWidth - 20, 34),
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 BackColor = BackColor
             };
@@ -162,8 +171,8 @@ namespace BarTenderPrinter
 
             _orderPagePanel = new Panel
             {
-                Location = new Point(navWidth, titlePanel.Bottom),
-                Size = new Size(ClientSize.Width - navWidth, groupBoxLog.Top - titlePanel.Bottom),
+                Location = new Point(collapsedWidth, titlePanel.Bottom),
+                Size = new Size(ClientSize.Width - collapsedWidth, groupBoxLog.Top - titlePanel.Bottom),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
                 Visible = false,
                 BackColor = BackColor
@@ -198,6 +207,48 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(_btnAddOrder, true);
             btnEditDataSources.Visible = false;
             RefreshPrintOrderSelector();
+        }
+
+        private void SetSidebarExpanded(bool expanded)
+        {
+            _sidebarExpanded = expanded;
+            _navPanel.Width = expanded ? 150 : 44;
+            _btnPrintPage.Visible = expanded;
+            _btnOrderPage.Visible = expanded;
+            _navPanel.BringToFront();
+        }
+
+        private void LoadSidebarToggleIcon()
+        {
+            const string iconUrl = "https://img.icons8.com/ios-glyphs/30/menu--v1.png";
+            Task.Run(() =>
+            {
+                try
+                {
+                    var request = System.Net.WebRequest.Create(iconUrl);
+                    request.Timeout = 5000;
+                    using (var response = request.GetResponse())
+                    using (var stream = response.GetResponseStream())
+                    using (var source = Image.FromStream(stream))
+                    {
+                        var icon = new Bitmap(source, new Size(20, 20));
+                        BeginInvoke((Action)(() =>
+                        {
+                            if (IsDisposed || Disposing || _btnSidebarToggle == null || _btnSidebarToggle.IsDisposed)
+                            {
+                                icon.Dispose();
+                                return;
+                            }
+                            _btnSidebarToggle.Image = icon;
+                            _btnSidebarToggle.Text = "";
+                        }));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Warn($"加载侧边栏网络图标失败: {ex.Message}");
+                }
+            });
         }
 
         private void ShowPrintPage()
@@ -580,14 +631,16 @@ namespace BarTenderPrinter
             MiuiTheme.StyleLabel(printerLabel);
             MiuiTheme.StyleLabel(copiesLabel);
 
-            _chkOrderInputValidation = new CheckBox { Text = "启用本地数据校验", Location = new Point(10, 363), Size = new Size(135, 22) };
-            _chkOrderLengthValidation = new CheckBox { Text = "启用长度校验", Location = new Point(155, 363), Size = new Size(120, 22) };
-            var globalLengthLabel = new Label { Text = "全局长度：", Location = new Point(285, 366), Size = new Size(75, 18) };
-            _numOrderGlobalLength = new NumericUpDown { Location = new Point(360, 361), Size = new Size(70, 25), Minimum = 0, Maximum = 512 };
-            var chooseValidationData = new Button { Text = "选择校验数据", Location = new Point(445, 359), Size = new Size(100, 28) };
+            _chkOrderInputValidation = new CheckBox { Text = "本地完整匹配", Location = new Point(10, 363), Size = new Size(120, 22), Enabled = false };
+            _chkOrderDuplicateValidation = new CheckBox { Text = "重复校验", Location = new Point(140, 363), Size = new Size(90, 22) };
+            _chkOrderLengthValidation = new CheckBox { Text = "长度校验", Location = new Point(240, 363), Size = new Size(90, 22) };
+            var globalLengthLabel = new Label { Text = "全局长度：", Location = new Point(340, 366), Size = new Size(75, 18) };
+            _numOrderGlobalLength = new NumericUpDown { Location = new Point(415, 361), Size = new Size(70, 25), Minimum = 0, Maximum = 512 };
+            var chooseValidationData = new Button { Text = "选择校验数据", Location = new Point(500, 359), Size = new Size(100, 28) };
             chooseValidationData.Click += (s, e) => SelectOrderValidationData();
             _lblOrderLocalData = new Label { Text = "校验数据：未配置", Location = new Point(555, 366), Size = new Size(Math.Max(180, contentWidth - 545), 18), AutoEllipsis = true };
             _orderContentPanel.Controls.Add(_chkOrderInputValidation);
+            _orderContentPanel.Controls.Add(_chkOrderDuplicateValidation);
             _orderContentPanel.Controls.Add(_chkOrderLengthValidation);
             _orderContentPanel.Controls.Add(globalLengthLabel);
             _orderContentPanel.Controls.Add(_numOrderGlobalLength);
@@ -644,6 +697,7 @@ namespace BarTenderPrinter
             _txtOrderTemplate.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             _lblOrderLocalData.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             _chkOrderInputValidation.CheckedChanged += (s, e) => UpdateOrderValidationControls();
+            _chkOrderDuplicateValidation.Checked = _duplicateValidationEnabled;
             _chkOrderLengthValidation.CheckedChanged += (s, e) => UpdateOrderValidationControls();
             UpdateOrderValidationControls();
 
@@ -765,6 +819,7 @@ namespace BarTenderPrinter
                 Printer = settings.Printer,
                 Copies = settings.Copies,
                 InputValidation = settings.InputValidation,
+                DuplicateValidation = settings.DuplicateValidation,
                 LengthValidation = settings.LengthValidation,
                 GlobalExpectedLength = settings.GlobalExpectedLength,
                 GlobalLengthRevision = settings.GlobalLengthRevision,
@@ -832,37 +887,252 @@ namespace BarTenderPrinter
         {
             if (_selectedOrderTemplateDraft == null)
             { MessageBox.Show(this, "请先选择一个模板卡片。", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            using (var dialog = new OpenFileDialog { Filter = "CSV|*.csv|文本|*.txt|所有文件|*.*" })
+            using (var dialog = new OpenFileDialog { Filter = "Excel|*.xlsx;*.xls|CSV|*.csv|文本|*.txt|所有文件|*.*", FilterIndex = 1 })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 try
                 {
-                    var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    var lines = File.ReadAllLines(dialog.FileName);
-                    if (string.Equals(Path.GetExtension(dialog.FileName), ".csv", StringComparison.OrdinalIgnoreCase))
+                    var ext = Path.GetExtension(dialog.FileName).ToLowerInvariant();
+                    if (ext == ".xlsx" || ext == ".xls")
                     {
-                        var start = lines.Length > 1 ? 1 : 0;
-                        for (var i = start; i < lines.Length; i++)
-                        {
-                            var columns = ParseCsvLine(lines[i]);
-                            if (columns.Count > 0 && !string.IsNullOrWhiteSpace(columns[0])) values.Add(columns[0].Trim());
-                        }
+                        LoadOrderValidationDataAsync(dialog.FileName, _selectedOrderTemplateDraft);
+                        return;
                     }
-                    else
-                    {
-                        foreach (var line in lines)
-                            if (!string.IsNullOrWhiteSpace(line)) values.Add(line.Trim());
-                    }
-                    _selectedOrderTemplateDraft.Settings.LocalDataPath = dialog.FileName;
-                    _selectedOrderTemplateDraft.Settings.LocalData = values.ToList();
-                    _chkOrderInputValidation.Checked = true;
-                    _lblOrderLocalData.Text = $"校验数据：{dialog.FileName}（{values.Count} 条）";
+                    var imported = ReadValidationDataFile(dialog.FileName);
+                    if (imported == null) return;
+                    ApplyOrderValidationData(dialog.FileName, imported);
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show(this, $"读取校验数据失败：{ex.Message}", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
+        }
+
+        private void LoadOrderValidationDataAsync(string path, OrderTemplate targetTemplate)
+        {
+            SetStatus("正在加载订单校验数据...");
+            RunSta(() =>
+            {
+                try
+                {
+                    var imported = ReadExcelValidationDataInBackground(path);
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (imported != null && targetTemplate != null && _orderTemplateDrafts.Contains(targetTemplate))
+                            ApplyOrderValidationData(path, imported, targetTemplate);
+                        SetStatus("就绪");
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        MessageBox.Show(this, $"读取 Excel 失败：{ex.Message}", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        SetStatus("就绪");
+                    }));
+                }
+            });
+        }
+
+        private static void RunSta(Action action)
+        {
+            var thread = new System.Threading.Thread(() =>
+            {
+                try { action(); }
+                catch (Exception ex) { LoggerService.Error("后台 STA 任务失败", ex); }
+            });
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.IsBackground = true;
+            thread.Start();
+        }
+
+        private void ApplyOrderValidationData(string path, LocalDataImportResult imported, OrderTemplate targetTemplate = null)
+        {
+            targetTemplate ??= _selectedOrderTemplateDraft;
+            if (targetTemplate?.Settings == null) return;
+            targetTemplate.Settings.LocalDataPath = path;
+            targetTemplate.Settings.LocalData = imported.Values.ToList();
+            if (ReferenceEquals(targetTemplate, _selectedOrderTemplateDraft))
+            {
+                _chkOrderInputValidation.Enabled = true;
+                _chkOrderInputValidation.Checked = true;
+                _lblOrderLocalData.Text = $"校验数据：{path}（{imported.Values.Count} 条，{imported.ColumnName}）";
+            }
+        }
+
+        private LocalDataImportResult ReadValidationDataFile(string path)
+        {
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext == ".csv") return ReadCsvValidationData(path);
+            if (ext == ".xlsx" || ext == ".xls") return ReadExcelValidationData(path);
+            var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in File.ReadLines(path))
+            { var value = line.Trim(); if (!string.IsNullOrEmpty(value)) values.Add(value); }
+            return new LocalDataImportResult(values, "文本");
+        }
+
+        private LocalDataImportResult ReadCsvValidationData(string path)
+        {
+            using (var enumerator = File.ReadLines(path).GetEnumerator())
+            {
+                if (!enumerator.MoveNext()) { MessageBox.Show(this, "CSV 文件为空"); return null; }
+                var firstRow = ParseCsvLine(enumerator.Current);
+                var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (firstRow.Count <= 1)
+                {
+                    if (firstRow.Count == 1 && !string.IsNullOrWhiteSpace(firstRow[0])) values.Add(firstRow[0].Trim());
+                    while (enumerator.MoveNext())
+                    {
+                        var columns = ParseCsvLine(enumerator.Current);
+                        if (columns.Count > 0 && !string.IsNullOrWhiteSpace(columns[0])) values.Add(columns[0].Trim());
+                    }
+                    return new LocalDataImportResult(values, "单列");
+                }
+                var colIdx = PromptForColumnSelection(firstRow, Path.GetFileName(path));
+                if (colIdx < 0) return null;
+                while (enumerator.MoveNext())
+                {
+                    var columns = ParseCsvLine(enumerator.Current);
+                    if (colIdx < columns.Count && !string.IsNullOrWhiteSpace(columns[colIdx])) values.Add(columns[colIdx].Trim());
+                }
+                return new LocalDataImportResult(values, firstRow[colIdx]);
+            }
+        }
+
+        private LocalDataImportResult ReadExcelValidationData(string path)
+        {
+            var excelType = Type.GetTypeFromProgID("Excel.Application");
+            if (excelType == null) { MessageBox.Show(this, "未安装 Excel，请保存为 CSV 格式后加载"); return null; }
+            dynamic excel = null;
+            dynamic wb = null;
+            dynamic ws = null;
+            dynamic usedRange = null;
+            try
+            {
+                excel = Activator.CreateInstance(excelType);
+                excel.Visible = false;
+                excel.DisplayAlerts = false;
+                wb = excel.Workbooks.Open(path, ReadOnly: true);
+                ws = wb.ActiveSheet;
+                usedRange = ws.UsedRange;
+                int rows = usedRange.Rows.Count;
+                int cols = usedRange.Columns.Count;
+                if (rows < 1 || cols < 1) { MessageBox.Show(this, "Excel 文件为空"); return null; }
+                dynamic allData = usedRange.Value2;
+                if (rows == 1 && cols == 1)
+                {
+                    var singleValue = allData?.ToString()?.Trim();
+                    var singleValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    if (!string.IsNullOrEmpty(singleValue)) singleValues.Add(singleValue);
+                    return new LocalDataImportResult(singleValues, "单列");
+                }
+                var headers = new List<string>();
+                for (int c = 1; c <= cols; c++) headers.Add(allData[1, c]?.ToString()?.Trim() ?? $"列{c}");
+                var colIdx = 0;
+                var startRow = 1;
+                var columnName = "单列";
+                if (cols > 1)
+                {
+                    colIdx = PromptForColumnSelection(headers, Path.GetFileName(path));
+                    if (colIdx < 0) return null;
+                    startRow = 2;
+                    columnName = headers[colIdx];
+                }
+                var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int r = startRow; r <= rows; r++)
+                {
+                    var value = allData[r, colIdx + 1]?.ToString()?.Trim();
+                    if (!string.IsNullOrEmpty(value)) values.Add(value);
+                }
+                return new LocalDataImportResult(values, columnName);
+            }
+            finally
+            {
+                try { wb?.Close(false); } catch { }
+                try { excel?.Quit(); } catch { }
+                try { if (usedRange != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(usedRange); } catch { }
+                try { if (ws != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(ws); } catch { }
+                try { if (wb != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(wb); } catch { }
+                try { if (excel != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(excel); } catch { }
+            }
+        }
+
+        private LocalDataImportResult ReadExcelValidationDataInBackground(string path)
+        {
+            var excelType = Type.GetTypeFromProgID("Excel.Application");
+            if (excelType == null) throw new InvalidOperationException("未安装 Excel，请保存为 CSV 格式后加载");
+            dynamic excel = null;
+            dynamic wb = null;
+            dynamic ws = null;
+            dynamic usedRange = null;
+            try
+            {
+                excel = Activator.CreateInstance(excelType);
+                excel.Visible = false;
+                excel.DisplayAlerts = false;
+                wb = excel.Workbooks.Open(path, ReadOnly: true);
+                ws = wb.ActiveSheet;
+                usedRange = ws.UsedRange;
+                int rows = usedRange.Rows.Count;
+                int cols = usedRange.Columns.Count;
+                if (rows < 1 || cols < 1) return null;
+                dynamic allData = usedRange.Value2;
+                if (rows == 1 && cols == 1)
+                {
+                    var singleValue = allData?.ToString()?.Trim();
+                    var singleValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    if (!string.IsNullOrEmpty(singleValue)) singleValues.Add(singleValue);
+                    return new LocalDataImportResult(singleValues, "单列");
+                }
+                var headers = new List<string>();
+                for (int c = 1; c <= cols; c++) headers.Add(allData[1, c]?.ToString()?.Trim() ?? $"列{c}");
+                var selectedCol = 0;
+                var startRow = 1;
+                var columnName = "单列";
+                if (cols > 1)
+                {
+                    selectedCol = -1;
+                    var evt = new System.Threading.ManualResetEvent(false);
+                    BeginInvoke((Action)(() =>
+                    {
+                        selectedCol = PromptForColumnSelection(headers, Path.GetFileName(path));
+                        evt.Set();
+                    }));
+                    evt.WaitOne();
+                    if (selectedCol < 0) return null;
+                    startRow = 2;
+                    columnName = headers[selectedCol];
+                }
+                var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int r = startRow; r <= rows; r++)
+                {
+                    var value = allData[r, selectedCol + 1]?.ToString()?.Trim();
+                    if (!string.IsNullOrEmpty(value)) values.Add(value);
+                }
+                return new LocalDataImportResult(values, columnName);
+            }
+            finally
+            {
+                try { wb?.Close(false); } catch { }
+                try { excel?.Quit(); } catch { }
+                try { if (usedRange != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(usedRange); } catch { }
+                try { if (ws != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(ws); } catch { }
+                try { if (wb != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(wb); } catch { }
+                try { if (excel != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(excel); } catch { }
+            }
+        }
+
+        private sealed class LocalDataImportResult
+        {
+            public LocalDataImportResult(HashSet<string> values, string columnName)
+            {
+                Values = values;
+                ColumnName = columnName;
+            }
+
+            public HashSet<string> Values { get; }
+            public string ColumnName { get; }
         }
 
         private void SelectOrderTemplateDraft(OrderTemplate template)
@@ -881,7 +1151,9 @@ namespace BarTenderPrinter
                     _cmbOrderPrinter.SelectedItem = settings.Printer;
                 }
                 _numOrderCopies.Value = Math.Max(_numOrderCopies.Minimum, Math.Min(_numOrderCopies.Maximum, settings.Copies));
-                _chkOrderInputValidation.Checked = settings.InputValidation;
+                _chkOrderInputValidation.Enabled = (settings.LocalData?.Count ?? 0) > 0;
+                _chkOrderInputValidation.Checked = settings.InputValidation && _chkOrderInputValidation.Enabled;
+                _chkOrderDuplicateValidation.Checked = settings.DuplicateValidation;
                 _chkOrderLengthValidation.Checked = settings.LengthValidation;
                 _numOrderGlobalLength.Value = Math.Max(_numOrderGlobalLength.Minimum, Math.Min(_numOrderGlobalLength.Maximum, settings.GlobalExpectedLength));
                 _lblOrderLocalData.Text = string.IsNullOrWhiteSpace(settings.LocalDataPath)
@@ -904,6 +1176,7 @@ namespace BarTenderPrinter
             settings.Printer = _cmbOrderPrinter?.SelectedItem?.ToString() ?? settings.Printer;
             settings.Copies = _numOrderCopies == null ? settings.Copies : (int)_numOrderCopies.Value;
             settings.InputValidation = _chkOrderInputValidation?.Checked ?? settings.InputValidation;
+            settings.DuplicateValidation = _chkOrderDuplicateValidation?.Checked ?? _duplicateValidationEnabled;
             settings.LengthValidation = _chkOrderLengthValidation?.Checked ?? settings.LengthValidation;
             settings.GlobalExpectedLength = _numOrderGlobalLength == null ? settings.GlobalExpectedLength : (int)_numOrderGlobalLength.Value;
             if (_selectedOrderTemplateDraft?.Settings != null)
@@ -940,6 +1213,7 @@ namespace BarTenderPrinter
         private void UpdateOrderValidationControls()
         {
             if (_numOrderGlobalLength != null) _numOrderGlobalLength.Enabled = _chkOrderLengthValidation?.Checked == true;
+            if (_chkOrderInputValidation != null && !_chkOrderInputValidation.Enabled) _chkOrderInputValidation.Checked = false;
             if (_lblOrderLocalData != null)
                 _lblOrderLocalData.ForeColor = _chkOrderInputValidation?.Checked == true ? MiuiTheme.TextPrimary : MiuiTheme.TextSecondary;
         }
@@ -1207,14 +1481,21 @@ namespace BarTenderPrinter
             }
 
             AddLog("开始运行 BarTender 诊断...", "INFO");
-            Task.Run(() =>
+            RunSta(() =>
             {
-                _btService.RunDiagnostics(_selectedTemplatePath);
-                BeginInvoke((Action)(() =>
+                try
                 {
-                    AddLog("诊断完成，请查看日志文件获取详细信息", "INFO");
-                    AddLog($"日志文件: {LoggerService.GetLogFile()}", "INFO");
-                }));
+                    _btService.RunDiagnostics(_selectedTemplatePath);
+                    BeginInvoke((Action)(() =>
+                    {
+                        AddLog("诊断完成，请查看日志文件获取详细信息", "INFO");
+                        AddLog($"日志文件: {LoggerService.GetLogFile()}", "INFO");
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke((Action)(() => AddLog($"诊断失败: {ex.Message}", "ERROR")));
+                }
             });
         }
 
@@ -1411,6 +1692,7 @@ namespace BarTenderPrinter
             _dataSources = new List<DataSourceItem>();
             _hasSavedDataSourceOrder = false;
             _useLocalDataValidation = false;
+            _duplicateValidationEnabled = true;
             _lengthValidationEnabled = false;
             _globalExpectedLength = 0;
             _globalLengthRevision = 0;
@@ -1421,6 +1703,7 @@ namespace BarTenderPrinter
             try
             {
                 chkUseLocalData.Checked = false;
+                chkDuplicateValidation.Checked = true;
                 chkLengthValidation.Checked = false;
                 btnGlobalLength.Enabled = false;
                 numCopies.Value = 1;
@@ -1496,6 +1779,7 @@ namespace BarTenderPrinter
                 Printer = cmbPrinter.SelectedItem?.ToString() ?? "",
                 Copies = (int)numCopies.Value,
                 InputValidation = _useLocalDataValidation,
+                DuplicateValidation = _duplicateValidationEnabled,
                 LengthValidation = _lengthValidationEnabled,
                 GlobalExpectedLength = _globalExpectedLength,
                 GlobalLengthRevision = _globalLengthRevision,
@@ -1591,7 +1875,7 @@ namespace BarTenderPrinter
                     MessageBox.Show(this, $"锁定数据源 \"{source.Name}\" 必须为 {expectedLength} 位。请在数据源配置中修正锁定值。", "长度校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return false;
                 }
-                if (_useLocalDataValidation && configuredValues.Contains(value))
+                if (_duplicateValidationEnabled && configuredValues.Contains(value))
                 {
                     MessageBox.Show(this, $"锁定数据重复：{value}\n请在数据源配置中修正锁定值。", "数据校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return false;
@@ -2042,7 +2326,7 @@ namespace BarTenderPrinter
 
         private void btnLoadLocalData_Click(object sender, EventArgs e)
         {
-            using (var ofd = new OpenFileDialog { Filter = "CSV|*.csv|Excel|*.xlsx;*.xls|文本|*.txt|所有|*.*" })
+            using (var ofd = new OpenFileDialog { Filter = "Excel|*.xlsx;*.xls|CSV|*.csv|文本|*.txt|所有|*.*", FilterIndex = 1 })
             {
                 if (ofd.ShowDialog(this) == DialogResult.OK)
                 {
@@ -2060,26 +2344,32 @@ namespace BarTenderPrinter
 
         private void LoadCsvData(string path)
         {
-            var lines = File.ReadAllLines(path);
-            if (lines.Length < 2) { MessageBox.Show(this, "CSV 文件为空"); return; }
-            var headers = ParseCsvLine(lines[0]);
-            int colIdx = 0;
-            if (headers.Count > 1)
+            using (var enumerator = File.ReadLines(path).GetEnumerator())
             {
-                colIdx = PromptForColumnSelection(headers, Path.GetFileName(path));
+                if (!enumerator.MoveNext()) { MessageBox.Show(this, "CSV 文件为空"); return; }
+                var firstRow = ParseCsvLine(enumerator.Current);
+                var data = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (firstRow.Count <= 1)
+                {
+                    if (firstRow.Count == 1 && !string.IsNullOrWhiteSpace(firstRow[0])) data.Add(firstRow[0].Trim());
+                    while (enumerator.MoveNext())
+                    {
+                        var cols = ParseCsvLine(enumerator.Current);
+                        if (cols.Count > 0 && !string.IsNullOrWhiteSpace(cols[0])) data.Add(cols[0].Trim());
+                    }
+                    ApplyLoadedLocalData(path, data, "单列", "CSV");
+                    return;
+                }
+                var colIdx = PromptForColumnSelection(firstRow, Path.GetFileName(path));
                 if (colIdx < 0) return;
+                while (enumerator.MoveNext())
+                {
+                    var cols = ParseCsvLine(enumerator.Current);
+                    if (colIdx < cols.Count && !string.IsNullOrWhiteSpace(cols[colIdx]))
+                        data.Add(cols[colIdx].Trim());
+                }
+                ApplyLoadedLocalData(path, data, firstRow[colIdx], "CSV");
             }
-            _localData.Clear();
-            foreach (var line in lines.Skip(1))
-            {
-                var cols = ParseCsvLine(line);
-                if (colIdx < cols.Count && !string.IsNullOrWhiteSpace(cols[colIdx]))
-                    _localData.Add(cols[colIdx].Trim());
-            }
-            _localDataPath = path; _useLocalDataValidation = true; chkUseLocalData.Checked = true;
-            UpdateLocalDataLabel($"已加载: {_localData.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})");
-            AddLog($"加载 CSV: {_localData.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
-            SaveCurrentConfigurationState();
         }
 
         private void LoadExcelData(string path)
@@ -2087,7 +2377,7 @@ namespace BarTenderPrinter
             SetStatus("正在加载 Excel...");
             AddLog("正在加载 Excel 数据...", "INFO");
 
-            Task.Run(() =>
+            RunSta(() =>
             {
                 try
                 {
@@ -2100,18 +2390,20 @@ namespace BarTenderPrinter
 
                     dynamic excel = null;
                     dynamic wb = null;
+                    dynamic ws = null;
+                    dynamic usedRange = null;
                     try
                     {
                         excel = Activator.CreateInstance(excelType);
                         excel.Visible = false;
                         excel.DisplayAlerts = false;
                         wb = excel.Workbooks.Open(path, ReadOnly: true);
-                        dynamic ws = wb.ActiveSheet;
-                        dynamic usedRange = ws.UsedRange;
+                        ws = wb.ActiveSheet;
+                        usedRange = ws.UsedRange;
                         int rows = usedRange.Rows.Count;
                         int cols = usedRange.Columns.Count;
 
-                        if (rows < 2 || cols < 1)
+                        if (rows < 1 || cols < 1)
                         {
                             BeginInvoke((Action)(() => MessageBox.Show(this, "Excel 文件为空")));
                             wb.Close(false); excel.Quit();
@@ -2119,12 +2411,27 @@ namespace BarTenderPrinter
                         }
 
                         dynamic allData = usedRange.Value2;
+                        if (rows == 1 && cols == 1)
+                        {
+                            var singleValue = allData?.ToString()?.Trim();
+                            var singleValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            if (!string.IsNullOrEmpty(singleValue)) singleValues.Add(singleValue);
+                            BeginInvoke((Action)(() =>
+                            {
+                                ApplyLoadedLocalData(path, singleValues, "单列", "Excel");
+                                SetStatus("就绪");
+                            }));
+                            wb.Close(false); excel.Quit();
+                            return;
+                        }
                         var headers = new List<string>();
                         for (int c = 1; c <= cols; c++)
                             headers.Add(allData[1, c]?.ToString()?.Trim() ?? $"列{c}");
 
-                        int colIdx = 0;
-                        if (headers.Count > 1)
+                        var colIdx = 0;
+                        var startRow = 1;
+                        var columnName = "单列";
+                        if (cols > 1)
                         {
                             var selectedCol = -1;
                             var evt = new System.Threading.ManualResetEvent(false);
@@ -2136,10 +2443,12 @@ namespace BarTenderPrinter
                             evt.WaitOne();
                             colIdx = selectedCol;
                             if (colIdx < 0) { wb.Close(false); excel.Quit(); return; }
+                            startRow = 2;
+                            columnName = headers[colIdx];
                         }
 
                         var data = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        for (int r = 2; r <= rows; r++)
+                        for (int r = startRow; r <= rows; r++)
                         {
                             var val = allData[r, colIdx + 1]?.ToString()?.Trim();
                             if (!string.IsNullOrEmpty(val)) data.Add(val);
@@ -2149,20 +2458,17 @@ namespace BarTenderPrinter
 
                         BeginInvoke((Action)(() =>
                         {
-                            _localData = data;
-                            _localDataPath = path;
-                            _useLocalDataValidation = true;
-                            chkUseLocalData.Checked = true;
-                            UpdateLocalDataLabel($"已加载: {data.Count} 条 [{headers[colIdx]}] ({Path.GetFileName(path)})");
-                            AddLog($"加载 Excel: {data.Count} 条, 列: {headers[colIdx]}", "SUCCESS");
+                            ApplyLoadedLocalData(path, data, columnName, "Excel");
                             SetStatus("就绪");
-                            SaveCurrentConfigurationState();
                         }));
                     }
                     finally
                     {
                         try { wb?.Close(false); } catch { }
                         try { excel?.Quit(); } catch { }
+                        try { if (usedRange != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(usedRange); } catch { }
+                        try { if (ws != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(ws); } catch { }
+                        try { if (wb != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(wb); } catch { }
                         try { if (excel != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(excel); } catch { }
                     }
                 }
@@ -2170,17 +2476,30 @@ namespace BarTenderPrinter
                 {
                     BeginInvoke((Action)(() => { MessageBox.Show(this, $"读取 Excel 失败: {ex.Message}"); SetStatus("就绪"); }));
                 }
+                finally
+                {
+                    try { BeginInvoke((Action)(() => SetStatus("就绪"))); } catch { }
+                }
             });
         }
 
         private void LoadTextData(string path)
         {
-            _localData.Clear();
-            foreach (var line in File.ReadAllLines(path))
-            { var val = line.Trim(); if (!string.IsNullOrEmpty(val)) _localData.Add(val); }
-            _localDataPath = path; _useLocalDataValidation = true; chkUseLocalData.Checked = true;
-            UpdateLocalDataLabel($"已加载: {_localData.Count} 条 ({Path.GetFileName(path)})");
-            AddLog($"加载本地数据: {_localData.Count} 条", "SUCCESS");
+            var data = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in File.ReadLines(path))
+            { var val = line.Trim(); if (!string.IsNullOrEmpty(val)) data.Add(val); }
+            ApplyLoadedLocalData(path, data, "文本", "本地数据");
+        }
+
+        private void ApplyLoadedLocalData(string path, HashSet<string> data, string columnName, string sourceType)
+        {
+            _localData = data;
+            _localDataPath = path;
+            UpdateLocalDataValidationAvailability();
+            _useLocalDataValidation = data.Count > 0;
+            chkUseLocalData.Checked = _useLocalDataValidation;
+            UpdateLocalDataLabel($"已加载: {data.Count} 条 [{columnName}] ({Path.GetFileName(path)})");
+            AddLog($"加载 {sourceType}: {data.Count} 条, 列: {columnName}", "SUCCESS");
             SaveCurrentConfigurationState();
         }
 
@@ -2223,8 +2542,36 @@ namespace BarTenderPrinter
 
         private void chkUseLocalData_CheckedChanged(object sender, EventArgs e)
         {
+            if (_isInitializing || _isLoadingConfig)
+            {
+                _useLocalDataValidation = chkUseLocalData.Checked && _localData.Count > 0;
+                return;
+            }
+            if (chkUseLocalData.Checked && _localData.Count == 0)
+            {
+                chkUseLocalData.Checked = false;
+                MessageBox.Show(this, "请先导入本地校验数据。", "本地完整匹配", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             _useLocalDataValidation = chkUseLocalData.Checked;
             if (!_isInitializing) SaveCurrentConfigurationState();
+        }
+
+        private void chkDuplicateValidation_CheckedChanged(object sender, EventArgs e)
+        {
+            _duplicateValidationEnabled = chkDuplicateValidation.Checked;
+            if (!_isInitializing && !_isLoadingConfig) SaveCurrentConfigurationState();
+        }
+
+        private void UpdateLocalDataValidationAvailability()
+        {
+            var hasLocalData = _localData.Count > 0;
+            chkUseLocalData.Enabled = hasLocalData;
+            if (!hasLocalData)
+            {
+                _useLocalDataValidation = false;
+                chkUseLocalData.Checked = false;
+            }
         }
 
         private void chkLengthValidation_CheckedChanged(object sender, EventArgs e)
@@ -2299,7 +2646,7 @@ namespace BarTenderPrinter
 
         private string GetDuplicateValidationMessage(DataSourceItem source, string value, HashSet<string> acceptedValues)
         {
-            if (!_useLocalDataValidation) return null;
+            if (!_duplicateValidationEnabled) return null;
             if (acceptedValues.Contains(value))
                 return $"输入数据重复：{value}\n请重新输入 {source.Name}。";
             if (_history.ContainsAnyValue(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, value))
@@ -2350,8 +2697,10 @@ namespace BarTenderPrinter
             }
             if (notInLocal.Count > 0)
             {
-                var msg = $"以下数据不在本地数据文件中：\n{string.Join("\n", notInLocal)}\n\n是否继续打印？";
-                return MessageBox.Show(this, msg, "数据校验", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
+                var msg = $"以下数据未完整匹配本地校验数据：\n{string.Join("\n", notInLocal)}";
+                MessageBox.Show(this, msg, "本地完整匹配", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                AddLog($"本地完整匹配失败: {string.Join(", ", notInLocal)}", "WARNING");
+                return false;
             }
             return true;
         }
@@ -2490,11 +2839,12 @@ namespace BarTenderPrinter
                 }
             }
 
-            if (!_useLocalDataValidation) return true;
+            if (!_duplicateValidationEnabled) return true;
             var seen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < enabled.Count; i++)
             {
                 var value = fieldValues[enabled[i].Field];
+                if (string.IsNullOrWhiteSpace(value)) continue;
                 var isEditable = !enabled[i].IsLocked && !enabled[i].AutoIncrementLocked;
                 if (seen.ContainsKey(value) || (isEditable && _history.ContainsAnyValue(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, value)))
                 {
@@ -2867,6 +3217,7 @@ namespace BarTenderPrinter
                     Printer = cmbPrinter.SelectedItem?.ToString() ?? "",
                     Copies = (int)numCopies.Value,
                     InputValidation = _useLocalDataValidation,
+                    DuplicateValidation = _duplicateValidationEnabled,
                     LengthValidation = _lengthValidationEnabled,
                     GlobalExpectedLength = _globalExpectedLength,
                     GlobalLengthRevision = _globalLengthRevision,
@@ -2922,13 +3273,17 @@ namespace BarTenderPrinter
                 _dataSources = (settings.DataSources ?? new List<DataSourceItem>()).Select(CloneDataSource).ToList();
                 _hasSavedDataSourceOrder = _dataSources.Count > 0;
                 _useLocalDataValidation = settings.InputValidation;
+                _duplicateValidationEnabled = settings.DuplicateValidation;
                 _lengthValidationEnabled = settings.LengthValidation;
                 _globalExpectedLength = settings.GlobalExpectedLength;
                 _globalLengthRevision = settings.GlobalLengthRevision;
                 _lengthRevisionCounter = settings.LengthRevisionCounter;
                 _localDataPath = settings.LocalDataPath ?? "";
                 _localData = new HashSet<string>(settings.LocalData ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+                if (_localData.Count == 0) _useLocalDataValidation = false;
+                UpdateLocalDataValidationAvailability();
                 chkUseLocalData.Checked = _useLocalDataValidation;
+                chkDuplicateValidation.Checked = _duplicateValidationEnabled;
                 chkLengthValidation.Checked = _lengthValidationEnabled;
                 btnGlobalLength.Enabled = _lengthValidationEnabled;
                 numCopies.Value = Math.Max(1, Math.Min(99, settings.Copies));
@@ -2981,6 +3336,7 @@ namespace BarTenderPrinter
             IniWriteValue("General", "Printer", cmbPrinter.SelectedItem?.ToString() ?? "", _configFile);
             IniWriteValue("General", "Copies", numCopies.Value.ToString(), _configFile);
             IniWriteValue("General", "InputValidation", _useLocalDataValidation.ToString(), _configFile);
+            IniWriteValue("General", "DuplicateValidation", _duplicateValidationEnabled.ToString(), _configFile);
             IniWriteValue("General", "LengthValidation", _lengthValidationEnabled.ToString(), _configFile);
             IniWriteValue("General", "GlobalExpectedLength", _globalExpectedLength.ToString(), _configFile);
             IniWriteValue("General", "GlobalLengthRevision", _globalLengthRevision.ToString(), _configFile);
@@ -3024,9 +3380,13 @@ namespace BarTenderPrinter
                 _templatesFolder = IniReadValue("General", "TemplatesFolder", path);
                 if (string.IsNullOrWhiteSpace(_templatesFolder)) _templatesFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "templates");
                 txtTemplateDir.Text = _templatesFolder;
+                _localData.Clear();
+                _localDataPath = "";
+                UpdateLocalDataLabel("");
                 var copies = 1; int.TryParse(IniReadValue("General", "Copies", path), out copies); numCopies.Value = Math.Max(1, Math.Min(99, copies));
                 bool.TryParse(IniReadValue("General", "InputValidation", path), out _useLocalDataValidation);
-                chkUseLocalData.Checked = _useLocalDataValidation;
+                if (!bool.TryParse(IniReadValue("General", "DuplicateValidation", path), out _duplicateValidationEnabled)) _duplicateValidationEnabled = true;
+                chkDuplicateValidation.Checked = _duplicateValidationEnabled;
                 bool.TryParse(IniReadValue("General", "LengthValidation", path), out _lengthValidationEnabled);
                 int.TryParse(IniReadValue("General", "GlobalExpectedLength", path), out _globalExpectedLength);
                 long.TryParse(IniReadValue("General", "GlobalLengthRevision", path), out _globalLengthRevision);
@@ -3063,6 +3423,8 @@ namespace BarTenderPrinter
                         LengthRevision = lengthRevision
                     });
                 }
+                UpdateLocalDataValidationAvailability();
+                chkUseLocalData.Checked = _useLocalDataValidation;
                 if (_dataSources.Count == 0) _dataSources.Add(new DataSourceItem { Name = "IMEI", Field = "IMEI1", Enabled = true });
             }
             finally

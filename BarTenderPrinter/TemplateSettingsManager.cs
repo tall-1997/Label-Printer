@@ -13,6 +13,7 @@ namespace BarTenderPrinter
         public string Printer { get; set; } = "";
         public int Copies { get; set; } = 1;
         public bool InputValidation { get; set; }
+        public bool DuplicateValidation { get; set; } = true;
         public bool LengthValidation { get; set; }
         public int GlobalExpectedLength { get; set; }
         public long GlobalLengthRevision { get; set; }

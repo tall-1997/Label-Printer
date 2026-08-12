@@ -17,7 +17,7 @@ namespace BarTenderPrinter
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.titlePanel.Height = 38;
             this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.34";
+            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.35";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
             this.titleLabel.Location = new System.Drawing.Point(10, 7);
@@ -42,13 +42,15 @@ namespace BarTenderPrinter
             this.btnLoadLocalData.Click += new System.EventHandler(this.btnLoadLocalData_Click);
             this.btnDiagnostics = new System.Windows.Forms.Button { Text = "诊断", Location = new System.Drawing.Point(345, 42), Size = new System.Drawing.Size(50, 24) };
             this.btnDiagnostics.Click += new System.EventHandler(this.btnDiagnostics_Click);
-            this.chkUseLocalData = new System.Windows.Forms.CheckBox { Text = "启用数据校验", Location = new System.Drawing.Point(405, 44), Size = new System.Drawing.Size(100, 20), Checked = false };
+            this.chkUseLocalData = new System.Windows.Forms.CheckBox { Text = "本地完整匹配", Location = new System.Drawing.Point(405, 44), Size = new System.Drawing.Size(105, 20), Checked = false, Enabled = false };
             this.chkUseLocalData.CheckedChanged += new System.EventHandler(this.chkUseLocalData_CheckedChanged);
-            this.chkLengthValidation = new System.Windows.Forms.CheckBox { Text = "长度校验", Location = new System.Drawing.Point(510, 44), Size = new System.Drawing.Size(80, 20), Checked = false };
+            this.chkLengthValidation = new System.Windows.Forms.CheckBox { Text = "长度校验", Location = new System.Drawing.Point(515, 44), Size = new System.Drawing.Size(80, 20), Checked = false };
             this.chkLengthValidation.CheckedChanged += new System.EventHandler(this.chkLengthValidation_CheckedChanged);
-            this.btnGlobalLength = new System.Windows.Forms.Button { Text = "设置全局长度", Location = new System.Drawing.Point(595, 42), Size = new System.Drawing.Size(95, 24), Enabled = false };
+            this.chkDuplicateValidation = new System.Windows.Forms.CheckBox { Text = "重复校验", Location = new System.Drawing.Point(600, 44), Size = new System.Drawing.Size(80, 20), Checked = true };
+            this.chkDuplicateValidation.CheckedChanged += new System.EventHandler(this.chkDuplicateValidation_CheckedChanged);
+            this.btnGlobalLength = new System.Windows.Forms.Button { Text = "设置全局长度", Location = new System.Drawing.Point(685, 42), Size = new System.Drawing.Size(95, 24), Enabled = false };
             this.btnGlobalLength.Click += new System.EventHandler(this.btnGlobalLength_Click);
-            this.lblLocalData = new System.Windows.Forms.Label { Text = "", Location = new System.Drawing.Point(870, 45), Size = new System.Drawing.Size(200, 18) };
+            this.lblLocalData = new System.Windows.Forms.Label { Text = "", Location = new System.Drawing.Point(790, 45), Size = new System.Drawing.Size(280, 18) };
             this.lblLocalData.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             MiuiTheme.StyleButton(this.btnSaveConfig);
             MiuiTheme.StyleButton(this.btnLoadConfig);
@@ -164,6 +166,7 @@ namespace BarTenderPrinter
             this.Controls.Add(this.lblTemplateDir);
             this.Controls.Add(this.lblLocalData);
             this.Controls.Add(this.chkUseLocalData);
+            this.Controls.Add(this.chkDuplicateValidation);
             this.Controls.Add(this.btnLoadLocalData);
             this.Controls.Add(this.btnEditDataSources);
             this.Controls.Add(this.btnDiagnostics);
@@ -180,7 +183,7 @@ namespace BarTenderPrinter
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.MinimumSize = new System.Drawing.Size(1080, 900);
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "BarTender 标签打印工具 v5.7.34";
+            this.Text = "BarTender 标签打印工具 v5.7.35";
             this.ResumeLayout(false); this.PerformLayout();
         }
 
@@ -188,7 +191,7 @@ namespace BarTenderPrinter
         private System.Windows.Forms.Label titleLabel;
         private System.Windows.Forms.Button btnExportLog;
         private System.Windows.Forms.Button btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData, btnDiagnostics, btnGlobalLength;
-        private System.Windows.Forms.CheckBox chkUseLocalData, chkLengthValidation;
+        private System.Windows.Forms.CheckBox chkUseLocalData, chkLengthValidation, chkDuplicateValidation;
         private System.Windows.Forms.Label lblLocalData;
         private System.Windows.Forms.Label lblTemplateDir;
         private System.Windows.Forms.TextBox txtTemplateDir;
