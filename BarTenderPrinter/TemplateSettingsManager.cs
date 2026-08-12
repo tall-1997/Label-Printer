@@ -19,6 +19,8 @@ namespace BarTenderPrinter
         public long GlobalLengthRevision { get; set; }
         public long LengthRevisionCounter { get; set; }
         public string LocalDataPath { get; set; } = "";
+        public string LocalDataStoragePath { get; set; } = "";
+        public string LocalDataColumnName { get; set; } = "";
         public List<string> LocalData { get; set; } = new List<string>();
         public List<DataSourceItem> DataSources { get; set; } = new List<DataSourceItem>();
     }

@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -20,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.35";
+        private readonly string _version = "v5.7.36";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -30,6 +31,8 @@ namespace BarTenderPrinter
         private string _selectedTemplatePath = "";
         private HashSet<string> _localData = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string _localDataPath = "";
+        private string _localDataStoragePath = "";
+        private string _localDataColumnName = "";
         private bool _useLocalDataValidation = false;
         private bool _duplicateValidationEnabled = true;
         private bool _isInitializing = true;
@@ -133,8 +136,9 @@ namespace BarTenderPrinter
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left,
                 BackColor = Color.FromArgb(245, 246, 250)
             };
-            _btnSidebarToggle = new Button { Text = "☰", Location = new Point(7, 12), Size = new Size(30, 30) };
+            _btnSidebarToggle = new Button { Text = "", Location = new Point(7, 12), Size = new Size(30, 30) };
             _btnSidebarToggle.Click += (s, e) => SetSidebarExpanded(!_sidebarExpanded);
+            _btnSidebarToggle.Paint += SidebarToggle_Paint;
             _btnPrintPage = new Button { Text = "打印页面", Location = new Point(12, 54), Size = new Size(120, 34), Visible = false };
             _btnOrderPage = new Button { Text = "订单管理", Location = new Point(12, 96), Size = new Size(120, 34), Visible = false };
             _btnPrintPage.Click += (s, e) => { ShowPrintPage(); SetSidebarExpanded(false); };
@@ -145,7 +149,6 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(_btnSidebarToggle);
             MiuiTheme.StyleButton(_btnPrintPage, true);
             MiuiTheme.StyleButton(_btnOrderPage);
-            LoadSidebarToggleIcon();
 
             _printOrderPanel = new Panel
             {
@@ -218,37 +221,15 @@ namespace BarTenderPrinter
             _navPanel.BringToFront();
         }
 
-        private void LoadSidebarToggleIcon()
+        private void SidebarToggle_Paint(object sender, PaintEventArgs e)
         {
-            const string iconUrl = "https://img.icons8.com/ios-glyphs/30/menu--v1.png";
-            Task.Run(() =>
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var pen = new Pen(MiuiTheme.TextPrimary, 2F) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
-                try
-                {
-                    var request = System.Net.WebRequest.Create(iconUrl);
-                    request.Timeout = 5000;
-                    using (var response = request.GetResponse())
-                    using (var stream = response.GetResponseStream())
-                    using (var source = Image.FromStream(stream))
-                    {
-                        var icon = new Bitmap(source, new Size(20, 20));
-                        BeginInvoke((Action)(() =>
-                        {
-                            if (IsDisposed || Disposing || _btnSidebarToggle == null || _btnSidebarToggle.IsDisposed)
-                            {
-                                icon.Dispose();
-                                return;
-                            }
-                            _btnSidebarToggle.Image = icon;
-                            _btnSidebarToggle.Text = "";
-                        }));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    LoggerService.Warn($"加载侧边栏网络图标失败: {ex.Message}");
-                }
-            });
+                e.Graphics.DrawLine(pen, 8, 9, 22, 9);
+                e.Graphics.DrawLine(pen, 8, 15, 22, 15);
+                e.Graphics.DrawLine(pen, 8, 21, 22, 21);
+            }
         }
 
         private void ShowPrintPage()
@@ -825,6 +806,8 @@ namespace BarTenderPrinter
                 GlobalLengthRevision = settings.GlobalLengthRevision,
                 LengthRevisionCounter = settings.LengthRevisionCounter,
                 LocalDataPath = settings.LocalDataPath,
+                LocalDataStoragePath = settings.LocalDataStoragePath,
+                LocalDataColumnName = settings.LocalDataColumnName,
                 LocalData = (settings.LocalData ?? new List<string>()).ToList(),
                 DataSources = (settings.DataSources ?? new List<DataSourceItem>()).Select(CloneDataSource).ToList()
             };
@@ -919,9 +902,16 @@ namespace BarTenderPrinter
                     var imported = ReadExcelValidationDataInBackground(path);
                     BeginInvoke((Action)(() =>
                     {
-                        if (imported != null && targetTemplate != null && _orderTemplateDrafts.Contains(targetTemplate))
-                            ApplyOrderValidationData(path, imported, targetTemplate);
-                        SetStatus("就绪");
+                        try
+                        {
+                            if (imported != null && targetTemplate != null && _orderTemplateDrafts.Contains(targetTemplate))
+                                ApplyOrderValidationData(path, imported, targetTemplate);
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show(this, $"保存校验数据失败：{ex.Message}", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                        finally { SetStatus("就绪"); }
                     }));
                 }
                 catch (Exception ex)
@@ -952,13 +942,45 @@ namespace BarTenderPrinter
             targetTemplate ??= _selectedOrderTemplateDraft;
             if (targetTemplate?.Settings == null) return;
             targetTemplate.Settings.LocalDataPath = path;
-            targetTemplate.Settings.LocalData = imported.Values.ToList();
+            targetTemplate.Settings.LocalDataColumnName = imported.ColumnName;
+            var scope = FirstNonEmpty(_txtOrderNumber?.Text, _editingOrder?.Key, _activeOrder?.Key, "draft");
+            targetTemplate.Settings.LocalDataStoragePath = SaveValidationDataSnapshot(scope, targetTemplate.Id, targetTemplate.SourcePath, imported.Values);
+            targetTemplate.Settings.LocalData = new List<string>();
             if (ReferenceEquals(targetTemplate, _selectedOrderTemplateDraft))
             {
                 _chkOrderInputValidation.Enabled = true;
                 _chkOrderInputValidation.Checked = true;
                 _lblOrderLocalData.Text = $"校验数据：{path}（{imported.Values.Count} 条，{imported.ColumnName}）";
             }
+        }
+
+        private static string SaveValidationDataSnapshot(string orderScope, string templateId, string templatePath, HashSet<string> values)
+        {
+            AppPaths.Initialize();
+            var hashInput = $"{orderScope}|{templateId}|{templatePath}";
+            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(hashInput))).Substring(0, 24);
+            var targetPath = Path.Combine(AppPaths.ValidationDataDirectory, $"{hash}.txt");
+            File.WriteAllLines(targetPath, values.OrderBy(value => value, NaturalStringComparer.Instance), Encoding.UTF8);
+            return targetPath;
+        }
+
+        private static string FirstNonEmpty(params string[] values)
+        {
+            return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? "";
+        }
+
+        private static HashSet<string> GetTemplateLocalData(TemplateSettings settings)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(settings?.LocalDataStoragePath) && File.Exists(settings.LocalDataStoragePath))
+                    return new HashSet<string>(File.ReadLines(settings.LocalDataStoragePath).Where(line => !string.IsNullOrWhiteSpace(line)).Select(line => line.Trim()), StringComparer.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Warn($"读取本地校验数据快照失败: {ex.Message}");
+            }
+            return new HashSet<string>(settings?.LocalData ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
         }
 
         private LocalDataImportResult ReadValidationDataFile(string path)
@@ -1151,14 +1173,15 @@ namespace BarTenderPrinter
                     _cmbOrderPrinter.SelectedItem = settings.Printer;
                 }
                 _numOrderCopies.Value = Math.Max(_numOrderCopies.Minimum, Math.Min(_numOrderCopies.Maximum, settings.Copies));
-                _chkOrderInputValidation.Enabled = (settings.LocalData?.Count ?? 0) > 0;
+                var localDataCount = GetTemplateLocalData(settings).Count;
+                _chkOrderInputValidation.Enabled = localDataCount > 0;
                 _chkOrderInputValidation.Checked = settings.InputValidation && _chkOrderInputValidation.Enabled;
                 _chkOrderDuplicateValidation.Checked = settings.DuplicateValidation;
                 _chkOrderLengthValidation.Checked = settings.LengthValidation;
                 _numOrderGlobalLength.Value = Math.Max(_numOrderGlobalLength.Minimum, Math.Min(_numOrderGlobalLength.Maximum, settings.GlobalExpectedLength));
                 _lblOrderLocalData.Text = string.IsNullOrWhiteSpace(settings.LocalDataPath)
                     ? "校验数据：未配置"
-                    : $"校验数据：{settings.LocalDataPath}（{settings.LocalData?.Count ?? 0} 条）";
+                    : $"校验数据：{settings.LocalDataPath}（{localDataCount} 条）";
             }
             LoadOrderSettingsIntoGrid(_selectedOrderTemplateDraft?.Settings);
             RefreshOrderTemplateCards();
@@ -1182,6 +1205,8 @@ namespace BarTenderPrinter
             if (_selectedOrderTemplateDraft?.Settings != null)
             {
                 settings.LocalDataPath = _selectedOrderTemplateDraft.Settings.LocalDataPath;
+                settings.LocalDataStoragePath = _selectedOrderTemplateDraft.Settings.LocalDataStoragePath;
+                settings.LocalDataColumnName = _selectedOrderTemplateDraft.Settings.LocalDataColumnName;
                 settings.LocalData = (_selectedOrderTemplateDraft.Settings.LocalData ?? new List<string>()).ToList();
                 settings.GlobalLengthRevision = _selectedOrderTemplateDraft.Settings.GlobalLengthRevision;
                 settings.LengthRevisionCounter = _selectedOrderTemplateDraft.Settings.LengthRevisionCounter;
@@ -1344,6 +1369,12 @@ namespace BarTenderPrinter
                     template.Settings = CloneTemplateSettings(draft.Settings);
                     template.Settings.TemplateName = Path.GetFileName(template.SourcePath);
                     template.Settings.TemplatePath = template.SourcePath;
+                    var localData = GetTemplateLocalData(template.Settings);
+                    if (localData.Count > 0)
+                    {
+                        template.Settings.LocalDataStoragePath = SaveValidationDataSnapshot(savedOrder.Key, template.Id, template.SourcePath, localData);
+                        template.Settings.LocalData = new List<string>();
+                    }
                     savedOrder.Templates.Add(template);
                 }
                 _orders.Add(savedOrder);
@@ -1698,6 +1729,8 @@ namespace BarTenderPrinter
             _globalLengthRevision = 0;
             _lengthRevisionCounter = 0;
             _localDataPath = "";
+            _localDataStoragePath = "";
+            _localDataColumnName = "";
             _localData.Clear();
             _isLoadingConfig = true;
             try
@@ -1718,7 +1751,11 @@ namespace BarTenderPrinter
         {
             public string Name, FullPath;
             public TemplateItem(string n, string p) { Name = n; FullPath = p; }
-            public override string ToString() => Name;
+            public override string ToString()
+            {
+                var folder = Path.GetFileName(Path.GetDirectoryName(FullPath) ?? "");
+                return string.IsNullOrWhiteSpace(folder) ? Name : $"{Name}  [{folder}]";
+            }
         }
 
         #endregion
@@ -1785,7 +1822,9 @@ namespace BarTenderPrinter
                 GlobalLengthRevision = _globalLengthRevision,
                 LengthRevisionCounter = _lengthRevisionCounter,
                 LocalDataPath = _localDataPath,
-                LocalData = _localData.ToList(),
+                LocalDataStoragePath = _localDataStoragePath,
+                LocalDataColumnName = _localDataColumnName,
+                LocalData = string.IsNullOrWhiteSpace(_localDataStoragePath) ? _localData.ToList() : new List<string>(),
                 DataSources = dataSources.Select(CloneDataSource).ToList()
             };
         }
@@ -2495,6 +2534,8 @@ namespace BarTenderPrinter
         {
             _localData = data;
             _localDataPath = path;
+            _localDataStoragePath = SaveValidationDataSnapshot(_activeOrder?.Key ?? "global", _activeOrderTemplate?.Id ?? "global", _selectedTemplatePath, data);
+            _localDataColumnName = columnName;
             UpdateLocalDataValidationAvailability();
             _useLocalDataValidation = data.Count > 0;
             chkUseLocalData.Checked = _useLocalDataValidation;
@@ -3223,7 +3264,9 @@ namespace BarTenderPrinter
                     GlobalLengthRevision = _globalLengthRevision,
                     LengthRevisionCounter = _lengthRevisionCounter,
                     LocalDataPath = _localDataPath,
-                    LocalData = _localData.ToList(),
+                    LocalDataStoragePath = _localDataStoragePath,
+                    LocalDataColumnName = _localDataColumnName,
+                    LocalData = string.IsNullOrWhiteSpace(_localDataStoragePath) ? _localData.ToList() : new List<string>(),
                     DataSources = _dataSources.Select(CloneDataSource).ToList()
                 };
                 if (_activeOrderTemplate != null && string.Equals(_activeOrderTemplate.SourcePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
@@ -3279,7 +3322,9 @@ namespace BarTenderPrinter
                 _globalLengthRevision = settings.GlobalLengthRevision;
                 _lengthRevisionCounter = settings.LengthRevisionCounter;
                 _localDataPath = settings.LocalDataPath ?? "";
-                _localData = new HashSet<string>(settings.LocalData ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+                _localDataStoragePath = settings.LocalDataStoragePath ?? "";
+                _localDataColumnName = settings.LocalDataColumnName ?? "";
+                _localData = GetTemplateLocalData(settings);
                 if (_localData.Count == 0) _useLocalDataValidation = false;
                 UpdateLocalDataValidationAvailability();
                 chkUseLocalData.Checked = _useLocalDataValidation;

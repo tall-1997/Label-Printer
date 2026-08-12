@@ -14,10 +14,12 @@ namespace BarTenderPrinter
         public static readonly string LogFile = Path.Combine(DataDirectory, "bartender-printer.log");
         public static readonly string TemplateSettingsFile = Path.Combine(DataDirectory, "template_settings.json");
         public static readonly string OrdersFile = Path.Combine(DataDirectory, "orders.json");
+        public static readonly string ValidationDataDirectory = Path.Combine(DataDirectory, "validation-data");
 
         public static void Initialize()
         {
             Directory.CreateDirectory(DataDirectory);
+            Directory.CreateDirectory(ValidationDataDirectory);
 
             var legacyDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
