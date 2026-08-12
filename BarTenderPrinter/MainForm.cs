@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.38";
+        private readonly string _version = "v5.7.39";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -217,7 +217,14 @@ namespace BarTenderPrinter
             Controls.Add(_orderPagePanel);
             MiuiTheme.StyleGroupBox(_orderPanel);
             MiuiTheme.StyleButton(_btnAddOrder, true);
-            btnEditDataSources.Visible = false;
+            foreach (var control in new Control[]
+            {
+                btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData, btnDiagnostics,
+                chkUseLocalData, chkLengthValidation, chkDuplicateValidation, btnGlobalLength, lblLocalData,
+                lblTemplateDir, txtTemplateDir, btnBrowseDir,
+                lblPrinter, cmbPrinter, btnRefreshPrinter, lblCopies, numCopies
+            })
+                control.Visible = false;
             RefreshPrintOrderSelector();
         }
 
@@ -576,13 +583,63 @@ namespace BarTenderPrinter
             _orderContentPanel.Controls.Add(addOrderTop);
             MiuiTheme.StyleButton(addOrderTop, order == null);
 
-            var title = new Label
+            var orderSelectLabel = new Label
             {
-                Text = order == null ? "添加订单" : $"订单设置 · {order.OrderNumber}",
-                Location = new Point(110, 10), Size = new Size(contentWidth - 110, 28),
-                Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold)
+                Text = "选择订单：",
+                Location = new Point(110, 16), Size = new Size(75, 18)
             };
-            _orderContentPanel.Controls.Add(title);
+            var orderSelector = new ComboBox
+            {
+                Location = new Point(185, 12),
+                Size = new Size(Math.Max(220, contentWidth - 185), 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                DisplayMember = nameof(PackagingOrder.DisplayName),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            foreach (var item in _orders.Orders) orderSelector.Items.Add(item);
+            if (order != null)
+            {
+                var selected = orderSelector.Items.Cast<PackagingOrder>().FirstOrDefault(item => string.Equals(item.Key, order.Key, StringComparison.OrdinalIgnoreCase));
+                if (selected != null) orderSelector.SelectedItem = selected;
+            }
+            orderSelector.SelectedIndexChanged += (s, e) =>
+            {
+                if (_loadingOrderEditor || !(orderSelector.SelectedItem is PackagingOrder selectedOrder)) return;
+                if (!ConfirmOrderEditorChanges())
+                {
+                    _loadingOrderEditor = true;
+                    try
+                    {
+                        if (order != null)
+                            orderSelector.SelectedItem = orderSelector.Items.Cast<PackagingOrder>().FirstOrDefault(item => string.Equals(item.Key, order.Key, StringComparison.OrdinalIgnoreCase));
+                        else
+                            orderSelector.SelectedIndex = -1;
+                    }
+                    finally { _loadingOrderEditor = false; }
+                    return;
+                }
+                var previousOrder = _activeOrder ?? order;
+                SelectOrder(selectedOrder);
+                if (!ApplyOrder(selectedOrder))
+                {
+                    _loadingOrderEditor = true;
+                    try
+                    {
+                        if (previousOrder != null)
+                        {
+                            SelectOrder(previousOrder);
+                            orderSelector.SelectedItem = orderSelector.Items.Cast<PackagingOrder>().FirstOrDefault(item => string.Equals(item.Key, previousOrder.Key, StringComparison.OrdinalIgnoreCase));
+                        }
+                        else orderSelector.SelectedIndex = -1;
+                    }
+                    finally { _loadingOrderEditor = false; }
+                    return;
+                }
+                ShowOrderSettingsPage(selectedOrder);
+            };
+            _orderContentPanel.Controls.Add(orderSelectLabel);
+            _orderContentPanel.Controls.Add(orderSelector);
+            MiuiTheme.StyleLabel(orderSelectLabel);
 
             _txtOrderCustomer = AddOrderPageComboBox("客户", 10, 50, fieldWidth, _orders.Orders.Select(item => item.Customer));
             _txtOrderModel = AddOrderPageComboBox("机型", 10 + (fieldWidth + fieldGap), 50, fieldWidth, _orders.Orders.Select(item => item.ProductModel));
@@ -1331,7 +1388,7 @@ namespace BarTenderPrinter
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
             if (_orderDataSourcesGrid.Columns[e.ColumnIndex].Name != "LockToggle") return;
             var row = _orderDataSourcesGrid.Rows[e.RowIndex];
-            var locked = Convert.ToBoolean(row.Cells["LockEnabled"].Value ?? false);
+            var locked = ToBoolean(row.Cells["LockEnabled"].Value);
             row.Cells["LockEnabled"].Value = !locked;
             UpdateOrderDataSourceRowState(row);
             MarkOrderEditorDirty();
@@ -1339,7 +1396,7 @@ namespace BarTenderPrinter
 
         private void UpdateOrderDataSourceRowState(DataGridViewRow row)
         {
-            var lockEnabled = Convert.ToBoolean(row.Cells["LockEnabled"].Value ?? false);
+            var lockEnabled = ToBoolean(row.Cells["LockEnabled"].Value);
             row.Cells["LockToggle"].Value = lockEnabled ? "锁" : "开";
             row.Cells["LockedValue"].ReadOnly = !lockEnabled;
             row.Cells["LockedValue"].Style.BackColor = lockEnabled ? SystemColors.Window : SystemColors.Control;
@@ -1349,7 +1406,7 @@ namespace BarTenderPrinter
                 var stepIndex = _orderDataSourcesGrid.Columns["AutoStep"].Index;
                 row.Tag = new OrderRowLockState
                 {
-                    AutoIncrement = Convert.ToBoolean(row.Cells["AutoIncrement"].Value ?? false),
+                    AutoIncrement = ToBoolean(row.Cells["AutoIncrement"].Value),
                     AutoStep = row.Cells["AutoStep"].Value,
                     LockedValue = row.Cells["LockedValue"].Value?.ToString() ?? ""
                 };
@@ -1376,6 +1433,12 @@ namespace BarTenderPrinter
             public bool AutoIncrement { get; set; }
             public object AutoStep { get; set; }
             public string LockedValue { get; set; }
+        }
+
+        private static bool ToBoolean(object value)
+        {
+            if (value is bool boolValue) return boolValue;
+            return bool.TryParse(value?.ToString(), out var parsed) && parsed;
         }
 
         private void LoadOrderDataSourceRows()
@@ -1509,14 +1572,14 @@ namespace BarTenderPrinter
                 int.TryParse(row.Cells["AutoStep"].Value?.ToString(), out var step);
                 int.TryParse(row.Cells["ExpectedLength"].Value?.ToString(), out var expectedLength);
                 var hasIndividualLength = row.Cells["ExpectedLength"].Tag is bool value && value;
-                var lockEnabled = Convert.ToBoolean(row.Cells["LockEnabled"].Value ?? false);
-                var autoIncrement = lockEnabled && bool.TryParse(row.Cells["AutoIncrement"].Value?.ToString(), out var incrementEnabled) && incrementEnabled;
+                var lockEnabled = ToBoolean(row.Cells["LockEnabled"].Value);
+                var autoIncrement = lockEnabled && ToBoolean(row.Cells["AutoIncrement"].Value);
                 var lockedValue = row.Cells["LockedValue"].Value?.ToString() ?? "";
                 result.Add(new DataSourceItem
                 {
                     Name = field,
                     Field = field,
-                    Enabled = Convert.ToBoolean(row.Cells["Enabled"].Value ?? false),
+                    Enabled = ToBoolean(row.Cells["Enabled"].Value),
                     AutoIncrement = autoIncrement,
                     AutoStep = step == 0 ? 1 : Math.Max(-99, Math.Min(99, step)),
                     IsLocked = lockEnabled && !string.IsNullOrWhiteSpace(lockedValue),
@@ -2061,9 +2124,9 @@ namespace BarTenderPrinter
                     Anchor = AnchorStyles.Top | AnchorStyles.Right,
                     Tag = i,
                     FlatStyle = FlatStyle.Flat,
-                    Cursor = Cursors.Hand,
+                    Cursor = Cursors.Default,
                     BackColor = Color.Transparent,
-                    AccessibleName = IsInputLocked(enabled[i]) ? "解除锁定" : "锁定"
+                    AccessibleName = IsInputLocked(enabled[i]) ? "已锁定" : "未锁定"
                 };
                 lockButton.FlatAppearance.BorderSize = 0;
                 lockButton.Paint += LockButton_Paint;
@@ -2147,45 +2210,7 @@ namespace BarTenderPrinter
 
         private void LockButton_Click(object sender, EventArgs e)
         {
-            var button = (Button)sender;
-            var enabled = _dataSources.Where(d => d.Enabled).ToList();
-            var index = (int)button.Tag;
-            if (index < 0 || index >= enabled.Count || index >= _inputTextBoxes.Length) return;
-
-            var source = enabled[index];
-            if (IsInputLocked(source))
-            {
-                source.IsLocked = false;
-                source.AutoIncrementLocked = false;
-                source.LockAfterInput = false;
-                source.LockedValue = "";
-            }
-            else
-            {
-                var value = _inputTextBoxes[index].Text.Trim();
-                if (string.IsNullOrEmpty(value))
-                { MessageBox.Show(this, $"请先输入 {source.Name} 后再锁定。", "锁定数据源", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-                source.LockedValue = value;
-                source.LockAfterInput = false;
-                if (source.AutoIncrement)
-                {
-                    source.IsLocked = false;
-                    source.AutoIncrementLocked = true;
-                }
-                else
-                {
-                    source.IsLocked = true;
-                    source.AutoIncrementLocked = false;
-                }
-            }
-            var readOnly = IsInputLocked(source);
-            _inputTextBoxes[index].ReadOnly = readOnly;
-            _inputTextBoxes[index].BackColor = readOnly ? SystemColors.Control : MiuiTheme.InputBackground;
-            button.AccessibleName = readOnly ? "解除锁定" : "锁定";
-            button.Invalidate();
-            SaveConfig();
-            SaveCurrentTemplateSettings();
-            AddLog($"数据源 {source.Name} 已{(readOnly ? "锁定" : "解除锁定")}", "INFO");
+            AddLog("打印页面仅显示锁定状态，请在订单管理页面修改锁定设置。", "INFO");
         }
 
         private static bool IsInputLocked(DataSourceItem source) => source != null && (source.IsLocked || source.AutoIncrementLocked);
@@ -2431,7 +2456,7 @@ namespace BarTenderPrinter
             foreach (var tb in _inputTextBoxes)
                 if (tb != null) { tb.ReadOnly = ro; tb.BackColor = ro ? SystemColors.Control : MiuiTheme.InputBackground; }
             foreach (var button in _lockButtons)
-                if (button != null) button.Enabled = !ro;
+                if (button != null) button.Enabled = true;
         }
 
         private void RestoreInputReadOnlyStates(bool[] readOnlyStates)
