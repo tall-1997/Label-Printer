@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.42";
+        private readonly string _version = "v5.7.43";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -124,7 +124,6 @@ namespace BarTenderPrinter
 
         private void InstallOrderSidebar()
         {
-            const int navWidth = 150;
             const int collapsedWidth = 44;
             const int orderSelectorHeight = 40;
             var printControls = Controls.Cast<Control>()
@@ -617,7 +616,6 @@ namespace BarTenderPrinter
                 }));
             }
             catch (InvalidOperationException) { }
-            catch (ObjectDisposedException) { }
         }
 
         private void MarkOrderEditorDirty()
