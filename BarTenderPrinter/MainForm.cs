@@ -20,7 +20,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.32";
+        private readonly string _version = "v5.7.33";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -929,8 +929,10 @@ namespace BarTenderPrinter
                     AutoStep = row.Cells["AutoStep"].Value,
                     LockedValue = row.Cells["LockedValue"].Value?.ToString() ?? ""
                 };
-                row.Cells[incrementIndex] = new DataGridViewTextBoxCell { Value = "", ReadOnly = true, Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
-                row.Cells[stepIndex] = new DataGridViewTextBoxCell { Value = "", ReadOnly = true, Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
+                row.Cells[incrementIndex] = new DataGridViewTextBoxCell { Value = "", Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
+                row.Cells[incrementIndex].ReadOnly = true;
+                row.Cells[stepIndex] = new DataGridViewTextBoxCell { Value = "", Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
+                row.Cells[stepIndex].ReadOnly = true;
                 row.Cells["LockedValue"].Value = "";
             }
             else
