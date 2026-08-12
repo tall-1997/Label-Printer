@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.39";
+        private readonly string _version = "v5.7.40";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -95,12 +95,15 @@ namespace BarTenderPrinter
             Shown += MainForm_Shown;
             FormClosing += (s, e) =>
             {
+                if (MessageBox.Show(this, "确定退出软件？", "退出确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                { e.Cancel = true; return; }
                 if (!ConfirmOrderEditorChanges()) { e.Cancel = true; return; }
                 SaveCurrentTemplateSettings();
                 _historySearchTimer.Dispose();
                 _btService.Dispose();
             };
             inputPanel.SizeChanged += InputPanel_SizeChanged;
+            SizeChanged += (s, e) => RebuildPrintPageLayout();
             dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
             dgvHistory.CellMouseDown += DgvHistory_CellMouseDown;
             var historyMenu = new ContextMenuStrip();
@@ -221,11 +224,36 @@ namespace BarTenderPrinter
             {
                 btnSaveConfig, btnLoadConfig, btnEditDataSources, btnLoadLocalData, btnDiagnostics,
                 chkUseLocalData, chkLengthValidation, chkDuplicateValidation, btnGlobalLength, lblLocalData,
-                lblTemplateDir, txtTemplateDir, btnBrowseDir,
-                lblPrinter, cmbPrinter, btnRefreshPrinter, lblCopies, numCopies
+                lblTemplateDir, txtTemplateDir, btnBrowseDir
             })
                 control.Visible = false;
+            RebuildPrintPageLayout();
             RefreshPrintOrderSelector();
+        }
+
+        private void RebuildPrintPageLayout()
+        {
+            if (_printOrderPanel == null) return;
+            var left = _printOrderPanel.Left;
+            var width = Math.Max(500, ClientSize.Width - left - 10);
+            cmbTemplate.Location = new Point(left, titlePanel.Bottom + 44);
+            cmbTemplate.Size = new Size(width, 25);
+            lblSelectedTemplate.Location = new Point(left, cmbTemplate.Bottom + 4);
+            lblSelectedTemplate.Size = new Size(Math.Min(420, width), 18);
+
+            lblPrinter.Location = new Point(left, lblSelectedTemplate.Bottom + 16);
+            cmbPrinter.Location = new Point(left + 58, lblSelectedTemplate.Bottom + 12);
+            btnRefreshPrinter.Location = new Point(left + width - 140, lblSelectedTemplate.Bottom + 11);
+            lblCopies.Location = new Point(left + width - 86, lblSelectedTemplate.Bottom + 15);
+            numCopies.Location = new Point(left + width - 45, lblSelectedTemplate.Bottom + 12);
+            cmbPrinter.Size = new Size(Math.Max(180, btnRefreshPrinter.Left - cmbPrinter.Left - 6), 25);
+
+            inputPanel.Location = new Point(left, cmbPrinter.Bottom + 10);
+            inputPanel.Width = width;
+            btnPrint.Location = new Point(left, inputPanel.Bottom + 8);
+            btnPrint.Width = width;
+            tabBottom.Location = new Point(left, btnPrint.Bottom + 8);
+            tabBottom.Size = new Size(width, Math.Max(120, groupBoxLog.Top - tabBottom.Top - 8));
         }
 
         private void SetSidebarExpanded(bool expanded)
