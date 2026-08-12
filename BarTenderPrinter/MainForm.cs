@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.41";
+        private readonly string _version = "v5.7.42";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -595,8 +595,29 @@ namespace BarTenderPrinter
                 SaveOrderFromPage();
                 return !_orderEditorDirty;
             }
+            if (_editingOrder != null) BuildOrderEditor(_editingOrder);
+            else BuildOrderEditor(null);
             _orderEditorDirty = false;
             return true;
+        }
+
+        private bool CanPostToUi()
+        {
+            return !IsDisposed && !Disposing && IsHandleCreated;
+        }
+
+        private void PostToUi(Action action)
+        {
+            if (!CanPostToUi()) return;
+            try
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    if (CanPostToUi()) action();
+                }));
+            }
+            catch (InvalidOperationException) { }
+            catch (ObjectDisposedException) { }
         }
 
         private void MarkOrderEditorDirty()
@@ -1886,7 +1907,7 @@ namespace BarTenderPrinter
             Task.Run(() =>
             {
                 var names = _btService.GetTemplateDataSources(path);
-                BeginInvoke((Action)(() =>
+                PostToUi(() =>
                 {
                     if (!string.Equals(path, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)) return;
                     if (names.Count == 0) return;
@@ -1902,7 +1923,7 @@ namespace BarTenderPrinter
                         SaveCurrentTemplateSettings();
                         AddLog($"已加载 {names.Count} 个数据源，选择了 {_dataSources.Count} 个", "SUCCESS");
                     }
-                }));
+                });
             });
         }
 
@@ -2971,7 +2992,7 @@ namespace BarTenderPrinter
                     LoggerService.Error("打印失败", ex);
                     result = new PrintResult(false, ex.Message);
                 }
-                BeginInvoke((Action)(() =>
+                PostToUi(() =>
                 {
                     var refreshHistoryAndStats = true;
                     try
@@ -3024,7 +3045,7 @@ namespace BarTenderPrinter
                             if (!result.Success) SetStatus("打印失败");
                         }
                     }
-                }));
+                });
             });
         }
 
@@ -3271,7 +3292,7 @@ namespace BarTenderPrinter
                 PrintResult result;
                 try { result = _btService.Print(record.TemplatePath, values, printer, record.Copies); }
                 catch (Exception ex) { result = new PrintResult(false, ex.Message); }
-                BeginInvoke((Action)(() =>
+                PostToUi(() =>
                 {
                     var historySaved = true;
                     try
@@ -3293,7 +3314,7 @@ namespace BarTenderPrinter
                         RefreshStats();
                         SetStatus(result.Success ? (historySaved ? "补打印完成" : "补打印完成，历史保存失败") : (historySaved ? "补打印失败" : "补打印失败，历史保存失败"));
                     }
-                }));
+                });
             });
         }
 
