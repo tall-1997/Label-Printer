@@ -101,7 +101,7 @@ namespace BarTenderPrinter
             }
         }
 
-        public void Save()
+        public bool Save()
         {
             var tempFile = _recordsFile + ".tmp";
             try
@@ -121,10 +121,12 @@ namespace BarTenderPrinter
                     File.Copy(_recordsFile, _recordsFile + ".bak", true);
                 File.Move(tempFile, _recordsFile, true);
                 _usesCurrentFormat = true;
+                return true;
             }
             catch (Exception ex)
             {
                 LoggerService.Error("保存历史记录失败", ex);
+                return false;
             }
             finally
             {
@@ -132,22 +134,24 @@ namespace BarTenderPrinter
             }
         }
 
-        public void Add(string imei, string status)
+        public bool Add(string imei, string status)
         {
             var record = new PrintRecord(imei, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), status);
             Records.Add(record);
             IndexRecord(record);
-            Append(record);
+            if (!Append(record)) { Records.Remove(record); RebuildIndexes(); return false; }
+            return true;
         }
 
-        public void Add(string templateName, string templatePath, Dictionary<string, string> fieldValues,
+        public bool Add(string templateName, string templatePath, Dictionary<string, string> fieldValues,
             string status, string printer, int copies)
         {
             var record = new PrintRecord(templateName, templatePath, fieldValues,
                 DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), status, printer, copies);
             Records.Add(record);
             IndexRecord(record);
-            Append(record);
+            if (!Append(record)) { Records.Remove(record); RebuildIndexes(); return false; }
+            return true;
         }
 
         public bool IsPrinted(string imei)
@@ -173,26 +177,35 @@ namespace BarTenderPrinter
 
         public bool Delete(string recordId)
         {
+            var snapshot = Records.ToList();
             var removed = Records.RemoveAll(record => string.Equals(record.RecordId, recordId, StringComparison.Ordinal)) > 0;
             if (!removed) return false;
             RebuildIndexes();
-            Save();
+            if (!Save()) { Records = snapshot; RebuildIndexes(); return false; }
             return true;
         }
 
-        public void Clear()
+        public bool Clear()
         {
+            var snapshot = Records.ToList();
             Records.Clear();
             _templateValueIndexes.Clear();
-            Save();
+            if (Save()) return true;
+            Records = snapshot;
+            RebuildIndexes();
+            return false;
         }
 
-        public void Clear(string templateName, string templatePath)
+        public bool Clear(string templateName, string templatePath)
         {
+            var snapshot = Records.ToList();
             var templateKey = GetTemplateKey(templateName, templatePath);
             Records.RemoveAll(record => string.Equals(GetTemplateKey(record.TemplateName, record.TemplatePath), templateKey, StringComparison.OrdinalIgnoreCase));
             RebuildIndexes();
-            Save();
+            if (Save()) return true;
+            Records = snapshot;
+            RebuildIndexes();
+            return false;
         }
 
         public List<PrintRecord> Search(string templateName, string templatePath, string keyword, bool exact)
@@ -274,6 +287,7 @@ namespace BarTenderPrinter
 
         private void IndexRecord(PrintRecord record)
         {
+            if (!IsSuccessfulStatus(record.Status)) return;
             var key = GetTemplateKey(record.TemplateName, record.TemplatePath);
             if (!_templateValueIndexes.TryGetValue(key, out var values))
             {
@@ -284,20 +298,27 @@ namespace BarTenderPrinter
                 if (!string.IsNullOrEmpty(value)) values.Add(value);
         }
 
-        private void Append(PrintRecord record)
+        private static bool IsSuccessfulStatus(string status)
+        {
+            return string.Equals(status, "PASS", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(status, "REPRINT_PASS", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool Append(PrintRecord record)
         {
             if (!_usesCurrentFormat)
             {
-                Save();
-                return;
+                return Save();
             }
             try
             {
                 File.AppendAllText(_recordsFile, ToCsvLine(record) + Environment.NewLine, Encoding.UTF8);
+                return true;
             }
             catch (Exception ex)
             {
                 LoggerService.Error("追加历史记录失败", ex);
+                return false;
             }
         }
 

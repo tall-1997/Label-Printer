@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.40";
+        private readonly string _version = "v5.7.41";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -516,20 +516,30 @@ namespace BarTenderPrinter
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
+            var originalTemplate = CloneOrderTemplate(template);
             try
             {
                 if (!ReconcileUpdatedTemplateDataSources(template)) return false;
                 _orders.RefreshSourceTemplate(order, template);
-                if (ReferenceEquals(template, _activeOrderTemplate)) ApplyTemplateSettings(template.Settings ?? new TemplateSettings());
-                AddLog($"已刷新订单模板数据源: {template.DisplayName}", "SUCCESS");
-                return true;
             }
             catch (Exception ex)
             {
+                template.SourceLastWriteTimeUtcTicks = originalTemplate.SourceLastWriteTimeUtcTicks;
+                template.SourceLength = originalTemplate.SourceLength;
+                template.SourceSha256 = originalTemplate.SourceSha256;
+                template.ArchivedPath = originalTemplate.ArchivedPath;
+                template.Settings = originalTemplate.Settings;
                 LoggerService.Error("更新订单模板失败", ex);
                 MessageBox.Show(this, $"保存订单模板失败：{ex.Message}", "模板更新", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
+            if (ReferenceEquals(template, _activeOrderTemplate))
+            {
+                try { ApplyTemplateSettings(template.Settings ?? new TemplateSettings()); }
+                catch (Exception ex) { LoggerService.Error("应用订单模板设置失败", ex); }
+            }
+            AddLog($"已刷新订单模板数据源: {template.DisplayName}", "SUCCESS");
+            return true;
         }
 
         private bool ReconcileUpdatedTemplateDataSources(OrderTemplate template)
@@ -909,7 +919,7 @@ namespace BarTenderPrinter
             {
                 Id = template.Id,
                 SourcePath = template.SourcePath,
-                ArchivedPath = "",
+                ArchivedPath = template.ArchivedPath,
                 SourceLastWriteTimeUtcTicks = template.SourceLastWriteTimeUtcTicks,
                 SourceLength = template.SourceLength,
                 SourceSha256 = template.SourceSha256,
@@ -2963,49 +2973,69 @@ namespace BarTenderPrinter
                 }
                 BeginInvoke((Action)(() =>
                 {
-                    if (result.Success)
+                    var refreshHistoryAndStats = true;
+                    try
                     {
-                        SetStatus("打印完成");
-                        AddLog("打印完成", "SUCCESS");
-                        _history.Add(templateName, templatePath, fieldValues, "PASS", printer, copies);
-
-                        for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
+                        if (result.Success)
                         {
-                            if (enabled[i].LockAfterInput && !IsInputLocked(enabled[i]))
+                            SetStatus("打印完成");
+                            AddLog("打印完成", "SUCCESS");
+                            if (!_history.Add(templateName, templatePath, fieldValues, "PASS", printer, copies))
                             {
-                                enabled[i].LockedValue = _inputTextBoxes[i].Text.Trim();
-                                if (enabled[i].AutoIncrement)
-                                    enabled[i].AutoIncrementLocked = true;
-                                else
-                                    enabled[i].IsLocked = true;
+                                SetStatus("打印完成，历史保存失败");
+                                AddLog("打印已完成，但历史记录保存失败；本次数据不会进入重复校验索引。", "ERROR");
+                                RestoreInputReadOnlyStates(readOnlyStates);
+                                refreshHistoryAndStats = false;
+                                return;
                             }
-                        }
 
-                        AutoIncrementFields(enabled);
-                        ClearNonAutoIncrementInputs(enabled);
-                        SaveConfig();
-                        SaveCurrentTemplateSettings();
+                            for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
+                            {
+                                if (enabled[i].LockAfterInput && !IsInputLocked(enabled[i]))
+                                {
+                                    enabled[i].LockedValue = _inputTextBoxes[i].Text.Trim();
+                                    if (enabled[i].AutoIncrement)
+                                        enabled[i].AutoIncrementLocked = true;
+                                    else
+                                        enabled[i].IsLocked = true;
+                                }
+                            }
+
+                            AutoIncrementFields(enabled);
+                            ClearNonAutoIncrementInputs(enabled);
+                            SaveConfig();
+                            SaveCurrentTemplateSettings();
+                        }
+                        else
+                        {
+                            SetStatus("打印失败");
+                            AddLog($"打印失败: {result.ErrorMessage}", "ERROR");
+                            if (!_history.Add(templateName, templatePath, fieldValues, "FAIL", printer, copies))
+                                AddLog("失败打印历史记录保存失败。", "ERROR");
+                            RestoreInputReadOnlyStates(readOnlyStates);
+                        }
                     }
-                    else
+                    finally
                     {
-                        SetStatus("打印失败");
-                        AddLog($"打印失败: {result.ErrorMessage}", "ERROR");
-                        _history.Add(templateName, templatePath, fieldValues, "FAIL", printer, copies);
-                        RestoreInputReadOnlyStates(readOnlyStates);
+                        SetPrintEnvironmentEnabled(true);
+                        if (refreshHistoryAndStats)
+                        {
+                            LoadHistory(); RefreshStats();
+                            if (!result.Success) SetStatus("打印失败");
+                        }
                     }
-                    SetPrintEnvironmentEnabled(true);
-                    LoadHistory(); RefreshStats();
                 }));
             });
         }
 
-        private bool ValidateInputValues(List<DataSourceItem> enabled, Dictionary<string, string> fieldValues)
+        private bool ValidateInputValues(List<DataSourceItem> enabled, Dictionary<string, string> fieldValues, bool checkDuplicates = true)
         {
             if (_lengthValidationEnabled)
             {
                 for (int i = 0; i < enabled.Count; i++)
                 {
-                    var value = fieldValues[enabled[i].Field];
+                    fieldValues.TryGetValue(enabled[i].Field, out var value);
+                    value ??= "";
                     var expectedLength = GetExpectedLength(enabled[i]);
                     if (expectedLength > 0 && value.Length != expectedLength)
                     {
@@ -3020,14 +3050,16 @@ namespace BarTenderPrinter
                 }
             }
 
-            if (!_duplicateValidationEnabled) return true;
+            if (!_duplicateValidationEnabled || !checkDuplicates) return true;
             var seen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < enabled.Count; i++)
             {
-                var value = fieldValues[enabled[i].Field];
+                fieldValues.TryGetValue(enabled[i].Field, out var value);
+                value ??= "";
                 if (string.IsNullOrWhiteSpace(value)) continue;
                 var isEditable = !enabled[i].IsLocked && !enabled[i].AutoIncrementLocked;
-                if (seen.ContainsKey(value) || (isEditable && _history.ContainsAnyValue(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, value)))
+                var shouldCheckHistory = isEditable || enabled[i].AutoIncrement || enabled[i].AutoIncrementLocked;
+                if (seen.ContainsKey(value) || shouldCheckHistory && _history.ContainsAnyValue(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, value))
                 {
                     MessageBox.Show(this, $"重复数据：{value}\n请重新输入 {enabled[i].Name}。", "数据校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     if (isEditable)
@@ -3060,7 +3092,11 @@ namespace BarTenderPrinter
             if (string.IsNullOrEmpty(_selectedTemplatePath))
             { MessageBox.Show(this, "请先选择模板"); return; }
             if (MessageBox.Show(this, "确定清空当前模板的全部记录？", "确认", MessageBoxButtons.YesNo) == DialogResult.Yes)
-            { _history.Clear(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath); LoadHistory(); RefreshStats(); }
+            {
+                if (!_history.Clear(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath))
+                { MessageBox.Show(this, "清空历史记录失败，请检查文件权限。", "历史记录", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+                LoadHistory(); RefreshStats();
+            }
         }
         private void btnExportHistory_Click(object sender, EventArgs e)
         {
@@ -3221,9 +3257,15 @@ namespace BarTenderPrinter
             { MessageBox.Show(this, $"历史模板文件不存在：\n{record.TemplatePath}"); return; }
             if (string.IsNullOrEmpty(printer) || !cmbPrinter.Items.Contains(printer))
             { MessageBox.Show(this, $"本次补打印机当前不可用：{printer}"); return; }
+            var values = new Dictionary<string, string>(record.FieldValues, StringComparer.OrdinalIgnoreCase);
+            var enabled = _dataSources.Where(source => source.Enabled).ToList();
+            if (enabled.Count > 0 && string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!ValidateInputValues(enabled, values, false)) return;
+                if (_useLocalDataValidation && !ValidateLocalData(values)) return;
+            }
             SetPrintEnvironmentEnabled(false);
             SetStatus("补打印中...");
-            var values = new Dictionary<string, string>(record.FieldValues, StringComparer.OrdinalIgnoreCase);
             Task.Run(() =>
             {
                 PrintResult result;
@@ -3231,13 +3273,26 @@ namespace BarTenderPrinter
                 catch (Exception ex) { result = new PrintResult(false, ex.Message); }
                 BeginInvoke((Action)(() =>
                 {
-                    _history.Add(record.TemplateName, record.TemplatePath, values,
-                        result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies);
-                    RestoreAutoIncrementInputsToPendingValues();
-                    AddLog(result.Success ? "历史记录补打印完成" : $"历史记录补打印失败: {result.ErrorMessage}", result.Success ? "SUCCESS" : "ERROR");
-                    SetPrintEnvironmentEnabled(true);
-                    LoadHistory();
-                    RefreshStats();
+                    var historySaved = true;
+                    try
+                    {
+                        historySaved = _history.Add(record.TemplateName, record.TemplatePath, values,
+                            result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies);
+                        if (result.Success && historySaved) RestoreAutoIncrementInputsToPendingValues();
+                        if (!historySaved)
+                            AddLog(result.Success ? "补打印已完成，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
+                        else if (result.Success)
+                            AddLog("历史记录补打印完成", "SUCCESS");
+                        else
+                            AddLog($"历史记录补打印失败: {result.ErrorMessage}", "ERROR");
+                    }
+                    finally
+                    {
+                        SetPrintEnvironmentEnabled(true);
+                        LoadHistory();
+                        RefreshStats();
+                        SetStatus(result.Success ? (historySaved ? "补打印完成" : "补打印完成，历史保存失败") : (historySaved ? "补打印失败" : "补打印失败，历史保存失败"));
+                    }
                 }));
             });
         }
@@ -3364,6 +3419,7 @@ namespace BarTenderPrinter
             var data = row.Cells["数据"].Value?.ToString() ?? "";
             if (MessageBox.Show(this, $"确定删除这条打印记录？\n\n{data}", "删除历史记录", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                 return;
+            var existedBeforeDelete = _history.GetById(recordId) != null;
 
             if (_history.Delete(recordId))
             {
@@ -3373,7 +3429,7 @@ namespace BarTenderPrinter
             }
             else
             {
-                MessageBox.Show(this, "该历史记录已不存在，请刷新后重试。", "删除历史记录", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, existedBeforeDelete ? "删除历史记录失败，请检查文件权限。" : "该历史记录已不存在，请刷新后重试。", "删除历史记录", MessageBoxButtons.OK, existedBeforeDelete ? MessageBoxIcon.Error : MessageBoxIcon.Information);
             }
         }
 

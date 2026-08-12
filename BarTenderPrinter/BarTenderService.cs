@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 
 namespace BarTenderPrinter
@@ -12,6 +14,10 @@ namespace BarTenderPrinter
         private bool _connected;
         private bool _offlineMode;
         private readonly SemaphoreSlim _operationLock = new SemaphoreSlim(1, 1);
+        private readonly BlockingCollection<Action> _staQueue = new BlockingCollection<Action>();
+        private readonly Thread _staThread;
+        private int _staThreadId;
+        private bool _disposed;
         private DateTime _lastOperationTime = DateTime.MinValue;
         private const int MinOperationIntervalMs = 2000;
         private const int MaxRetries = 3;
@@ -20,7 +26,44 @@ namespace BarTenderPrinter
         public bool IsConnected => _connected;
         public bool IsOfflineMode => _offlineMode;
 
+        public BarTenderService()
+        {
+            _staThread = new Thread(RunStaLoop) { IsBackground = true, Name = "BarTender COM STA" };
+            _staThread.SetApartmentState(ApartmentState.STA);
+            _staThread.Start();
+        }
+
+        private void RunStaLoop()
+        {
+            _staThreadId = Thread.CurrentThread.ManagedThreadId;
+            foreach (var action in _staQueue.GetConsumingEnumerable())
+                action();
+        }
+
+        private T InvokeSta<T>(Func<T> action)
+        {
+            if (Thread.CurrentThread.ManagedThreadId == _staThreadId) return action();
+            if (_disposed) throw new ObjectDisposedException(nameof(BarTenderService));
+            var tcs = new TaskCompletionSource<T>();
+            _staQueue.Add(() =>
+            {
+                try { tcs.SetResult(action()); }
+                catch (Exception ex) { tcs.SetException(ex); }
+            });
+            return tcs.Task.GetAwaiter().GetResult();
+        }
+
+        private void InvokeSta(Action action)
+        {
+            InvokeSta<object>(() => { action(); return null; });
+        }
+
         public bool Connect()
+        {
+            return InvokeSta(ConnectCore);
+        }
+
+        private bool ConnectCore()
         {
             LoggerService.Info("正在连接 BarTender...");
 
@@ -73,6 +116,11 @@ namespace BarTenderPrinter
 
         public List<string> GetTemplateDataSources(string templatePath)
         {
+            return InvokeSta(() => GetTemplateDataSourcesCore(templatePath));
+        }
+
+        private List<string> GetTemplateDataSourcesCore(string templatePath)
+        {
             var result = new List<string>();
             if (!_connected || _btApp == null) return result;
 
@@ -113,6 +161,11 @@ namespace BarTenderPrinter
         }
 
         public void RunDiagnostics(string templatePath)
+        {
+            InvokeSta(() => RunDiagnosticsCore(templatePath));
+        }
+
+        private void RunDiagnosticsCore(string templatePath)
         {
             LoggerService.Info("========== BarTender 诊断开始 ==========");
             
@@ -227,6 +280,11 @@ namespace BarTenderPrinter
 
         public PrintResult Print(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
         {
+            return InvokeSta(() => PrintCore(templatePath, fieldValues, printer, copies));
+        }
+
+        private PrintResult PrintCore(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
+        {
             if (!_connected || _btApp == null)
                 return new PrintResult(false, "BarTender 未连接");
 
@@ -284,12 +342,25 @@ namespace BarTenderPrinter
                 }
 
                 try { btFormat.Printer = printer; LoggerService.Info($"打印机: {printer}"); }
-                catch (Exception ex) { LoggerService.Warn($"设置打印机失败: {ex.Message}"); }
+                catch (Exception ex)
+                {
+                    CloseFormat(btFormat);
+                    return new PrintResult(false, $"设置打印机失败: {ex.Message}");
+                }
 
                 try { btFormat.PrintSetup.IdenticalCopiesOfLabel = copies; LoggerService.Info($"份数: {copies}"); }
-                catch (Exception ex) { LoggerService.Warn($"设置份数失败: {ex.Message}"); }
+                catch (Exception ex)
+                {
+                    CloseFormat(btFormat);
+                    return new PrintResult(false, $"设置份数失败: {ex.Message}");
+                }
 
-                btFormat.PrintOut(false, false);
+                object printResult = btFormat.PrintOut(false, true);
+                if (printResult is bool boolResult && !boolResult)
+                {
+                    CloseFormat(btFormat);
+                    return new PrintResult(false, "BarTender 打印返回失败");
+                }
                 LoggerService.Info("PrintOut 完成");
 
                 CloseFormat(btFormat);
@@ -353,6 +424,11 @@ namespace BarTenderPrinter
 
         public void Disconnect()
         {
+            InvokeSta(DisconnectCore);
+        }
+
+        private void DisconnectCore()
+        {
             _operationLock.Wait();
             try
             {
@@ -374,8 +450,38 @@ namespace BarTenderPrinter
 
         public void Dispose()
         {
-            Disconnect();
-            _operationLock?.Dispose();
+            if (_disposed) return;
+            _disposed = true;
+            if (Thread.CurrentThread.ManagedThreadId == _staThreadId)
+            {
+                DisconnectCore();
+                _staQueue.CompleteAdding();
+                return;
+            }
+            var disconnected = new ManualResetEventSlim(false);
+            try
+            {
+                _staQueue.Add(() =>
+                {
+                    try { DisconnectCore(); }
+                    finally { disconnected.Set(); }
+                });
+            }
+            catch
+            {
+                disconnected.Set();
+            }
+            if (!disconnected.Wait(5000))
+            {
+                LoggerService.Warn("BarTender 断开连接超时，后台 COM 线程将随进程退出。 ");
+                try { _staQueue.CompleteAdding(); } catch { }
+                return;
+            }
+            _staQueue.CompleteAdding();
+            if (Thread.CurrentThread.ManagedThreadId != _staThreadId && _staThread.IsAlive)
+                _staThread.Join(5000);
+            _operationLock.Dispose();
+            _staQueue.Dispose();
         }
     }
 
