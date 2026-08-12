@@ -20,7 +20,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.31";
+        private readonly string _version = "v5.7.32";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -203,6 +203,7 @@ namespace BarTenderPrinter
         private void ShowPrintPage()
         {
             if (_activeOrderTemplate != null && !ResolveTemplateUpdate(_activeOrder, _activeOrderTemplate)) return;
+            SaveSelectedOrderTemplateDraft();
             _orderPagePanel.Visible = false;
             _printOrderPanel.Visible = true;
             _printOrderPanel.BringToFront();
@@ -217,8 +218,14 @@ namespace BarTenderPrinter
             _orderPagePanel.BringToFront();
             MiuiTheme.StyleButton(_btnOrderPage, true);
             MiuiTheme.StyleButton(_btnPrintPage);
-            if (_activeOrder != null) ShowOrderSettingsPage(_activeOrder);
-            else if (HasCompleteOrderSelection())
+            if (_activeOrder != null)
+            {
+                if (_orderDataSourcesGrid == null || (_editingOrder != null &&
+                    !string.Equals(_editingOrder.Key, _activeOrder.Key, StringComparison.OrdinalIgnoreCase)))
+                    ShowOrderSettingsPage(_activeOrder);
+                return;
+            }
+            if (HasCompleteOrderSelection())
             {
                 var order = _orders.Find(_cmbOrderCustomer.SelectedItem?.ToString(), _cmbOrderModel.SelectedItem?.ToString(),
                     _cmbOrderColor.SelectedItem?.ToString(), _cmbOrderNumber.SelectedItem?.ToString());
@@ -484,7 +491,8 @@ namespace BarTenderPrinter
         private void BuildOrderEditor(PackagingOrder order)
         {
             _orderContentPanel.Controls.Clear();
-            _orderContentPanel.AutoScrollMinSize = new Size(0, 775);
+            _orderContentPanel.AutoScrollMinSize = new Size(740, 775);
+            _orderContentPanel.BackColor = MiuiTheme.Background;
             _orderTemplateDrafts.Clear();
             _selectedOrderTemplateDraft = null;
             _editingOrder = order;
@@ -594,8 +602,21 @@ namespace BarTenderPrinter
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+                AllowUserToResizeRows = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
+                BackgroundColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                RowHeadersVisible = false,
+                SelectionMode = DataGridViewSelectionMode.CellSelect,
+                EnableHeadersVisualStyles = false,
+                ColumnHeadersHeight = 34,
+                RowTemplate = { Height = 30 }
             };
+            _orderDataSourcesGrid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(242, 246, 252);
+            _orderDataSourcesGrid.ColumnHeadersDefaultCellStyle.ForeColor = MiuiTheme.TextPrimary;
+            _orderDataSourcesGrid.ColumnHeadersDefaultCellStyle.Font = new Font(Font, FontStyle.Bold);
+            _orderDataSourcesGrid.DefaultCellStyle.SelectionBackColor = MiuiTheme.PrimaryLight;
+            _orderDataSourcesGrid.DefaultCellStyle.SelectionForeColor = MiuiTheme.TextPrimary;
             ConfigureOrderDataSourceGrid();
             _orderDataSourcesGrid.CurrentCellDirtyStateChanged += (s, e) =>
             {
@@ -609,6 +630,12 @@ namespace BarTenderPrinter
             save.Click += (s, e) => SaveOrderFromPage();
             _orderContentPanel.Controls.Add(save);
             MiuiTheme.StyleButton(save, true);
+
+            _txtOrderTemplate.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _lblOrderLocalData.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _chkOrderInputValidation.CheckedChanged += (s, e) => UpdateOrderValidationControls();
+            _chkOrderLengthValidation.CheckedChanged += (s, e) => UpdateOrderValidationControls();
+            UpdateOrderValidationControls();
 
             RefreshOrderTemplateCards();
             if (_orderTemplateDrafts.Count > 0) SelectOrderTemplateDraft(_orderTemplateDrafts[0]);
@@ -707,17 +734,35 @@ namespace BarTenderPrinter
         {
             if (_orderTemplateCards == null) return;
             _orderTemplateCards.Controls.Clear();
+            if (_orderTemplateDrafts.Count == 0)
+            {
+                _orderTemplateCards.Controls.Add(new Label
+                {
+                    Text = "尚未添加模板，请点击右侧“添加模板”开始配置。",
+                    AutoSize = false,
+                    Size = new Size(Math.Max(320, _orderTemplateCards.ClientSize.Width - 20), 52),
+                    Padding = new Padding(10, 16, 0, 0),
+                    ForeColor = MiuiTheme.TextSecondary
+                });
+                return;
+            }
             foreach (var template in _orderTemplateDrafts)
             {
                 var selected = ReferenceEquals(template, _selectedOrderTemplateDraft);
+                var enabledCount = template.Settings?.DataSources?.Count(source => source.Enabled) ?? 0;
+                var totalCount = template.Settings?.DataSources?.Count ?? 0;
                 var card = new Button
                 {
-                    Text = $"{template.DisplayName}\r\n{template.Settings?.DataSources?.Count ?? 0} 个数据源",
+                    Text = $"{template.DisplayName}\r\n已启用 {enabledCount} / 共 {totalCount} 个数据源",
                     Size = new Size(210, 52),
                     TextAlign = ContentAlignment.MiddleLeft,
                     Tag = template,
                     FlatStyle = FlatStyle.Flat,
-                    BackColor = selected ? Color.FromArgb(225, 238, 255) : Color.White
+                    BackColor = selected ? MiuiTheme.PrimaryLight : Color.White,
+                    ForeColor = selected ? MiuiTheme.PrimaryDark : MiuiTheme.TextPrimary,
+                    Margin = new Padding(4),
+                    Padding = new Padding(8, 3, 8, 3),
+                    Cursor = Cursors.Hand
                 };
                 card.FlatAppearance.BorderColor = selected ? Color.FromArgb(55, 115, 205) : Color.FromArgb(205, 210, 220);
                 card.Click += (s, e) => SelectOrderTemplateDraft((OrderTemplate)((Button)s).Tag);
@@ -837,20 +882,34 @@ namespace BarTenderPrinter
         private void ConfigureOrderDataSourceGrid()
         {
             _orderDataSourcesGrid.Columns.Clear();
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "使用", Width = 50 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Field", HeaderText = "字段名", ReadOnly = true });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "LockEnabled", HeaderText = "锁定", Width = 55 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewComboBoxColumn { Name = "LockMode", HeaderText = "锁定方式", DataSource = new[] { "固定锁定", "输入后锁定" } });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "AutoIncrement", HeaderText = "增降序", Width = 70 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AutoStep", HeaderText = "步长", Width = 60 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LockedValue", HeaderText = "锁定值" });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ExpectedLength", HeaderText = "长度", Width = 60 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "使用", Width = 48 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Field", HeaderText = "字段名", ReadOnly = true, MinimumWidth = 140, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "LockEnabled", HeaderText = "锁定", Width = 52 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewComboBoxColumn { Name = "LockMode", HeaderText = "锁定方式", Width = 105, DataSource = new[] { "固定锁定", "输入后锁定" } });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "AutoIncrement", HeaderText = "增降序", Width = 66 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AutoStep", HeaderText = "步长", Width = 55 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LockedValue", HeaderText = "锁定值", Width = 120 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ExpectedLength", HeaderText = "长度", Width = 55 });
+        }
+
+        private void UpdateOrderValidationControls()
+        {
+            if (_numOrderGlobalLength != null) _numOrderGlobalLength.Enabled = _chkOrderLengthValidation?.Checked == true;
+            if (_lblOrderLocalData != null)
+                _lblOrderLocalData.ForeColor = _chkOrderInputValidation?.Checked == true ? MiuiTheme.TextPrimary : MiuiTheme.TextSecondary;
         }
 
         private void OrderDataSourcesGrid_CellValueChanged(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0 || _orderDataSourcesGrid.Columns[e.ColumnIndex].Name != "LockEnabled") return;
-            UpdateOrderDataSourceRowState(_orderDataSourcesGrid.Rows[e.RowIndex]);
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            var columnName = _orderDataSourcesGrid.Columns[e.ColumnIndex].Name;
+            if (columnName == "LockEnabled")
+                UpdateOrderDataSourceRowState(_orderDataSourcesGrid.Rows[e.RowIndex]);
+            if (columnName == "Enabled")
+            {
+                SaveSelectedOrderTemplateDraft();
+                RefreshOrderTemplateCards();
+            }
         }
 
         private void UpdateOrderDataSourceRowState(DataGridViewRow row)
@@ -864,19 +923,35 @@ namespace BarTenderPrinter
             {
                 var incrementIndex = _orderDataSourcesGrid.Columns["AutoIncrement"].Index;
                 var stepIndex = _orderDataSourcesGrid.Columns["AutoStep"].Index;
+                row.Tag = new OrderRowLockState
+                {
+                    AutoIncrement = Convert.ToBoolean(row.Cells["AutoIncrement"].Value ?? false),
+                    AutoStep = row.Cells["AutoStep"].Value,
+                    LockedValue = row.Cells["LockedValue"].Value?.ToString() ?? ""
+                };
                 row.Cells[incrementIndex] = new DataGridViewTextBoxCell { Value = "", ReadOnly = true, Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
                 row.Cells[stepIndex] = new DataGridViewTextBoxCell { Value = "", ReadOnly = true, Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
                 row.Cells["LockedValue"].Value = "";
             }
             else
             {
+                var savedState = row.Tag as OrderRowLockState;
                 if (!(row.Cells["AutoIncrement"] is DataGridViewCheckBoxCell))
-                    row.Cells[_orderDataSourcesGrid.Columns["AutoIncrement"].Index] = new DataGridViewCheckBoxCell { Value = false };
+                    row.Cells[_orderDataSourcesGrid.Columns["AutoIncrement"].Index] = new DataGridViewCheckBoxCell { Value = savedState?.AutoIncrement ?? false };
                 if (row.Cells["AutoStep"].ReadOnly)
-                    row.Cells[_orderDataSourcesGrid.Columns["AutoStep"].Index] = new DataGridViewTextBoxCell { Value = 1 };
+                    row.Cells[_orderDataSourcesGrid.Columns["AutoStep"].Index] = new DataGridViewTextBoxCell { Value = savedState?.AutoStep ?? 1 };
+                if (savedState != null) row.Cells["LockedValue"].Value = savedState.LockedValue;
                 if (string.IsNullOrWhiteSpace(row.Cells["LockMode"].Value?.ToString()))
                     row.Cells["LockMode"].Value = "输入后锁定";
+                row.Tag = null;
             }
+        }
+
+        private sealed class OrderRowLockState
+        {
+            public bool AutoIncrement { get; set; }
+            public object AutoStep { get; set; }
+            public string LockedValue { get; set; }
         }
 
         private void LoadOrderDataSourceRows()

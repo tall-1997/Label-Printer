@@ -70,10 +70,14 @@ namespace BarTenderPrinter
         public void Add(PackagingOrder order)
         {
             var key = order.Key;
-            _orders.RemoveAll(item => string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase));
-            _orders.Add(order);
-            _orders.Sort((left, right) => string.Compare(left.DisplayName, right.DisplayName, StringComparison.OrdinalIgnoreCase));
-            Save();
+            var updatedOrders = _orders
+                .Where(item => !string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            updatedOrders.Add(order);
+            updatedOrders.Sort((left, right) => string.Compare(left.DisplayName, right.DisplayName, StringComparison.OrdinalIgnoreCase));
+            Save(updatedOrders);
+            _orders.Clear();
+            _orders.AddRange(updatedOrders);
         }
 
         public PackagingOrder Find(string customer, string productModel, string color, string orderNumber)
@@ -186,10 +190,10 @@ namespace BarTenderPrinter
             }
         }
 
-        private void Save()
+        private void Save(IEnumerable<PackagingOrder> orders = null)
         {
             var tempPath = _path + ".tmp";
-            var json = JsonSerializer.Serialize(_orders, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(orders ?? _orders, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(tempPath, json);
             if (File.Exists(_path)) File.Copy(_path, _path + ".bak", true);
             File.Move(tempPath, _path, true);
