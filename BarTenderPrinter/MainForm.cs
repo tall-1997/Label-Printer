@@ -20,7 +20,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.33";
+        private readonly string _version = "v5.7.34";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -374,6 +374,11 @@ namespace BarTenderPrinter
             }
             if (!ApplyOrder(order))
             {
+                if (_orderPagePanel.Visible)
+                {
+                    ShowOrderSettingsPage(order);
+                    return;
+                }
                 if (previousOrder != null) SelectOrder(previousOrder);
                 else ClearOrderSelection();
             }
@@ -386,24 +391,24 @@ namespace BarTenderPrinter
         private bool ApplyOrder(PackagingOrder order, bool saveCurrentSettings = true, string preferredTemplateId = null)
         {
             if (saveCurrentSettings && !string.IsNullOrEmpty(_selectedTemplatePath)) SaveCurrentTemplateSettings();
-            var template = order.Templates.FirstOrDefault(item => string.Equals(item.Id, preferredTemplateId, StringComparison.OrdinalIgnoreCase) && File.Exists(item.ArchivedPath))
-                ?? order.Templates.FirstOrDefault(item => File.Exists(item.ArchivedPath))
+            var template = order.Templates.FirstOrDefault(item => string.Equals(item.Id, preferredTemplateId, StringComparison.OrdinalIgnoreCase) && File.Exists(item.SourcePath))
+                ?? order.Templates.FirstOrDefault(item => File.Exists(item.SourcePath))
                 ?? order.Templates.FirstOrDefault();
-            if (template == null || string.IsNullOrEmpty(template.ArchivedPath) || !File.Exists(template.ArchivedPath))
-            { MessageBox.Show(this, "订单归档模板文件不存在，请重新添加订单。", "订单模板", MessageBoxButtons.OK, MessageBoxIcon.Warning); return false; }
+            if (template == null || string.IsNullOrEmpty(template.SourcePath) || !File.Exists(template.SourcePath))
+            { MessageBox.Show(this, "订单模板绝对路径无效，请在订单管理页面重新选择模板。", "订单模板", MessageBoxButtons.OK, MessageBoxIcon.Warning); return false; }
             if (!ResolveTemplateUpdate(order, template)) return false;
             _activeOrder = order;
             _isLoadingConfig = true;
             _loadingOrderTemplate = true;
             try
             {
-                _selectedTemplatePath = template.ArchivedPath;
-                _templatesFolder = Path.GetDirectoryName(template.ArchivedPath) ?? "";
+                _selectedTemplatePath = template.SourcePath;
+                _templatesFolder = Path.GetDirectoryName(template.SourcePath) ?? "";
                 txtTemplateDir.Text = _templatesFolder;
                 cmbTemplate.Items.Clear();
-                foreach (var orderTemplate in order.Templates.Where(item => File.Exists(item.ArchivedPath)))
-                    cmbTemplate.Items.Add(new TemplateItem(orderTemplate.DisplayName, orderTemplate.ArchivedPath));
-                var match = cmbTemplate.Items.Cast<TemplateItem>().FirstOrDefault(item => string.Equals(item.FullPath, template.ArchivedPath, StringComparison.OrdinalIgnoreCase));
+                foreach (var orderTemplate in order.Templates.Where(item => File.Exists(item.SourcePath)))
+                    cmbTemplate.Items.Add(new TemplateItem(orderTemplate.DisplayName, orderTemplate.SourcePath));
+                var match = cmbTemplate.Items.Cast<TemplateItem>().FirstOrDefault(item => string.Equals(item.FullPath, template.SourcePath, StringComparison.OrdinalIgnoreCase));
                 if (match != null) cmbTemplate.SelectedItem = match;
                 lblSelectedTemplate.Text = template.DisplayName;
                 _activeOrderTemplate = template;
@@ -427,26 +432,17 @@ namespace BarTenderPrinter
             var status = _orders.GetSourceUpdateStatus(template);
             if (status == TemplateUpdateStatus.Unchanged) return true;
             if (status == TemplateUpdateStatus.CheckFailed)
-                return MessageBox.Show(this, "外部模板暂时无法读取，是否继续使用当前归档版？", "模板更新检查失败",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
-            var choice = MessageBox.Show(this,
-                $"检测到外部模板已更新：{template.DisplayName}\r\n\r\n选择“是”使用外部新版并更新订单归档；选择“否”继续使用当前归档版。",
-                "模板更新", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-            if (choice == DialogResult.Cancel) return false;
+            {
+                MessageBox.Show(this, "订单模板绝对路径暂时无法读取，请检查文件位置和访问权限。", "模板读取失败",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
             try
             {
-                if (choice == DialogResult.Yes)
-                {
-                    _orders.UseSourceTemplate(order, template);
-                    ReconcileUpdatedTemplateDataSources(order, template);
-                    if (ReferenceEquals(template, _activeOrderTemplate)) ApplyTemplateSettings(template.Settings ?? new TemplateSettings());
-                    AddLog($"已更新订单模板归档: {template.DisplayName}", "SUCCESS");
-                }
-                else
-                {
-                    _orders.KeepArchivedTemplate(template);
-                    AddLog($"已保留订单归档模板: {template.DisplayName}", "INFO");
-                }
+                if (!ReconcileUpdatedTemplateDataSources(template)) return false;
+                _orders.RefreshSourceTemplate(order, template);
+                if (ReferenceEquals(template, _activeOrderTemplate)) ApplyTemplateSettings(template.Settings ?? new TemplateSettings());
+                AddLog($"已刷新订单模板数据源: {template.DisplayName}", "SUCCESS");
                 return true;
             }
             catch (Exception ex)
@@ -457,24 +453,34 @@ namespace BarTenderPrinter
             }
         }
 
-        private void ReconcileUpdatedTemplateDataSources(PackagingOrder order, OrderTemplate template)
+        private bool ReconcileUpdatedTemplateDataSources(OrderTemplate template)
         {
-            if (!_btService.IsConnected) return;
-            var fields = _btService.GetTemplateDataSources(template.ArchivedPath)
+            if (!_btService.IsConnected)
+            {
+                MessageBox.Show(this, "BarTender 未连接，暂时无法读取模板的最新数据源。", "模板数据源刷新",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            var fields = _btService.GetTemplateDataSources(template.SourcePath)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(field => field, NaturalStringComparer.Instance)
                 .ToList();
-            if (fields.Count == 0) return;
+            if (fields.Count == 0)
+            {
+                MessageBox.Show(this, "未读取到模板数据源，已保留当前订单设置。", "模板数据源刷新",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
             var current = template.Settings?.DataSources ?? new List<DataSourceItem>();
-            if (fields.Count == current.Count && fields.All(field => current.Any(source => string.Equals(source.Field, field, StringComparison.OrdinalIgnoreCase)))) return;
+            if (fields.Count == current.Count && fields.All(field => current.Any(source => string.Equals(source.Field, field, StringComparison.OrdinalIgnoreCase)))) return true;
             template.Settings ??= new TemplateSettings();
             template.Settings.DataSources = fields.Select(field =>
                 current.FirstOrDefault(source => string.Equals(source.Field, field, StringComparison.OrdinalIgnoreCase)) is DataSourceItem existing
                     ? CloneDataSource(existing)
                     : new DataSourceItem { Name = field, Field = field, Enabled = true }).ToList();
-            _orders.Add(order);
             MessageBox.Show(this, "新版模板的数据源已变化，系统已保留同名字段设置并添加新字段，请在订单管理页面核对。", "模板数据源已更新",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return true;
         }
 
         private void ShowAddOrderPage()
@@ -540,10 +546,14 @@ namespace BarTenderPrinter
             browseTemplate.Click += (s, e) => BrowseOrderTemplate();
             var loadFields = new Button { Text = "读取数据源", Location = new Point(templateActionX, 323), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             loadFields.Click += (s, e) => LoadOrderDataSourceRows();
+            var removeTemplate = new Button { Text = "删除模板", Location = new Point(templateActionX - actionWidth - fieldGap, 288), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            removeTemplate.Click += (s, e) => RemoveSelectedOrderTemplateDraft();
             _orderContentPanel.Controls.Add(browseTemplate);
             _orderContentPanel.Controls.Add(loadFields);
+            _orderContentPanel.Controls.Add(removeTemplate);
             MiuiTheme.StyleButton(browseTemplate);
             MiuiTheme.StyleButton(loadFields);
+            MiuiTheme.StyleButton(removeTemplate);
 
             var manualWidth = Math.Min(190, contentWidth / 4);
             _txtManualOrderDataSource = new TextBox { Location = new Point(10, 325), Size = new Size(manualWidth, 25) };
@@ -675,9 +685,25 @@ namespace BarTenderPrinter
 
         private void AddOrderTemplateDraft(string path)
         {
+            path = Path.GetFullPath(path);
             if (_orderTemplateDrafts.Any(item => string.Equals(item.SourcePath, path, StringComparison.OrdinalIgnoreCase)))
             { MessageBox.Show(this, "该模板已添加。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
             SaveSelectedOrderTemplateDraft();
+            if (_selectedOrderTemplateDraft != null && string.IsNullOrWhiteSpace(_selectedOrderTemplateDraft.SourcePath))
+            {
+                _selectedOrderTemplateDraft.SourcePath = path;
+                _selectedOrderTemplateDraft.ArchivedPath = "";
+                _selectedOrderTemplateDraft.SourceLastWriteTimeUtcTicks = 0;
+                _selectedOrderTemplateDraft.SourceLength = 0;
+                _selectedOrderTemplateDraft.SourceSha256 = "";
+                _selectedOrderTemplateDraft.Settings ??= new TemplateSettings();
+                _selectedOrderTemplateDraft.Settings.TemplateName = Path.GetFileName(path);
+                _selectedOrderTemplateDraft.Settings.TemplatePath = path;
+                RefreshOrderTemplateCards();
+                SelectOrderTemplateDraft(_selectedOrderTemplateDraft);
+                LoadOrderDataSourceRows();
+                return;
+            }
             var draft = new OrderTemplate
             {
                 SourcePath = path,
@@ -696,13 +722,32 @@ namespace BarTenderPrinter
             LoadOrderDataSourceRows();
         }
 
+        private void RemoveSelectedOrderTemplateDraft()
+        {
+            if (_selectedOrderTemplateDraft == null)
+            { MessageBox.Show(this, "请先选择要删除的模板卡片。", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (MessageBox.Show(this, $"确定从订单中移除模板“{_selectedOrderTemplateDraft.DisplayName}”？\r\n外部模板文件将保留。",
+                "删除模板", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            var index = _orderTemplateDrafts.IndexOf(_selectedOrderTemplateDraft);
+            _orderTemplateDrafts.Remove(_selectedOrderTemplateDraft);
+            _selectedOrderTemplateDraft = null;
+            RefreshOrderTemplateCards();
+            if (_orderTemplateDrafts.Count > 0)
+                SelectOrderTemplateDraft(_orderTemplateDrafts[Math.Min(index, _orderTemplateDrafts.Count - 1)]);
+            else
+            {
+                _txtOrderTemplate.Clear();
+                LoadOrderSettingsIntoGrid(null);
+            }
+        }
+
         private static OrderTemplate CloneOrderTemplate(OrderTemplate template)
         {
             return new OrderTemplate
             {
                 Id = template.Id,
                 SourcePath = template.SourcePath,
-                ArchivedPath = template.ArchivedPath,
+                ArchivedPath = "",
                 SourceLastWriteTimeUtcTicks = template.SourceLastWriteTimeUtcTicks,
                 SourceLength = template.SourceLength,
                 SourceSha256 = template.SourceSha256,
@@ -753,7 +798,9 @@ namespace BarTenderPrinter
                 var totalCount = template.Settings?.DataSources?.Count ?? 0;
                 var card = new Button
                 {
-                    Text = $"{template.DisplayName}\r\n已启用 {enabledCount} / 共 {totalCount} 个数据源",
+                    Text = string.IsNullOrWhiteSpace(template.SourcePath)
+                        ? $"需重新选择外部模板\r\n已保留 {totalCount} 个旧设置"
+                        : $"{template.DisplayName}\r\n已启用 {enabledCount} / 共 {totalCount} 个数据源",
                     Size = new Size(210, 52),
                     TextAlign = ContentAlignment.MiddleLeft,
                     Tag = template,
@@ -823,9 +870,7 @@ namespace BarTenderPrinter
             if (_loadingOrderTemplate) return;
             SaveSelectedOrderTemplateDraft();
             _selectedOrderTemplateDraft = template;
-            _txtOrderTemplate.Text = !string.IsNullOrWhiteSpace(_selectedOrderTemplateDraft?.SourcePath)
-                ? _selectedOrderTemplateDraft.SourcePath
-                : _selectedOrderTemplateDraft?.ArchivedPath ?? "";
+            _txtOrderTemplate.Text = _selectedOrderTemplateDraft?.SourcePath ?? "";
             var settings = _selectedOrderTemplateDraft?.Settings;
             if (settings != null)
             {
@@ -958,9 +1003,7 @@ namespace BarTenderPrinter
 
         private void LoadOrderDataSourceRows()
         {
-            var templatePath = !string.IsNullOrWhiteSpace(_selectedOrderTemplateDraft?.SourcePath) && File.Exists(_selectedOrderTemplateDraft.SourcePath)
-                ? _selectedOrderTemplateDraft.SourcePath
-                : _selectedOrderTemplateDraft?.ArchivedPath;
+            var templatePath = _selectedOrderTemplateDraft?.SourcePath;
             if (string.IsNullOrWhiteSpace(templatePath) || !File.Exists(templatePath))
             { MessageBox.Show(this, "请先选择有效模板文件。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             var fields = _btService.IsConnected ? _btService.GetTemplateDataSources(templatePath) : new List<string>();
@@ -1005,7 +1048,7 @@ namespace BarTenderPrinter
             };
             if (new[] { input.Customer, input.ProductModel, input.Color, input.OrderNumber }.Any(string.IsNullOrWhiteSpace) || _orderTemplateDrafts.Count == 0)
             { MessageBox.Show(this, "客户、机型、颜色、订单号和模板都不能为空。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            if (_orderTemplateDrafts.Any(template => string.IsNullOrWhiteSpace(template.ArchivedPath) && !File.Exists(template.SourcePath)))
+            if (_orderTemplateDrafts.Any(template => string.IsNullOrWhiteSpace(template.SourcePath) || !File.Exists(template.SourcePath)))
             { MessageBox.Show(this, "模板文件不存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (_editingOrder == null && _orders.Contains(input.Customer, input.ProductModel, input.Color, input.OrderNumber))
             { MessageBox.Show(this, "订单号已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
@@ -1023,19 +1066,11 @@ namespace BarTenderPrinter
             {
                 foreach (var draft in _orderTemplateDrafts)
                 {
-                    OrderTemplate archived;
-                    if (!string.IsNullOrWhiteSpace(draft.ArchivedPath) && File.Exists(draft.ArchivedPath))
-                    {
-                        archived = CloneOrderTemplate(draft);
-                    }
-                    else
-                    {
-                        archived = _orders.ArchiveTemplate(draft.SourcePath, input.Customer, input.ProductModel, input.Color, input.OrderNumber, draft.Id);
-                    }
-                    archived.Settings = CloneTemplateSettings(draft.Settings);
-                    archived.Settings.TemplateName = Path.GetFileName(archived.ArchivedPath);
-                    archived.Settings.TemplatePath = archived.ArchivedPath;
-                    savedOrder.Templates.Add(archived);
+                    var template = _orders.CreateTemplateReference(draft.SourcePath, draft.Id);
+                    template.Settings = CloneTemplateSettings(draft.Settings);
+                    template.Settings.TemplateName = Path.GetFileName(template.SourcePath);
+                    template.Settings.TemplatePath = template.SourcePath;
+                    savedOrder.Templates.Add(template);
                 }
                 _orders.Add(savedOrder);
             }
@@ -1083,7 +1118,8 @@ namespace BarTenderPrinter
                 var lockEnabled = Convert.ToBoolean(row.Cells["LockEnabled"].Value ?? false);
                 var autoIncrement = lockEnabled && bool.TryParse(row.Cells["AutoIncrement"].Value?.ToString(), out var incrementEnabled) && incrementEnabled;
                 var lockMode = lockEnabled ? row.Cells["LockMode"].Value?.ToString() ?? "输入后锁定" : "";
-                var preserveInputLock = lockMode == "输入后锁定" && existing?.LockAfterInput == true && existing.IsLocked;
+                var lockedValue = row.Cells["LockedValue"].Value?.ToString() ?? "";
+                var preserveInputLock = lockMode == "输入后锁定" && !string.IsNullOrWhiteSpace(lockedValue);
                 result.Add(new DataSourceItem
                 {
                     Name = field,
@@ -1093,7 +1129,7 @@ namespace BarTenderPrinter
                     AutoStep = step == 0 ? 1 : Math.Max(-99, Math.Min(99, step)),
                     IsLocked = lockMode == "固定锁定" || preserveInputLock,
                     LockAfterInput = lockMode == "输入后锁定",
-                    LockedValue = row.Cells["LockedValue"].Value?.ToString() ?? "",
+                    LockedValue = lockEnabled ? lockedValue : "",
                     AutoIncrementLocked = autoIncrement && existing?.AutoIncrementLocked == true,
                     ExpectedLength = Math.Max(0, Math.Min(512, expectedLength)),
                     LengthRevision = existing?.LengthRevision ?? 0,
@@ -1291,10 +1327,10 @@ namespace BarTenderPrinter
             if (item == null) return;
             if (_loadingOrderTemplate) return;
             if (!_isInitializing && !string.IsNullOrEmpty(_selectedTemplatePath)) SaveCurrentTemplateSettings();
-            var orderTemplate = _activeOrder?.Templates?.FirstOrDefault(template => string.Equals(template.ArchivedPath, item.FullPath, StringComparison.OrdinalIgnoreCase));
-            if (orderTemplate != null && !File.Exists(orderTemplate.ArchivedPath))
+            var orderTemplate = _activeOrder?.Templates?.FirstOrDefault(template => string.Equals(template.SourcePath, item.FullPath, StringComparison.OrdinalIgnoreCase));
+            if (orderTemplate != null && !File.Exists(orderTemplate.SourcePath))
             {
-                MessageBox.Show(this, "订单归档模板文件不存在，请重新添加订单。", "订单模板", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, "订单模板绝对路径无效，请在订单管理页面重新选择模板。", "订单模板", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 RestorePreviousTemplateSelection();
                 return;
             }
@@ -1408,9 +1444,10 @@ namespace BarTenderPrinter
 
         private void btnEditDataSources_Click(object sender, EventArgs e)
         {
-            var fields = _dataSources.Select(d => d.Field).ToList();
-            if (fields.Count == 0 && !string.IsNullOrEmpty(_selectedTemplatePath) && _btService.IsConnected)
+            var fields = new List<string>();
+            if (!string.IsNullOrEmpty(_selectedTemplatePath) && File.Exists(_selectedTemplatePath) && _btService.IsConnected)
                 fields = _btService.GetTemplateDataSources(_selectedTemplatePath);
+            if (fields.Count == 0) fields = _dataSources.Select(d => d.Field).ToList();
             if (fields.Count == 0)
             {
                 var result = PromptForManualDataSources();
@@ -1494,9 +1531,13 @@ namespace BarTenderPrinter
         {
             var enabled = _dataSources.Where(d => d.Enabled).ToList();
             if (!ValidateConfiguredInputs(enabled, existingValues)) return;
-            var editable = enabled.Where(d => !d.IsLocked && !d.AutoIncrementLocked).ToList();
+            var editable = enabled.Where(source =>
+            {
+                if (source.IsLocked || source.AutoIncrementLocked) return false;
+                return existingValues == null || !existingValues.TryGetValue(source.Field, out var value) || string.IsNullOrWhiteSpace(value);
+            }).ToList();
             var acceptedValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var source in enabled.Where(d => d.IsLocked || d.AutoIncrementLocked))
+            foreach (var source in enabled)
             {
                 var lockedValue = source.LockedValue ?? "";
                 if (existingValues != null && existingValues.TryGetValue(source.Field, out var currentValue))
@@ -2834,7 +2875,7 @@ namespace BarTenderPrinter
                     LocalData = _localData.ToList(),
                     DataSources = _dataSources.Select(CloneDataSource).ToList()
                 };
-                if (_activeOrderTemplate != null && string.Equals(_activeOrderTemplate.ArchivedPath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
+                if (_activeOrderTemplate != null && string.Equals(_activeOrderTemplate.SourcePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
                 {
                     _activeOrderTemplate.Settings = settings;
                     if (_activeOrder != null) _orders.Add(_activeOrder);
@@ -3197,9 +3238,9 @@ namespace BarTenderPrinter
                             Enabled = true,
                             AutoIncrement = r.CbAutoInc.Checked,
                             AutoStep = (int)r.NumStep.Value,
-                            IsLocked = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && r.WasInputLocked),
+                            IsLocked = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && !string.IsNullOrWhiteSpace(r.TxtLockedValue.Text)),
                             LockAfterInput = r.CmbLockMode.SelectedIndex == 2,
-                            LockedValue = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && r.WasInputLocked) || (r.CbAutoInc.Checked && r.AutoIncrementLocked)
+                            LockedValue = r.CmbLockMode.SelectedIndex == 1 || r.CmbLockMode.SelectedIndex == 2 || (r.CbAutoInc.Checked && r.AutoIncrementLocked)
                                 ? r.TxtLockedValue.Text.Trim()
                                 : "",
                             AutoIncrementLocked = r.CbAutoInc.Checked && r.AutoIncrementLocked,
@@ -3264,10 +3305,10 @@ namespace BarTenderPrinter
             row.TxtLockedValue = new TextBox { Location = new Point(505, 0), Size = new Size(250, 25), Text = lockedValue ?? "" };
             row.NumExpectedLength = new NumericUpDown { Location = new Point(795, 0), Size = new Size(70, 25), Minimum = 0, Maximum = 512, Value = Math.Max(0, Math.Min(512, displayLength)) };
             row.NumExpectedLength.ValueChanged += (s, e) => row.LengthEdited = true;
-            row.TxtLockedValue.Enabled = row.CmbLockMode.SelectedIndex == 1;
+            row.TxtLockedValue.Enabled = row.CmbLockMode.SelectedIndex != 0;
             row.CmbLockMode.SelectedIndexChanged += (s, e) =>
             {
-                row.TxtLockedValue.Enabled = row.CmbLockMode.SelectedIndex == 1;
+                row.TxtLockedValue.Enabled = row.CmbLockMode.SelectedIndex != 0;
                 if (row.CmbLockMode.SelectedIndex == 0)
                 {
                     row.WasInputLocked = false;
@@ -3277,11 +3318,7 @@ namespace BarTenderPrinter
                 {
                     row.WasInputLocked = false;
                 }
-                else if (!lockAfterInput)
-                {
-                    row.WasInputLocked = false;
-                    row.TxtLockedValue.Text = "";
-                }
+                else if (!lockAfterInput) row.WasInputLocked = false;
             };
 
             row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.LblField, row.CbAutoInc, row.NumStep, row.CmbLockMode, row.TxtLockedValue, row.NumExpectedLength });

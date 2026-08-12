@@ -38,7 +38,7 @@ namespace BarTenderPrinter
         public string SourceSha256 { get; set; } = "";
         public TemplateSettings Settings { get; set; } = new TemplateSettings();
 
-        public string DisplayName => !string.IsNullOrWhiteSpace(SourcePath) ? Path.GetFileName(SourcePath) : Path.GetFileName(ArchivedPath);
+        public string DisplayName => Path.GetFileName(SourcePath);
     }
 
     public enum TemplateUpdateStatus
@@ -86,26 +86,20 @@ namespace BarTenderPrinter
             return _orders.FirstOrDefault(order => string.Equals(order.Key, key, StringComparison.OrdinalIgnoreCase));
         }
 
-        public OrderTemplate ArchiveTemplate(string sourceTemplatePath, string customer, string productModel, string color, string orderNumber, string templateId = null)
+        public OrderTemplate CreateTemplateReference(string sourceTemplatePath, string templateId = null)
         {
             if (string.IsNullOrEmpty(sourceTemplatePath) || !File.Exists(sourceTemplatePath))
                 throw new FileNotFoundException("模板文件不存在", sourceTemplatePath);
 
-            var orderDir = Path.Combine(AppPaths.OrdersDirectory, MakeSafeFolderName(PackagingOrder.BuildKey(customer, productModel, color, orderNumber)));
-            Directory.CreateDirectory(orderDir);
             var id = string.IsNullOrWhiteSpace(templateId) ? Guid.NewGuid().ToString("N") : templateId;
-            var targetPath = Path.Combine(orderDir, $"{id}_{Path.GetFileName(sourceTemplatePath)}");
-            File.Copy(sourceTemplatePath, targetPath, true);
-            var sourceInfo = new FileInfo(sourceTemplatePath);
-            return new OrderTemplate
+            var template = new OrderTemplate
             {
                 Id = id,
                 SourcePath = Path.GetFullPath(sourceTemplatePath),
-                ArchivedPath = targetPath,
-                SourceLastWriteTimeUtcTicks = sourceInfo.LastWriteTimeUtc.Ticks,
-                SourceLength = sourceInfo.Length,
-                SourceSha256 = ComputeSha256(sourceTemplatePath)
+                ArchivedPath = ""
             };
+            UpdateSourceSnapshot(template);
+            return template;
         }
 
         public TemplateUpdateStatus GetSourceUpdateStatus(OrderTemplate template)
@@ -132,22 +126,14 @@ namespace BarTenderPrinter
             }
         }
 
-        public void UseSourceTemplate(PackagingOrder order, OrderTemplate template)
+        public void RefreshSourceTemplate(PackagingOrder order, OrderTemplate template)
         {
             if (order == null || template == null || !File.Exists(template.SourcePath))
                 throw new FileNotFoundException("外部模板文件不存在", template?.SourcePath);
-            Directory.CreateDirectory(Path.GetDirectoryName(template.ArchivedPath) ?? AppPaths.OrdersDirectory);
-            File.Copy(template.SourcePath, template.ArchivedPath, true);
             UpdateSourceSnapshot(template);
-            template.Settings.TemplateName = Path.GetFileName(template.ArchivedPath);
-            template.Settings.TemplatePath = template.ArchivedPath;
-            Save();
-        }
-
-        public void KeepArchivedTemplate(OrderTemplate template)
-        {
-            if (template == null) return;
-            UpdateSourceSnapshot(template);
+            template.ArchivedPath = "";
+            template.Settings.TemplateName = Path.GetFileName(template.SourcePath);
+            template.Settings.TemplatePath = template.SourcePath;
             Save();
         }
 
@@ -175,10 +161,23 @@ namespace BarTenderPrinter
                         item.Settings = new TemplateSettings();
                         migrated = true;
                     }
+                    item.Templates = item.Templates.Where(template => template != null).ToList();
                     foreach (var template in item.Templates)
                     {
                         template.Id = string.IsNullOrWhiteSpace(template.Id) ? Guid.NewGuid().ToString("N") : template.Id;
                         template.Settings ??= new TemplateSettings();
+                        if (!string.IsNullOrWhiteSpace(template.SourcePath))
+                        {
+                            try { template.SourcePath = Path.GetFullPath(template.SourcePath); }
+                            catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException)
+                            {
+                                LoggerService.Warn($"订单模板路径无效，等待重新选择: {template.SourcePath}");
+                                template.SourcePath = "";
+                            }
+                            template.ArchivedPath = "";
+                            template.Settings.TemplateName = Path.GetFileName(template.SourcePath);
+                            template.Settings.TemplatePath = template.SourcePath;
+                        }
                     }
                     _orders.Add(item);
                 }
@@ -215,12 +214,5 @@ namespace BarTenderPrinter
                 return Convert.ToHexString(sha256.ComputeHash(stream));
         }
 
-        private static string MakeSafeFolderName(string value)
-        {
-            var invalid = Path.GetInvalidFileNameChars();
-            var chars = (value ?? "order").Select(ch => invalid.Contains(ch) || ch == '|' ? '_' : ch).ToArray();
-            var result = new string(chars).Trim('_', ' ');
-            return string.IsNullOrEmpty(result) ? Guid.NewGuid().ToString("N") : result;
-        }
     }
 }
