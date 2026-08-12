@@ -6,13 +6,13 @@
 
 ## 最新版本
 
-**v5.7.28** - C# WinForms 安装版
+**v5.7.29** - C# WinForms 安装版
 
 ## 功能特性
 
 ### 核心功能
 - **订单管理页面**：按客户、机型、颜色、订单号选择包装订单并调用绑定配置
-- **添加订单**：新增订单时填写客户、机型、颜色、订单号并绑定模板和数据源设置
+- **添加订单**：新增订单时填写可复用客户、机型、颜色和唯一订单号，并绑定模板和数据源设置
 - **订单归档**：添加订单时复制模板文件到本机数据目录，外部原模板删除后仍可调用
 - **模板管理**：选择模板目录，下拉框切换 .btw 模板，异步生成模板预览图
 - **右键打开模板**：安装后可在 `.btw` 文件右键菜单选择“使用 BarTenderPrinter 打开”并自动加载模板
@@ -72,7 +72,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender 标签打印工具 v5.7.28    [导出日志]  │
+│ BarTender 标签打印工具 v5.7.29    [导出日志]  │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -123,7 +123,8 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
-| [v5.7.28](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.28) | ~49 MB | C# WinForms 当前用户安装版 |
+| [v5.7.29](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.29) | ~49 MB | C# WinForms 当前用户安装版 |
+| [v5.7.28](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.28) | ~49 MB | 订单添加页面内嵌数据源设置版 |
 | [v5.7.27](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.27) | ~49 MB | 包装 MES 订单管理初版 |
 | [v5.7.26](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.26) | ~49 MB | 打印流程健壮性修复版 |
 | [v5.7.25](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.25) | ~49 MB | 历史右键和模板菜单修复版 |

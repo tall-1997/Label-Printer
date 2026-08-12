@@ -20,7 +20,7 @@ namespace BarTenderPrinter
 
         public static string BuildKey(string customer, string productModel, string color, string orderNumber)
         {
-            return $"{Normalize(customer)}|{Normalize(productModel)}|{Normalize(color)}|{Normalize(orderNumber)}";
+            return Normalize(orderNumber);
         }
 
         private static string Normalize(string value) => (value ?? "").Trim();

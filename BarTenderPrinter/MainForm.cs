@@ -20,7 +20,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.28";
+        private readonly string _version = "v5.7.29";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -44,10 +44,14 @@ namespace BarTenderPrinter
         private ComboBox _cmbOrderColor;
         private ComboBox _cmbOrderNumber;
         private Button _btnAddOrder;
+        private Panel _navPanel;
+        private Button _btnPrintPage;
+        private Button _btnOrderPage;
+        private Panel _orderPagePanel;
         private Panel _orderContentPanel;
-        private TextBox _txtOrderCustomer;
-        private TextBox _txtOrderModel;
-        private TextBox _txtOrderColor;
+        private ComboBox _txtOrderCustomer;
+        private ComboBox _txtOrderModel;
+        private ComboBox _txtOrderColor;
         private TextBox _txtOrderNumber;
         private TextBox _txtOrderTemplate;
         private DataGridView _orderDataSourcesGrid;
@@ -86,7 +90,40 @@ namespace BarTenderPrinter
 
         private void InstallOrderSidebar()
         {
-            var orderTab = new TabPage { Text = "订单管理" };
+            const int navWidth = 150;
+            ClientSize = new Size(ClientSize.Width + navWidth, ClientSize.Height);
+            MinimumSize = new Size(MinimumSize.Width + navWidth, MinimumSize.Height);
+            foreach (Control control in Controls)
+            {
+                if (control == titlePanel || control == groupBoxLog || control == statusStrip) continue;
+                control.Left += navWidth;
+            }
+
+            _navPanel = new Panel
+            {
+                Location = new Point(0, titlePanel.Bottom),
+                Size = new Size(navWidth, groupBoxLog.Top - titlePanel.Bottom),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left,
+                BackColor = Color.FromArgb(245, 246, 250)
+            };
+            _btnPrintPage = new Button { Text = "打印页面", Location = new Point(12, 18), Size = new Size(120, 34) };
+            _btnOrderPage = new Button { Text = "订单管理", Location = new Point(12, 60), Size = new Size(120, 34) };
+            _btnPrintPage.Click += (s, e) => ShowPrintPage();
+            _btnOrderPage.Click += (s, e) => ShowOrderManagementPage();
+            _navPanel.Controls.AddRange(new Control[] { _btnPrintPage, _btnOrderPage });
+            Controls.Add(_navPanel);
+            _navPanel.BringToFront();
+            MiuiTheme.StyleButton(_btnPrintPage, true);
+            MiuiTheme.StyleButton(_btnOrderPage);
+
+            _orderPagePanel = new Panel
+            {
+                Location = new Point(navWidth + 10, titlePanel.Bottom + 8),
+                Size = new Size(ClientSize.Width - navWidth - 20, groupBoxLog.Top - titlePanel.Bottom - 16),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                Visible = false,
+                BackColor = BackColor
+            };
             _orderPanel = new GroupBox
             {
                 Text = "包装 MES 订单",
@@ -110,12 +147,27 @@ namespace BarTenderPrinter
             _cmbOrderNumber.SelectedIndexChanged += (s, e) => { if (!_loadingOrderFilters) ApplySelectedOrder(); };
 
             _orderPanel.Controls.Add(_btnAddOrder);
-            orderTab.Controls.Add(_orderContentPanel);
-            orderTab.Controls.Add(_orderPanel);
-            tabBottom.TabPages.Add(orderTab);
+            _orderPagePanel.Controls.Add(_orderContentPanel);
+            _orderPagePanel.Controls.Add(_orderPanel);
+            Controls.Add(_orderPagePanel);
             MiuiTheme.StyleGroupBox(_orderPanel);
             MiuiTheme.StyleButton(_btnAddOrder, true);
             btnEditDataSources.Visible = false;
+        }
+
+        private void ShowPrintPage()
+        {
+            _orderPagePanel.Visible = false;
+            MiuiTheme.StyleButton(_btnPrintPage, true);
+            MiuiTheme.StyleButton(_btnOrderPage);
+        }
+
+        private void ShowOrderManagementPage()
+        {
+            _orderPagePanel.Visible = true;
+            _orderPagePanel.BringToFront();
+            MiuiTheme.StyleButton(_btnOrderPage, true);
+            MiuiTheme.StyleButton(_btnPrintPage);
         }
 
         private ComboBox AddOrderCombo(string labelText, int x, int y)
@@ -243,9 +295,9 @@ namespace BarTenderPrinter
             var title = new Label { Text = "添加订单", Location = new Point(10, 10), Size = new Size(500, 28), Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold) };
             _orderContentPanel.Controls.Add(title);
 
-            _txtOrderCustomer = AddOrderPageTextBox("客户", 10, 50);
-            _txtOrderModel = AddOrderPageTextBox("机型", 260, 50);
-            _txtOrderColor = AddOrderPageTextBox("颜色", 510, 50);
+            _txtOrderCustomer = AddOrderPageComboBox("客户", 10, 50, _orders.Orders.Select(order => order.Customer));
+            _txtOrderModel = AddOrderPageComboBox("机型", 260, 50, _orders.Orders.Select(order => order.ProductModel));
+            _txtOrderColor = AddOrderPageComboBox("颜色", 510, 50, _orders.Orders.Select(order => order.Color));
             _txtOrderNumber = AddOrderPageTextBox("订单号", 760, 50);
             _txtOrderTemplate = AddOrderPageTextBox("模板", 10, 105, 700);
             _txtOrderTemplate.ReadOnly = true;
@@ -286,6 +338,18 @@ namespace BarTenderPrinter
             MiuiTheme.StyleLabel(label);
             MiuiTheme.StyleTextBox(text);
             return text;
+        }
+
+        private ComboBox AddOrderPageComboBox(string labelText, int x, int y, IEnumerable<string> values)
+        {
+            var label = new Label { Text = labelText + "：", Location = new Point(x, y), Size = new Size(200, 18) };
+            var combo = new ComboBox { Location = new Point(x, y + 22), Size = new Size(200, 25), DropDownStyle = ComboBoxStyle.DropDown };
+            foreach (var value in values.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, NaturalStringComparer.Instance))
+                combo.Items.Add(value);
+            _orderContentPanel.Controls.Add(label);
+            _orderContentPanel.Controls.Add(combo);
+            MiuiTheme.StyleLabel(label);
+            return combo;
         }
 
         private void BrowseOrderTemplate()
@@ -341,7 +405,7 @@ namespace BarTenderPrinter
             if (!File.Exists(input.TemplatePath))
             { MessageBox.Show(this, "模板文件不存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (_orders.Contains(input.Customer, input.ProductModel, input.Color, input.OrderNumber))
-            { MessageBox.Show(this, "客户、机型、颜色、订单号组合已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            { MessageBox.Show(this, "订单号已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             var dataSources = BuildDataSourcesFromOrderGrid();
             if (dataSources.Count == 0)
             { MessageBox.Show(this, "请至少选择一个数据源。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
