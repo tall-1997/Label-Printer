@@ -341,6 +341,9 @@ namespace BarTenderPrinter
             object document = null;
             try
             {
+                if (fieldValues.Count == 0)
+                    return ExportTemplateThumbnail(templatePath);
+
                 EnsurePreviewEngine();
                 var documents = GetRequiredProperty(_previewEngine, "Documents");
                 document = InvokeRequired(documents, "Open", templatePath);
@@ -461,6 +464,36 @@ namespace BarTenderPrinter
             var subStringsType = GetRequiredSdkType("SubStrings");
             if (subStringsType.GetMethod("SetSubString", new[] { typeof(string), typeof(string) }) == null)
                 throw new MissingMethodException(subStringsType.FullName, "SetSubString");
+
+            var thumbnailType = GetRequiredSdkType("LabelFormatThumbnail");
+            if (thumbnailType.GetMethod("Create", BindingFlags.Public | BindingFlags.Static, null,
+                    new[] { typeof(string), typeof(Color), typeof(int), typeof(int) }, null) == null)
+                throw new MissingMethodException(thumbnailType.FullName, "Create");
+        }
+
+        private string ExportTemplateThumbnail(string templatePath)
+        {
+            Directory.CreateDirectory(AppPaths.PreviewDirectory);
+            var outputPath = Path.Combine(AppPaths.PreviewDirectory, "current-preview.png");
+            var candidatePath = Path.Combine(AppPaths.PreviewDirectory, $"preview-{Guid.NewGuid():N}.png");
+            try
+            {
+                var thumbnailType = GetRequiredSdkType("LabelFormatThumbnail");
+                var create = thumbnailType.GetMethod("Create", BindingFlags.Public | BindingFlags.Static, null,
+                    new[] { typeof(string), typeof(Color), typeof(int), typeof(int) }, null)
+                    ?? throw new MissingMethodException(thumbnailType.FullName, "Create");
+                using var thumbnail = create.Invoke(null, new object[] { templatePath, Color.White, 1200, 1200 }) as Image
+                    ?? throw new InvalidDataException("BarTender SDK 未生成模板缩略图");
+                thumbnail.Save(candidatePath, System.Drawing.Imaging.ImageFormat.Png);
+                if (!IsValidPreviewImage(candidatePath))
+                    throw new InvalidDataException("BarTender SDK 未生成有效的模板缩略图");
+                File.Move(candidatePath, outputPath, true);
+                return outputPath;
+            }
+            finally
+            {
+                try { if (File.Exists(candidatePath)) File.Delete(candidatePath); } catch { }
+            }
         }
 
         private Assembly ResolvePreviewSdkAssembly(AssemblyLoadContext context, AssemblyName name)

@@ -25,6 +25,8 @@ flowchart LR
 - `IBarTenderService.ExportPreviewAsync`：通过受控反射适配 BarTender 2022 R2 SDK，设置命名数据源并导出 PNG。
 - `IHistoryRepository.GetLatestSuccessful`：按当前模板返回最近的 `PASS` 或 `REPRINT_PASS` 记录。
 
+原模板预览使用 `LabelFormatThumbnail.Create(templatePath, Color.White, 1200, 1200)`。包含成功记录字段快照时，打开 `LabelFormatDocument`、调用 `SubStrings.SetSubString` 并通过 `ExportImageToFile` 导出 300 DPI PNG。
+
 ## Data Models
 
 - 预览输入：模板路径和字段值快照。
