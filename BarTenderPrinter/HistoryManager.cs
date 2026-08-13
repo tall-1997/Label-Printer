@@ -13,6 +13,7 @@ namespace BarTenderPrinter
         public string Imei { get; set; }
         public string TemplateName { get; set; }
         public string TemplatePath { get; set; }
+        public string TemplateId { get; set; }
         public Dictionary<string, string> FieldValues { get; set; }
         public string PrintTime { get; set; }
         public string Status { get; set; }
@@ -25,6 +26,7 @@ namespace BarTenderPrinter
             Imei = imei ?? "";
             TemplateName = "";
             TemplatePath = "";
+            TemplateId = "";
             FieldValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             PrintTime = printTime ?? "";
             Status = status ?? "PASS";
@@ -38,12 +40,20 @@ namespace BarTenderPrinter
             RecordId = Guid.NewGuid().ToString("N");
             TemplateName = templateName ?? "";
             TemplatePath = templatePath ?? "";
+            TemplateId = "";
             FieldValues = new Dictionary<string, string>(fieldValues ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
             Imei = string.Join("|", FieldValues.Values);
             PrintTime = printTime ?? "";
             Status = status ?? "PASS";
             Printer = printer ?? "";
             Copies = Math.Max(1, copies);
+        }
+
+        public PrintRecord(string templateName, string templatePath, string templateId, Dictionary<string, string> fieldValues,
+            string printTime, string status, string printer, int copies)
+            : this(templateName, templatePath, fieldValues, printTime, status, printer, copies)
+        {
+            TemplateId = templateId ?? "";
         }
     }
 
@@ -52,7 +62,8 @@ namespace BarTenderPrinter
         private readonly string _recordsFile;
         private readonly Dictionary<string, HashSet<string>> _templateValueIndexes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         private bool _usesCurrentFormat;
-        private const string Header = "record_id,template_name,template_path,field_values,print_time,status,printer,copies";
+        private const string Header = "record_id,template_name,template_path,template_id,field_values,print_time,status,printer,copies";
+        private const string PreviousHeader = "record_id,template_name,template_path,field_values,print_time,status,printer,copies";
         public List<PrintRecord> Records { get; private set; }
 
         public HistoryManager()
@@ -69,35 +80,59 @@ namespace BarTenderPrinter
             if (!File.Exists(_recordsFile)) return;
             try
             {
-                var lines = File.ReadAllLines(_recordsFile, Encoding.UTF8);
-                _usesCurrentFormat = lines.Length > 0 && string.Equals(lines[0].TrimStart('\uFEFF'), Header, StringComparison.Ordinal);
-                var startIndex = _usesCurrentFormat ? 1 : 0;
-                for (int i = startIndex; i < lines.Length; i++)
+                _usesCurrentFormat = false;
+                var lineNumber = 0;
+                var usesPreviousFormat = false;
+                foreach (var line in File.ReadLines(_recordsFile, Encoding.UTF8))
                 {
-                    var parts = ParseCsvLine(lines[i]);
-                    if (!_usesCurrentFormat && i == 0 && IsLegacyHeader(parts)) continue;
-                    if (parts.Count >= 8)
+                    lineNumber++;
+                    if (lineNumber == 1)
                     {
-                        var fields = DeserializeFields(parts[3]);
-                        int.TryParse(parts[7], out var copies);
-                        var record = new PrintRecord(parts[1], parts[2], fields, parts[4], parts[5], parts[6], copies)
-                        {
-                            RecordId = string.IsNullOrEmpty(parts[0]) ? Guid.NewGuid().ToString("N") : parts[0]
-                        };
-                        Records.Add(record);
-                        IndexRecord(record);
+                        var fileHeader = line.TrimStart('\uFEFF');
+                        _usesCurrentFormat = string.Equals(fileHeader, Header, StringComparison.Ordinal);
+                        usesPreviousFormat = string.Equals(fileHeader, PreviousHeader, StringComparison.Ordinal);
+                        if (_usesCurrentFormat || usesPreviousFormat) continue;
                     }
-                    else if (parts.Count >= 3)
-                    {
-                        var record = new PrintRecord(parts[0], parts[1], parts[2]);
-                        Records.Add(record);
-                        IndexRecord(record);
-                    }
+                    LoadRecordLine(line, lineNumber, usesPreviousFormat, true);
                 }
             }
             catch (Exception ex)
             {
                 LoggerService.Error("加载历史记录失败", ex);
+            }
+        }
+
+        private void LoadRecordLine(string line, int lineNumber, bool usesPreviousFormat, bool allowLegacyHeader)
+        {
+            var parts = ParseCsvLine(line);
+            if (allowLegacyHeader && lineNumber == 1 && IsLegacyHeader(parts)) return;
+            if (_usesCurrentFormat && parts.Count >= 9)
+            {
+                var fields = DeserializeFields(parts[4]);
+                int.TryParse(parts[8], out var copies);
+                var record = new PrintRecord(parts[1], parts[2], parts[3], fields, parts[5], parts[6], parts[7], copies)
+                {
+                    RecordId = string.IsNullOrEmpty(parts[0]) ? Guid.NewGuid().ToString("N") : parts[0]
+                };
+                Records.Add(record);
+                IndexRecord(record);
+            }
+            else if (parts.Count >= 8)
+            {
+                var fields = DeserializeFields(parts[3]);
+                int.TryParse(parts[7], out var copies);
+                var record = new PrintRecord(parts[1], parts[2], fields, parts[4], parts[5], parts[6], copies)
+                {
+                    RecordId = string.IsNullOrEmpty(parts[0]) ? Guid.NewGuid().ToString("N") : parts[0]
+                };
+                Records.Add(record);
+                IndexRecord(record);
+            }
+            else if (!usesPreviousFormat && parts.Count >= 3)
+            {
+                var record = new PrintRecord(parts[0], parts[1], parts[2]);
+                Records.Add(record);
+                IndexRecord(record);
             }
         }
 
@@ -112,7 +147,7 @@ namespace BarTenderPrinter
                 {
                     sb.AppendLine(string.Join(",", new[]
                     {
-                        Csv(r.RecordId), Csv(r.TemplateName), Csv(r.TemplatePath), Csv(SerializeFields(r.FieldValues)),
+                        Csv(r.RecordId), Csv(r.TemplateName), Csv(r.TemplatePath), Csv(r.TemplateId), Csv(SerializeFields(r.FieldValues)),
                         Csv(r.PrintTime), Csv(r.Status), Csv(r.Printer), r.Copies.ToString()
                     }));
                 }
@@ -146,7 +181,13 @@ namespace BarTenderPrinter
         public bool Add(string templateName, string templatePath, Dictionary<string, string> fieldValues,
             string status, string printer, int copies)
         {
-            var record = new PrintRecord(templateName, templatePath, fieldValues,
+            return Add(templateName, templatePath, "", fieldValues, status, printer, copies);
+        }
+
+        public bool Add(string templateName, string templatePath, string templateId, Dictionary<string, string> fieldValues,
+            string status, string printer, int copies)
+        {
+            var record = new PrintRecord(templateName, templatePath, templateId, fieldValues,
                 DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), status, printer, copies);
             Records.Add(record);
             IndexRecord(record);
@@ -168,6 +209,13 @@ namespace BarTenderPrinter
         {
             if (string.IsNullOrEmpty(value)) return false;
             return _templateValueIndexes.TryGetValue(GetTemplateKey(templateName, templatePath), out var values) && values.Contains(value);
+        }
+
+        public bool ContainsAnyValue(string templateName, string templatePath, string templateId, string value)
+        {
+            if (string.IsNullOrEmpty(value)) return false;
+            if (!string.IsNullOrWhiteSpace(templateId) && _templateValueIndexes.TryGetValue(GetTemplateKey(templateId), out var values) && values.Contains(value)) return true;
+            return ContainsAnyValue(templateName, templatePath, value);
         }
 
         public PrintRecord GetById(string recordId)
@@ -198,9 +246,13 @@ namespace BarTenderPrinter
 
         public bool Clear(string templateName, string templatePath)
         {
+            return Clear(templateName, templatePath, "");
+        }
+
+        public bool Clear(string templateName, string templatePath, string templateId)
+        {
             var snapshot = Records.ToList();
-            var templateKey = GetTemplateKey(templateName, templatePath);
-            Records.RemoveAll(record => string.Equals(GetTemplateKey(record.TemplateName, record.TemplatePath), templateKey, StringComparison.OrdinalIgnoreCase));
+            Records.RemoveAll(record => IsTemplateMatch(record, templateName, templatePath, templateId));
             RebuildIndexes();
             if (Save()) return true;
             Records = snapshot;
@@ -210,21 +262,47 @@ namespace BarTenderPrinter
 
         public List<PrintRecord> Search(string templateName, string templatePath, string keyword, bool exact)
         {
-            var templateKey = GetTemplateKey(templateName, templatePath);
+            return Search(templateName, templatePath, "", keyword, exact, 0, false);
+        }
+
+        public List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit = 0, bool newestFirst = false)
+        {
             var query = (keyword ?? "").Trim();
-            return Records.Where(record =>
+            var source = newestFirst ? Records.AsEnumerable().Reverse() : Records.AsEnumerable();
+            var matches = new List<PrintRecord>();
+            foreach (var record in source)
             {
-                if (!string.Equals(GetTemplateKey(record.TemplateName, record.TemplatePath), templateKey, StringComparison.OrdinalIgnoreCase)) return false;
-                if (string.IsNullOrEmpty(query)) return true;
+                if (!IsTemplateMatch(record, templateName, templatePath, templateId)) continue;
+                if (string.IsNullOrEmpty(query))
+                {
+                    matches.Add(record);
+                    if (limit > 0 && matches.Count >= limit) break;
+                    continue;
+                }
                 var fieldPairs = (record.FieldValues ?? new Dictionary<string, string>()).Select(item => $"{item.Key}={item.Value}").ToList();
                 var fields = new[] { record.RecordId, record.TemplateName, record.TemplatePath, record.PrintTime, record.Status, record.Printer, record.Copies.ToString(), string.Join(" | ", fieldPairs) }
                     .Concat((record.FieldValues ?? new Dictionary<string, string>()).Keys)
                     .Concat(fieldPairs)
                     .Concat(GetValues(record));
-                return exact
+                var matched = exact
                     ? fields.Any(value => string.Equals(value, query, StringComparison.OrdinalIgnoreCase))
                     : fields.Any(value => (value ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
-            }).ToList();
+                if (!matched) continue;
+                matches.Add(record);
+                if (limit > 0 && matches.Count >= limit) break;
+            }
+            return matches;
+        }
+
+        public int Count(string templateName, string templatePath, string templateId)
+        {
+            return Records.Count(record => IsTemplateMatch(record, templateName, templatePath, templateId));
+        }
+
+        public int TodayCount(string templateName, string templatePath, string templateId)
+        {
+            var today = DateTime.Now.ToString("yyyy-MM-dd");
+            return Records.Count(record => IsTemplateMatch(record, templateName, templatePath, templateId) && record.PrintTime.StartsWith(today));
         }
 
         public void Export(string path, IEnumerable<PrintRecord> records)
@@ -232,12 +310,12 @@ namespace BarTenderPrinter
             var filtered = records?.ToList() ?? new List<PrintRecord>();
 
             var sb = new StringBuilder();
-            sb.AppendLine("template_name,template_path,field_values,print_time,status,printer,copies");
+            sb.AppendLine("template_name,template_path,template_id,field_values,print_time,status,printer,copies");
             foreach (var r in filtered)
             {
                 var values = string.Join("; ", (r.FieldValues ?? new Dictionary<string, string>()).Select(item => $"{item.Key}={item.Value}"));
                 if (string.IsNullOrEmpty(values)) values = r.Imei;
-                sb.AppendLine(string.Join(",", new[] { Csv(r.TemplateName), Csv(r.TemplatePath), Csv(values), Csv(r.PrintTime), Csv(r.Status), Csv(r.Printer), r.Copies.ToString() }));
+                sb.AppendLine(string.Join(",", new[] { Csv(r.TemplateName), Csv(r.TemplatePath), Csv(r.TemplateId), Csv(values), Csv(r.PrintTime), Csv(r.Status), Csv(r.Printer), r.Copies.ToString() }));
             }
             File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
         }
@@ -253,42 +331,12 @@ namespace BarTenderPrinter
             return Records.Count;
         }
 
-        private static List<string> ParseCsvLine(string line)
-        {
-            var result = new List<string>();
-            if (string.IsNullOrEmpty(line)) return result;
-            var current = new StringBuilder();
-            bool inQuotes = false;
-            for (int i = 0; i < line.Length; i++)
-            {
-                var c = line[i];
-                if (c == '"')
-                {
-                    if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
-                    {
-                        current.Append('"');
-                        i++;
-                    }
-                    else inQuotes = !inQuotes;
-                }
-                else if (c == ',' && !inQuotes)
-                {
-                    result.Add(current.ToString().Trim());
-                    current.Clear();
-                }
-                else
-                {
-                    current.Append(c);
-                }
-            }
-            result.Add(current.ToString().Trim());
-            return result;
-        }
+        private static List<string> ParseCsvLine(string line) => CsvUtils.ParseLine(line);
 
         private void IndexRecord(PrintRecord record)
         {
             if (!IsSuccessfulStatus(record.Status)) return;
-            var key = GetTemplateKey(record.TemplateName, record.TemplatePath);
+            var key = GetTemplateKey(record);
             if (!_templateValueIndexes.TryGetValue(key, out var values))
             {
                 values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -326,7 +374,7 @@ namespace BarTenderPrinter
         {
             return string.Join(",", new[]
             {
-                Csv(record.RecordId), Csv(record.TemplateName), Csv(record.TemplatePath), Csv(SerializeFields(record.FieldValues)),
+                Csv(record.RecordId), Csv(record.TemplateName), Csv(record.TemplatePath), Csv(record.TemplateId), Csv(SerializeFields(record.FieldValues)),
                 Csv(record.PrintTime), Csv(record.Status), Csv(record.Printer), record.Copies.ToString()
             });
         }
@@ -363,6 +411,23 @@ namespace BarTenderPrinter
             return $"{templateName?.Trim()}|{NormalizePath(templatePath)}";
         }
 
+        private static string GetTemplateKey(string templateId)
+        {
+            return $"id:{templateId?.Trim()}";
+        }
+
+        private static string GetTemplateKey(PrintRecord record)
+        {
+            return !string.IsNullOrWhiteSpace(record.TemplateId) ? GetTemplateKey(record.TemplateId) : GetTemplateKey(record.TemplateName, record.TemplatePath);
+        }
+
+        private static bool IsTemplateMatch(PrintRecord record, string templateName, string templatePath, string templateId)
+        {
+            if (!string.IsNullOrWhiteSpace(templateId) && !string.IsNullOrWhiteSpace(record.TemplateId))
+                return string.Equals(record.TemplateId, templateId, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(GetTemplateKey(record.TemplateName, record.TemplatePath), GetTemplateKey(templateName, templatePath), StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string SerializeFields(Dictionary<string, string> fields)
         {
             var json = JsonSerializer.Serialize(fields ?? new Dictionary<string, string>());
@@ -379,6 +444,6 @@ namespace BarTenderPrinter
             catch { return new Dictionary<string, string>(); }
         }
 
-        private static string Csv(string value) => $"\"{(value ?? "").Replace("\"", "\"\"")}\"";
+        private static string Csv(string value) => CsvUtils.Escape(value);
     }
 }
