@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.50";
+        private readonly string _version = "v5.7.51";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -684,6 +684,8 @@ namespace BarTenderPrinter
             var removed = current.Select(source => source.Field).Where(field => !string.IsNullOrWhiteSpace(field) && !newFields.Contains(field)).ToList();
             var kept = fields.Where(field => oldFields.Contains(field)).ToList();
             template.Settings ??= new TemplateSettings();
+            template.FieldSnapshot = fields.ToList();
+            template.Settings.TemplateFields = fields.ToList();
             template.Settings.DataSources = fields.Select(field =>
                 current.FirstOrDefault(source => string.Equals(source.Field, field, StringComparison.OrdinalIgnoreCase)) is DataSourceItem existing
                     ? CloneDataSource(existing)
@@ -1082,6 +1084,7 @@ namespace BarTenderPrinter
                 SourceLastWriteTimeUtcTicks = template.SourceLastWriteTimeUtcTicks,
                 SourceLength = template.SourceLength,
                 SourceSha256 = template.SourceSha256,
+                FieldSnapshot = (template.FieldSnapshot ?? new List<string>()).ToList(),
                 Settings = CloneTemplateSettings(template.Settings)
             };
         }
@@ -1092,6 +1095,9 @@ namespace BarTenderPrinter
             return new TemplateSettings
             {
                 SchemaVersion = settings.SchemaVersion,
+                Scope = settings.Scope,
+                OrderId = settings.OrderId,
+                TemplateId = settings.TemplateId,
                 TemplateName = settings.TemplateName,
                 TemplatePath = settings.TemplatePath,
                 Printer = settings.Printer,
@@ -1106,6 +1112,7 @@ namespace BarTenderPrinter
                 LocalDataStoragePath = settings.LocalDataStoragePath,
                 LocalDataColumnName = settings.LocalDataColumnName,
                 LocalDataTargetField = settings.LocalDataTargetField,
+                TemplateFields = (settings.TemplateFields ?? new List<string>()).ToList(),
                 LocalData = (settings.LocalData ?? new List<string>()).ToList(),
                 DataSources = (settings.DataSources ?? new List<DataSourceItem>()).Select(CloneDataSource).ToList()
             };
@@ -1255,7 +1262,7 @@ namespace BarTenderPrinter
             targetTemplate.Settings.LocalDataPath = path;
             targetTemplate.Settings.LocalDataColumnName = imported.ColumnName;
             targetTemplate.Settings.LocalDataTargetField = targetField;
-            var scope = FirstNonEmpty(_txtOrderNumber?.Text, _editingOrder?.Key, _activeOrder?.Key, "draft");
+            var scope = FirstNonEmpty(_editingOrder?.OrderId, _activeOrder?.OrderId, _txtOrderNumber?.Text, "draft");
             targetTemplate.Settings.LocalDataStoragePath = SaveValidationDataSnapshot(scope, targetTemplate.Id, targetTemplate.SourcePath, imported.Values);
             targetTemplate.Settings.LocalData = new List<string>();
             if (ReferenceEquals(targetTemplate, _selectedOrderTemplateDraft))
@@ -1560,6 +1567,10 @@ namespace BarTenderPrinter
         private TemplateSettings BuildOrderTemplateSettings(string templatePath, List<DataSourceItem> dataSources)
         {
             var settings = BuildTemplateSettings(templatePath, dataSources);
+            settings.Scope = "OrderTemplate";
+            settings.OrderId = _editingOrder?.OrderId ?? "";
+            settings.TemplateId = _selectedOrderTemplateDraft?.Id ?? "";
+            settings.TemplateFields = _selectedOrderTemplateDraft?.FieldSnapshot?.ToList() ?? dataSources.Select(source => source.Field).ToList();
             settings.Printer = _cmbOrderPrinter?.SelectedItem?.ToString() ?? settings.Printer;
             settings.Copies = _numOrderCopies == null ? settings.Copies : (int)_numOrderCopies.Value;
             settings.InputValidation = _chkOrderInputValidation?.Checked ?? settings.InputValidation;
@@ -1766,6 +1777,7 @@ namespace BarTenderPrinter
                 return;
             }
             var current = BuildDataSourcesFromOrderGrid();
+            _selectedOrderTemplateDraft.FieldSnapshot = fields.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(field => field, NaturalStringComparer.Instance).ToList();
             _orderDataSourcesGrid.Rows.Clear();
             foreach (var field in fields.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(field => field, NaturalStringComparer.Instance))
             {
@@ -1835,12 +1847,17 @@ namespace BarTenderPrinter
                 {
                     var template = _orders.CreateTemplateReference(draft.SourcePath, draft.Id);
                     template.Settings = CloneTemplateSettings(draft.Settings);
+                    template.Settings.Scope = "OrderTemplate";
+                    template.Settings.OrderId = savedOrder.OrderId;
+                    template.Settings.TemplateId = template.Id;
+                    template.FieldSnapshot = (draft.FieldSnapshot ?? new List<string>()).ToList();
+                    template.Settings.TemplateFields = template.FieldSnapshot.ToList();
                     template.Settings.TemplateName = Path.GetFileName(template.SourcePath);
                     template.Settings.TemplatePath = template.SourcePath;
                     var localData = GetTemplateLocalData(template.Settings);
                     if (localData.Count > 0)
                     {
-                        template.Settings.LocalDataStoragePath = SaveValidationDataSnapshot(savedOrder.Key, template.Id, template.SourcePath, localData);
+                        template.Settings.LocalDataStoragePath = SaveValidationDataSnapshot(savedOrder.OrderId, template.Id, template.SourcePath, localData);
                         template.Settings.LocalData = new List<string>();
                     }
                     savedOrder.Templates.Add(template);
@@ -2319,6 +2336,9 @@ namespace BarTenderPrinter
         {
             return new TemplateSettings
             {
+                Scope = _activeOrderTemplate == null ? "GlobalTemplate" : "OrderTemplate",
+                OrderId = _activeOrder?.OrderId ?? "",
+                TemplateId = _activeOrderTemplate?.Id ?? "",
                 TemplateName = Path.GetFileName(templatePath),
                 TemplatePath = templatePath,
                 Printer = cmbPrinter.SelectedItem?.ToString() ?? "",
@@ -2333,6 +2353,7 @@ namespace BarTenderPrinter
                 LocalDataStoragePath = _localDataStoragePath,
                 LocalDataColumnName = _localDataColumnName,
                 LocalDataTargetField = _localDataTargetField,
+                TemplateFields = _activeOrderTemplate?.FieldSnapshot?.ToList() ?? _dataSources.Select(source => source.Field).ToList(),
                 LocalData = string.IsNullOrWhiteSpace(_localDataStoragePath) ? _localData.ToList() : new List<string>(),
                 DataSources = dataSources.Select(CloneDataSource).ToList()
             };
@@ -3017,7 +3038,7 @@ namespace BarTenderPrinter
             if (targetField == null) return;
             _localData = data;
             _localDataPath = path;
-            _localDataStoragePath = SaveValidationDataSnapshot(_activeOrder?.Key ?? "global", _activeOrderTemplate?.Id ?? "global", _selectedTemplatePath, data);
+            _localDataStoragePath = SaveValidationDataSnapshot(_activeOrder?.OrderId ?? "global", _activeOrderTemplate?.Id ?? "global", _selectedTemplatePath, data);
             _localDataColumnName = columnName;
             _localDataTargetField = targetField;
             UpdateLocalDataValidationAvailability();
@@ -3342,7 +3363,7 @@ namespace BarTenderPrinter
                         {
                             SetStatus("打印完成");
                             AddLog("打印完成", "SUCCESS");
-                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "PASS", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? ""))
+                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "PASS", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? "", _activeOrder?.OrderId ?? "", _activeOrderTemplate?.FieldSnapshot ?? new List<string>()))
                             {
                                 SetStatus("打印完成，历史保存失败");
                                 AddLog("打印已完成，但历史记录保存失败；本次数据不会进入重复校验索引。", "ERROR");
@@ -3367,7 +3388,7 @@ namespace BarTenderPrinter
                         {
                             SetStatus("打印失败");
                             AddLog($"打印失败: {result.ErrorMessage}", "ERROR");
-                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? ""))
+                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? "", _activeOrder?.OrderId ?? "", _activeOrderTemplate?.FieldSnapshot ?? new List<string>()))
                                 AddLog("失败打印历史记录保存失败。", "ERROR");
                             RestoreInputReadOnlyStates(readOnlyStates);
                         }
@@ -3695,7 +3716,7 @@ namespace BarTenderPrinter
                     {
                         historySaved = _history.Add(record.TemplateName, record.TemplatePath, record.TemplateId, values,
                             result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies,
-                            GetOperatorName(), _pendingReprintReason, record.TemplateVersion, result.DiagnosticDetails, record.OrderName);
+                            GetOperatorName(), _pendingReprintReason, record.TemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
                         if (result.Success && historySaved) RestoreAutoIncrementInputsToPendingValues();
                         if (!historySaved)
                             AddLog(result.Success ? "补打印已完成，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
@@ -3815,6 +3836,7 @@ namespace BarTenderPrinter
             {
                 sb.AppendLine($"操作员: {record.OperatorName}");
                 sb.AppendLine($"订单: {record.OrderName}");
+                sb.AppendLine($"订单ID: {record.OrderId}");
                 sb.AppendLine($"补打印原因: {record.ReprintReason}");
                 sb.AppendLine($"模板ID: {record.TemplateId}");
                 sb.AppendLine($"模板版本: {record.TemplateVersion}");

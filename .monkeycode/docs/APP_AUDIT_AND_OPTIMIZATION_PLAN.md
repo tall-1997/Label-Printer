@@ -554,3 +554,16 @@
 - R-8：已新增 `AtomicFileWriter`，并接入订单、模板设置、历史、配置和校验快照写入路径。
 - R-9：已为订单、模板、模板设置和历史记录增加 `SchemaVersion`。
 - R-10：已新增 `IBarTenderService` 和 `IHistoryRepository`，`MainForm` 开始依赖接口类型。
+
+### v5.7.51 数据模型改造
+
+- D-1：订单已引入稳定 `OrderId`，四元组 Key 保持兼容。
+- D-2：模板继续使用稳定 `TemplateId`，并写入模板设置与历史记录。
+- D-3：历史记录新增 `OrderId` 与 `TemplateId`。
+- D-4：本地校验数据继续按目标字段绑定。
+- D-5：历史主存储迁移为 JSONL，旧 CSV 自动兼容读取并迁移。
+- D-6：模板设置新增 `Scope`、`OrderId`、`TemplateId`，区分普通模板和订单模板作用域。
+- D-7：`LengthEdited` 保持持久化。
+- D-8：补打印类型和原因继续写入历史记录。
+- D-9：打印执行诊断详情继续写入历史记录。
+- D-10：订单模板与历史记录新增模板字段快照。

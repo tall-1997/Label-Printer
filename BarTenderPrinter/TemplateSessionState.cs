@@ -5,6 +5,9 @@ namespace BarTenderPrinter
     public class TemplateSessionState
     {
         public int SchemaVersion { get; set; } = 2;
+        public string Scope { get; set; } = "GlobalTemplate";
+        public string OrderId { get; set; } = "";
+        public string TemplateId { get; set; } = "";
         public string TemplateName { get; set; } = "";
         public string TemplatePath { get; set; } = "";
         public string Printer { get; set; } = "";
@@ -19,6 +22,7 @@ namespace BarTenderPrinter
         public string LocalDataStoragePath { get; set; } = "";
         public string LocalDataColumnName { get; set; } = "";
         public string LocalDataTargetField { get; set; } = "";
+        public List<string> TemplateFields { get; set; } = new List<string>();
         public List<string> LocalData { get; set; } = new List<string>();
         public List<DataSourceItem> DataSources { get; set; } = new List<DataSourceItem>();
 
@@ -27,6 +31,9 @@ namespace BarTenderPrinter
             return new TemplateSettings
             {
                 SchemaVersion = SchemaVersion,
+                Scope = Scope,
+                OrderId = OrderId,
+                TemplateId = TemplateId,
                 TemplateName = TemplateName,
                 TemplatePath = TemplatePath,
                 Printer = Printer,
@@ -41,6 +48,7 @@ namespace BarTenderPrinter
                 LocalDataStoragePath = LocalDataStoragePath,
                 LocalDataColumnName = LocalDataColumnName,
                 LocalDataTargetField = LocalDataTargetField,
+                TemplateFields = TemplateFields ?? new List<string>(),
                 LocalData = LocalData ?? new List<string>(),
                 DataSources = DataSources ?? new List<DataSourceItem>()
             };
@@ -52,6 +60,9 @@ namespace BarTenderPrinter
             return new TemplateSessionState
             {
                 SchemaVersion = settings.SchemaVersion,
+                Scope = settings.Scope,
+                OrderId = settings.OrderId,
+                TemplateId = settings.TemplateId,
                 TemplateName = settings.TemplateName,
                 TemplatePath = settings.TemplatePath,
                 Printer = settings.Printer,
@@ -66,6 +77,7 @@ namespace BarTenderPrinter
                 LocalDataStoragePath = settings.LocalDataStoragePath,
                 LocalDataColumnName = settings.LocalDataColumnName,
                 LocalDataTargetField = settings.LocalDataTargetField,
+                TemplateFields = settings.TemplateFields ?? new List<string>(),
                 LocalData = settings.LocalData ?? new List<string>(),
                 DataSources = settings.DataSources ?? new List<DataSourceItem>()
             };

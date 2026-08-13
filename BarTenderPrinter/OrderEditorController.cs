@@ -15,6 +15,7 @@ namespace BarTenderPrinter
                 SourceLastWriteTimeUtcTicks = template.SourceLastWriteTimeUtcTicks,
                 SourceLength = template.SourceLength,
                 SourceSha256 = template.SourceSha256,
+                FieldSnapshot = (template.FieldSnapshot ?? new List<string>()).ToList(),
                 Settings = TemplateSessionState.FromSettings(template.Settings).ToSettings()
             }).ToList();
         }

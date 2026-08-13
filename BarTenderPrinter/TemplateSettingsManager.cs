@@ -9,6 +9,9 @@ namespace BarTenderPrinter
     public class TemplateSettings
     {
         public int SchemaVersion { get; set; } = 2;
+        public string Scope { get; set; } = "GlobalTemplate";
+        public string OrderId { get; set; } = "";
+        public string TemplateId { get; set; } = "";
         public string TemplateName { get; set; } = "";
         public string TemplatePath { get; set; } = "";
         public string Printer { get; set; } = "";
@@ -23,6 +26,7 @@ namespace BarTenderPrinter
         public string LocalDataStoragePath { get; set; } = "";
         public string LocalDataColumnName { get; set; } = "";
         public string LocalDataTargetField { get; set; } = "";
+        public List<string> TemplateFields { get; set; } = new List<string>();
         public List<string> LocalData { get; set; } = new List<string>();
         public List<DataSourceItem> DataSources { get; set; } = new List<DataSourceItem>();
     }
@@ -45,8 +49,8 @@ namespace BarTenderPrinter
 
         public void Save(TemplateSettings settings)
         {
-            var key = GetKey(settings.TemplateName, settings.TemplatePath);
-            var snapshot = _settings.Values.Where(item => !string.Equals(GetKey(item.TemplateName, item.TemplatePath), key, StringComparison.OrdinalIgnoreCase)).ToList();
+            var key = GetKey(settings);
+            var snapshot = _settings.Values.Where(item => !string.Equals(GetKey(item), key, StringComparison.OrdinalIgnoreCase)).ToList();
             snapshot.Add(settings);
             var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
             AtomicFileWriter.WriteAllText(_path, json);
@@ -59,7 +63,7 @@ namespace BarTenderPrinter
             try
             {
                 var items = JsonSerializer.Deserialize<List<TemplateSettings>>(File.ReadAllText(_path)) ?? new List<TemplateSettings>();
-                foreach (var item in items) _settings[GetKey(item.TemplateName, item.TemplatePath)] = item;
+                foreach (var item in items) _settings[GetKey(item)] = item;
             }
             catch (Exception ex)
             {
@@ -69,7 +73,7 @@ namespace BarTenderPrinter
                 try
                 {
                     var items = JsonSerializer.Deserialize<List<TemplateSettings>>(File.ReadAllText(backupPath)) ?? new List<TemplateSettings>();
-                    foreach (var item in items) _settings[GetKey(item.TemplateName, item.TemplatePath)] = item;
+                    foreach (var item in items) _settings[GetKey(item)] = item;
                 }
                 catch (Exception backupEx) { LoggerService.Error("加载模板设置备份失败", backupEx); }
             }
@@ -80,7 +84,15 @@ namespace BarTenderPrinter
             string normalizedPath;
             try { normalizedPath = Path.GetFullPath(templatePath ?? "").TrimEnd(Path.DirectorySeparatorChar); }
             catch { normalizedPath = (templatePath ?? "").Trim(); }
-            return $"{templateName?.Trim()}|{normalizedPath}";
+            return $"GlobalTemplate||{templateName?.Trim()}|{normalizedPath}";
+        }
+
+        private static string GetKey(TemplateSettings settings)
+        {
+            string normalizedPath;
+            try { normalizedPath = Path.GetFullPath(settings?.TemplatePath ?? "").TrimEnd(Path.DirectorySeparatorChar); }
+            catch { normalizedPath = (settings?.TemplatePath ?? "").Trim(); }
+            return $"{settings?.Scope?.Trim()}|{settings?.OrderId?.Trim()}|{settings?.TemplateId?.Trim()}|{settings?.TemplateName?.Trim()}|{normalizedPath}";
         }
     }
 }

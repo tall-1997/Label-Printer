@@ -10,6 +10,7 @@ namespace BarTenderPrinter
     public class PackagingOrder
     {
         public int SchemaVersion { get; set; } = 2;
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
         public string Customer { get; set; } = "";
         public string ProductModel { get; set; } = "";
         public string Color { get; set; } = "";
@@ -19,6 +20,7 @@ namespace BarTenderPrinter
         public List<OrderTemplate> Templates { get; set; } = new List<OrderTemplate>();
 
         public string DisplayName => $"{Customer} / {ProductModel} / {Color} / {OrderNumber}";
+        public string OrderId => Id;
         public string Key => BuildKey(Customer, ProductModel, Color, OrderNumber);
 
         public static string BuildKey(string customer, string productModel, string color, string orderNumber)
@@ -44,6 +46,7 @@ namespace BarTenderPrinter
         public long SourceLastWriteTimeUtcTicks { get; set; }
         public long SourceLength { get; set; }
         public string SourceSha256 { get; set; } = "";
+        public List<string> FieldSnapshot { get; set; } = new List<string>();
         public TemplateSettings Settings { get; set; } = new TemplateSettings();
 
         public string DisplayName => Path.GetFileName(SourcePath);
@@ -156,6 +159,8 @@ namespace BarTenderPrinter
                 var migrated = false;
                 foreach (var item in items.Where(item => item != null))
                 {
+                    item.Id = string.IsNullOrWhiteSpace(item.Id) ? Guid.NewGuid().ToString("N") : item.Id;
+                    item.SchemaVersion = Math.Max(item.SchemaVersion, 2);
                     item.Templates ??= new List<OrderTemplate>();
                     if (item.Templates.Count == 0 && !string.IsNullOrWhiteSpace(item.TemplatePath))
                     {
@@ -174,7 +179,12 @@ namespace BarTenderPrinter
                     foreach (var template in item.Templates)
                     {
                         template.Id = string.IsNullOrWhiteSpace(template.Id) ? Guid.NewGuid().ToString("N") : template.Id;
+                        template.SchemaVersion = Math.Max(template.SchemaVersion, 2);
+                        template.FieldSnapshot ??= new List<string>();
                         template.Settings ??= new TemplateSettings();
+                        template.Settings.OrderId = item.Id;
+                        template.Settings.TemplateId = template.Id;
+                        template.Settings.Scope = "OrderTemplate";
                         if (!string.IsNullOrWhiteSpace(template.SourcePath))
                         {
                             try { template.SourcePath = Path.GetFullPath(template.SourcePath); }

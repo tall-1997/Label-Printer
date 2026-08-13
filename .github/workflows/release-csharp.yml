@@ -59,13 +59,13 @@ jobs:
             ### 更新内容
 
             #### 修复与优化
-            - 新增 AtomicFileWriter，统一配置、历史、订单和校验数据的原子写入
-            - 新增 TemplateSessionState，统一模板路径、数据源、校验、长度和打印配置状态
-            - 新增 ValidationService，集中长度、本地完整匹配和模板字段完整性校验逻辑
-            - 新增 HistoryPresenter，拆出历史表格展示数据构建逻辑
-            - 新增 DialogService、IBarTenderService 和 IHistoryRepository，为后续测试替换提供接口边界
-            - 新增 PrintWorkflow 和 OrderEditorController 基础协调类，降低 MainForm 后续拆分风险
-            - 为订单、模板、模板设置和历史记录增加 schemaVersion 字段，支持后续数据迁移
+            - 订单数据新增稳定 OrderId，四元组 Key 继续兼容现有查找逻辑
+            - 历史记录保存 OrderId 和 TemplateId，支持精准追溯和稳定防重
+            - 历史主存储迁移为 JSONL，旧 CSV 历史自动兼容读取并迁移
+            - 模板设置新增 Scope、OrderId 和 TemplateId，区分订单模板和普通模板设置
+            - 历史记录保存模板字段快照，支持模板变化追溯和导出
+            - 历史导出增强 OrderId 与模板字段快照列
+            - 持久化模型补齐 schemaVersion，支持后续迁移升级
 
             ### 系统要求
             - Windows 10/11 x64

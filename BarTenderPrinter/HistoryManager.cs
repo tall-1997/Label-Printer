@@ -15,6 +15,7 @@ namespace BarTenderPrinter
         public string TemplateName { get; set; }
         public string TemplatePath { get; set; }
         public string TemplateId { get; set; }
+        public string OrderId { get; set; }
         public Dictionary<string, string> FieldValues { get; set; }
         public string PrintTime { get; set; }
         public string Status { get; set; }
@@ -25,6 +26,7 @@ namespace BarTenderPrinter
         public string TemplateVersion { get; set; }
         public string DiagnosticDetails { get; set; }
         public string OrderName { get; set; }
+        public List<string> TemplateFields { get; set; }
 
         public PrintRecord(string imei, string printTime, string status)
         {
@@ -33,6 +35,7 @@ namespace BarTenderPrinter
             TemplateName = "";
             TemplatePath = "";
             TemplateId = "";
+            OrderId = "";
             FieldValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             PrintTime = printTime ?? "";
             Status = status ?? "PASS";
@@ -43,6 +46,7 @@ namespace BarTenderPrinter
             TemplateVersion = "";
             DiagnosticDetails = "";
             OrderName = "";
+            TemplateFields = new List<string>();
         }
 
         public PrintRecord(string templateName, string templatePath, Dictionary<string, string> fieldValues,
@@ -52,6 +56,7 @@ namespace BarTenderPrinter
             TemplateName = templateName ?? "";
             TemplatePath = templatePath ?? "";
             TemplateId = "";
+            OrderId = "";
             FieldValues = new Dictionary<string, string>(fieldValues ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
             Imei = string.Join("|", FieldValues.Values);
             PrintTime = printTime ?? "";
@@ -63,6 +68,7 @@ namespace BarTenderPrinter
             TemplateVersion = "";
             DiagnosticDetails = "";
             OrderName = "";
+            TemplateFields = new List<string>();
         }
 
         public PrintRecord(string templateName, string templatePath, string templateId, Dictionary<string, string> fieldValues,
@@ -76,6 +82,7 @@ namespace BarTenderPrinter
     public class HistoryManager : IHistoryRepository
     {
         private readonly string _recordsFile;
+        private readonly string _recordsJsonlFile;
         private readonly Dictionary<string, HashSet<string>> _templateValueIndexes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         private bool _usesCurrentFormat;
         private const string Header = "record_id,template_name,template_path,template_id,field_values,print_time,status,printer,copies,operator,reprint_reason,template_version,diagnostic_details,order_name";
@@ -87,6 +94,7 @@ namespace BarTenderPrinter
         {
             AppPaths.Initialize();
             _recordsFile = AppPaths.RecordsFile;
+            _recordsJsonlFile = AppPaths.RecordsJsonlFile;
             Records = new List<PrintRecord>();
         }
 
@@ -94,6 +102,11 @@ namespace BarTenderPrinter
         {
             Records.Clear();
             _templateValueIndexes.Clear();
+            if (File.Exists(_recordsJsonlFile))
+            {
+                LoadJsonl();
+                return;
+            }
             if (!File.Exists(_recordsFile)) return;
             try
             {
@@ -112,6 +125,7 @@ namespace BarTenderPrinter
                     }
                     LoadRecordLine(line, lineNumber, usesPreviousFormat, true);
                 }
+                if (Records.Count > 0) Save();
             }
             catch (Exception ex)
             {
@@ -158,23 +172,35 @@ namespace BarTenderPrinter
             }
         }
 
+        private void LoadJsonl()
+        {
+            try
+            {
+                foreach (var line in File.ReadLines(_recordsJsonlFile, Encoding.UTF8))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var record = JsonSerializer.Deserialize<PrintRecord>(line);
+                    if (record == null) continue;
+                    record.FieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    record.TemplateFields ??= new List<string>();
+                    Records.Add(record);
+                    IndexRecord(record);
+                }
+                _usesCurrentFormat = true;
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error("加载 JSONL 历史记录失败", ex);
+            }
+        }
+
         public bool Save()
         {
             var tempFile = _recordsFile + ".tmp";
             try
             {
-                var sb = new StringBuilder();
-                sb.AppendLine(Header);
-                foreach (var r in Records)
-                {
-                    sb.AppendLine(string.Join(",", new[]
-                    {
-                        Csv(r.RecordId), Csv(r.TemplateName), Csv(r.TemplatePath), Csv(r.TemplateId), Csv(SerializeFields(r.FieldValues)),
-                        Csv(r.PrintTime), Csv(r.Status), Csv(r.Printer), r.Copies.ToString(),
-                        Csv(r.OperatorName), Csv(r.ReprintReason), Csv(r.TemplateVersion), Csv(r.DiagnosticDetails), Csv(r.OrderName)
-                    }));
-                }
-                AtomicFileWriter.WriteAllText(_recordsFile, sb.ToString(), Encoding.UTF8);
+                var lines = Records.Select(record => JsonSerializer.Serialize(record));
+                AtomicFileWriter.WriteAllLines(_recordsJsonlFile, lines, Encoding.UTF8);
                 _usesCurrentFormat = true;
                 return true;
             }
@@ -205,7 +231,7 @@ namespace BarTenderPrinter
         }
 
         public bool Add(string templateName, string templatePath, string templateId, Dictionary<string, string> fieldValues,
-            string status, string printer, int copies, string operatorName = "", string reprintReason = "", string templateVersion = "", string diagnosticDetails = "", string orderName = "")
+            string status, string printer, int copies, string operatorName = "", string reprintReason = "", string templateVersion = "", string diagnosticDetails = "", string orderName = "", string orderId = "", List<string> templateFields = null)
         {
             var record = new PrintRecord(templateName, templatePath, templateId, fieldValues,
                 DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), status, printer, copies)
@@ -214,7 +240,9 @@ namespace BarTenderPrinter
                 ReprintReason = reprintReason ?? "",
                 TemplateVersion = templateVersion ?? "",
                 DiagnosticDetails = diagnosticDetails ?? "",
-                OrderName = orderName ?? ""
+                OrderName = orderName ?? "",
+                OrderId = orderId ?? "",
+                TemplateFields = templateFields ?? new List<string>()
             };
             Records.Add(record);
             IndexRecord(record);
@@ -340,12 +368,12 @@ namespace BarTenderPrinter
             var filtered = records?.ToList() ?? new List<PrintRecord>();
 
             var sb = new StringBuilder();
-            sb.AppendLine("template_name,template_path,template_id,order_name,field_values,print_time,status,printer,copies,operator,reprint_reason,template_version,diagnostic_details");
+            sb.AppendLine("template_name,template_path,template_id,order_id,order_name,template_fields,field_values,print_time,status,printer,copies,operator,reprint_reason,template_version,diagnostic_details");
             foreach (var r in filtered)
             {
                 var values = string.Join("; ", (r.FieldValues ?? new Dictionary<string, string>()).Select(item => $"{item.Key}={item.Value}"));
                 if (string.IsNullOrEmpty(values)) values = r.Imei;
-                sb.AppendLine(string.Join(",", new[] { Csv(r.TemplateName), Csv(r.TemplatePath), Csv(r.TemplateId), Csv(r.OrderName), Csv(values), Csv(r.PrintTime), Csv(r.Status), Csv(r.Printer), r.Copies.ToString(), Csv(r.OperatorName), Csv(r.ReprintReason), Csv(r.TemplateVersion), Csv(r.DiagnosticDetails) }));
+                sb.AppendLine(string.Join(",", new[] { Csv(r.TemplateName), Csv(r.TemplatePath), Csv(r.TemplateId), Csv(r.OrderId), Csv(r.OrderName), Csv(string.Join(";", r.TemplateFields ?? new List<string>())), Csv(values), Csv(r.PrintTime), Csv(r.Status), Csv(r.Printer), r.Copies.ToString(), Csv(r.OperatorName), Csv(r.ReprintReason), Csv(r.TemplateVersion), Csv(r.DiagnosticDetails) }));
             }
                 AtomicFileWriter.WriteAllText(path, sb.ToString(), Encoding.UTF8);
         }
@@ -390,7 +418,7 @@ namespace BarTenderPrinter
             }
             try
             {
-                File.AppendAllText(_recordsFile, ToCsvLine(record) + Environment.NewLine, Encoding.UTF8);
+                File.AppendAllText(_recordsJsonlFile, JsonSerializer.Serialize(record) + Environment.NewLine, Encoding.UTF8);
                 return true;
             }
             catch (Exception ex)
