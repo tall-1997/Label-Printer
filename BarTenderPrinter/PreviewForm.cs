@@ -16,6 +16,8 @@ namespace BarTenderPrinter
 
         public PreviewForm()
         {
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             Text = "标签预览";
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
@@ -66,6 +68,9 @@ namespace BarTenderPrinter
             imagePanel.Controls.Add(_pictureBox);
             Controls.Add(imagePanel);
             Controls.Add(header);
+            MiuiTheme.ApplyTheme(this);
+            MiuiTheme.StyleButton(closeButton);
+            closeButton.FlatAppearance.BorderSize = 0;
             FormClosed += (sender, args) =>
             {
                 ReplaceImage(null);

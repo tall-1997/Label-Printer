@@ -298,6 +298,22 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
+        public void SvgIconRendererCreatesRequestedTransparentBitmap()
+        {
+            foreach (var iconType in System.Enum.GetValues<AppIcon>())
+            {
+                foreach (var size in new[] { 16, 24, 32 })
+                {
+                    using var icon = SvgIconRenderer.Render(iconType, MiuiTheme.Primary, size);
+                    Assert.Equal(size, icon.Width);
+                    Assert.Equal(size, icon.Height);
+                    Assert.Equal(0, icon.GetPixel(0, 0).A);
+                    Assert.Contains(Enumerable.Range(0, size), x => Enumerable.Range(0, size).Any(y => icon.GetPixel(x, y).A > 0));
+                }
+            }
+        }
+
+        [Fact]
         public void PrintWorkflowBuildsTemplateVersion()
         {
             var workflow = new PrintWorkflow();

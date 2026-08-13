@@ -15,15 +15,16 @@ namespace BarTenderPrinter
             this.btnExportLog = new System.Windows.Forms.Button();
             this.titlePanel.SuspendLayout();
             this.titlePanel.Dock = System.Windows.Forms.DockStyle.Top;
-            this.titlePanel.Height = 38;
-            this.titlePanel.Padding = new System.Windows.Forms.Padding(10, 5, 10, 5);
-            this.titleLabel.Text = "BarTender 标签打印工具 v5.7.65";
+            this.titlePanel.Height = 60;
+            this.titlePanel.Padding = new System.Windows.Forms.Padding(16, 8, 16, 8);
+            this.titlePanel.BackColor = System.Drawing.Color.White;
+            this.titleLabel.Text = "BarTender Printer";
             this.titleLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 12F, System.Drawing.FontStyle.Bold);
             this.titleLabel.AutoSize = true;
-            this.titleLabel.Location = new System.Drawing.Point(10, 7);
+            this.titleLabel.Location = new System.Drawing.Point(58, 9);
             this.btnExportLog.Text = "导出日志";
             this.btnExportLog.Dock = System.Windows.Forms.DockStyle.Right;
-            this.btnExportLog.Width = 75;
+            this.btnExportLog.Width = 112;
             this.btnExportLog.Click += new System.EventHandler(this.btnExportLog_Click);
             this.titlePanel.Controls.Add(this.titleLabel);
             this.titlePanel.Controls.Add(this.btnExportLog);
@@ -147,7 +148,13 @@ namespace BarTenderPrinter
             // === Status Strip ===
             this.statusStrip = new System.Windows.Forms.StatusStrip();
             this.lblStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "就绪" };
-            this.statusStrip.Items.Add(this.lblStatus);
+            this.lblStatus.Spring = true;
+            this.lblStatus.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            this.lblConnection = new System.Windows.Forms.ToolStripStatusLabel { Text = "● 正在连接" };
+            this.lblTodayStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "今日 0" };
+            this.lblTotalStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "累计 0" };
+            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.69" };
+            this.statusStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] { this.lblConnection, this.lblStatus, this.lblTodayStatus, this.lblTotalStatus, this.lblVersion });
             MiuiTheme.StyleStatusStrip(this.statusStrip);
 
             // === Main Form ===
@@ -183,7 +190,7 @@ namespace BarTenderPrinter
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.MinimumSize = new System.Drawing.Size(1080, 900);
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "BarTender 标签打印工具 v5.7.65";
+            this.Text = "BarTender Printer";
             this.ResumeLayout(false); this.PerformLayout();
         }
 
@@ -218,6 +225,6 @@ namespace BarTenderPrinter
         private System.Windows.Forms.TextBox txtLog;
         private System.Windows.Forms.Button btnClearLog;
         private System.Windows.Forms.StatusStrip statusStrip;
-        private System.Windows.Forms.ToolStripStatusLabel lblStatus;
+        private System.Windows.Forms.ToolStripStatusLabel lblStatus, lblConnection, lblTodayStatus, lblTotalStatus, lblVersion;
     }
 }
