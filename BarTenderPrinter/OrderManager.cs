@@ -22,7 +22,13 @@ namespace BarTenderPrinter
 
         public static string BuildKey(string customer, string productModel, string color, string orderNumber)
         {
-            return Normalize(orderNumber);
+            return string.Join("|", new[]
+            {
+                Normalize(customer),
+                Normalize(productModel),
+                Normalize(color),
+                Normalize(orderNumber)
+            });
         }
 
         private static string Normalize(string value) => (value ?? "").Trim();
@@ -67,11 +73,12 @@ namespace BarTenderPrinter
             return _orders.Any(order => string.Equals(order.Key, key, StringComparison.OrdinalIgnoreCase));
         }
 
-        public void Add(PackagingOrder order)
+        public void Add(PackagingOrder order, string previousKey = null)
         {
             var key = order.Key;
             var updatedOrders = _orders
-                .Where(item => !string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase))
+                .Where(item => !string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase) &&
+                               (string.IsNullOrEmpty(previousKey) || !string.Equals(item.Key, previousKey, StringComparison.OrdinalIgnoreCase)))
                 .ToList();
             updatedOrders.Add(order);
             updatedOrders.Sort((left, right) => string.Compare(left.DisplayName, right.DisplayName, StringComparison.OrdinalIgnoreCase));

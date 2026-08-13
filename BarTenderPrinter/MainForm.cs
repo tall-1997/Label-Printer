@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.45";
+        private readonly string _version = "v5.7.46";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -657,6 +657,55 @@ namespace BarTenderPrinter
             MessageBox.Show(this, "新版模板的数据源已变化，系统已保留同名字段设置并添加新字段，请在订单管理页面核对。", "模板数据源已更新",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return true;
+        }
+
+        private bool ValidateTemplateFieldCoverage(string templatePath, IEnumerable<DataSourceItem> configuredSources, Dictionary<string, string> fieldValues, string title)
+        {
+            var templateFields = GetTemplateFieldsForValidation(templatePath, title);
+            if (templateFields == null) return false;
+
+            var configured = (configuredSources ?? new List<DataSourceItem>()).ToList();
+            var enabled = configured.Where(source => source.Enabled).ToList();
+            var configuredFields = new HashSet<string>(configured.Select(source => source.Field).Where(field => !string.IsNullOrWhiteSpace(field)), StringComparer.OrdinalIgnoreCase);
+            var enabledFields = new HashSet<string>(enabled.Select(source => source.Field).Where(field => !string.IsNullOrWhiteSpace(field)), StringComparer.OrdinalIgnoreCase);
+            fieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var valueFields = new HashSet<string>(fieldValues.Keys, StringComparer.OrdinalIgnoreCase);
+
+            var missingConfig = templateFields.Where(field => !configuredFields.Contains(field)).ToList();
+            var disabledFields = templateFields.Where(field => configuredFields.Contains(field) && !enabledFields.Contains(field)).ToList();
+            var missingValues = templateFields.Where(field => !valueFields.Contains(field) || !fieldValues.TryGetValue(field, out var value) || string.IsNullOrWhiteSpace(value)).ToList();
+            var extraEnabled = enabledFields.Where(field => !templateFields.Contains(field, StringComparer.OrdinalIgnoreCase)).ToList();
+
+            if (missingConfig.Count == 0 && disabledFields.Count == 0 && missingValues.Count == 0 && extraEnabled.Count == 0) return true;
+
+            var sb = new StringBuilder();
+            if (missingConfig.Count > 0) sb.AppendLine($"模板字段未配置: {string.Join(", ", missingConfig)}");
+            if (disabledFields.Count > 0) sb.AppendLine($"模板字段已配置但未启用: {string.Join(", ", disabledFields)}");
+            if (missingValues.Count > 0) sb.AppendLine($"模板字段缺少打印值: {string.Join(", ", missingValues)}");
+            if (extraEnabled.Count > 0) sb.AppendLine($"配置中存在模板没有的字段: {string.Join(", ", extraEnabled)}");
+            MessageBox.Show(this, sb.ToString().Trim(), title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            AddLog($"模板字段完整性校验失败: {sb.ToString().Replace(Environment.NewLine, " ")}", "WARNING");
+            return false;
+        }
+
+        private List<string> GetTemplateFieldsForValidation(string templatePath, string title)
+        {
+            if (!_btService.IsConnected)
+            {
+                MessageBox.Show(this, "BarTender 未连接，无法校验模板完整数据源集合。", title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return null;
+            }
+            var fields = _btService.GetTemplateDataSources(templatePath)
+                .Where(field => !string.IsNullOrWhiteSpace(field))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(field => field, NaturalStringComparer.Instance)
+                .ToList();
+            if (fields.Count == 0)
+            {
+                MessageBox.Show(this, "未读取到模板命名数据源，已阻止打印。", title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return null;
+            }
+            return fields;
         }
 
         private void ShowAddOrderPage()
@@ -1633,8 +1682,10 @@ namespace BarTenderPrinter
             { MessageBox.Show(this, "客户、机型、颜色、订单号和模板都不能为空。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (_orderTemplateDrafts.Any(template => string.IsNullOrWhiteSpace(template.SourcePath) || !File.Exists(template.SourcePath)))
             { MessageBox.Show(this, "模板文件不存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            if (_editingOrder == null && _orders.Contains(input.Customer, input.ProductModel, input.Color, input.OrderNumber))
-            { MessageBox.Show(this, "订单号已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            var previousOrderKey = _editingOrder?.Key;
+            var targetKey = PackagingOrder.BuildKey(input.Customer, input.ProductModel, input.Color, input.OrderNumber);
+            if (!string.Equals(previousOrderKey, targetKey, StringComparison.OrdinalIgnoreCase) && _orders.Contains(input.Customer, input.ProductModel, input.Color, input.OrderNumber))
+            { MessageBox.Show(this, "相同客户、机型、颜色和订单号的订单已存在。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (_orderTemplateDrafts.Any(template => template.Settings?.DataSources == null || !template.Settings.DataSources.Any(source => source.Enabled)))
             { MessageBox.Show(this, "请至少选择一个数据源。", "添加订单", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             var missingLockValue = _orderTemplateDrafts
@@ -1666,7 +1717,7 @@ namespace BarTenderPrinter
                     }
                     savedOrder.Templates.Add(template);
                 }
-                _orders.Add(savedOrder);
+                _orders.Add(savedOrder, previousOrderKey);
             }
             catch (Exception ex)
             {
@@ -3026,14 +3077,15 @@ namespace BarTenderPrinter
                 lblLocalData.Text = text;
         }
 
-        private bool ValidateLocalData(Dictionary<string, string> fieldValues)
+        private bool ValidateLocalData(Dictionary<string, string> fieldValues, HashSet<string> localData = null)
         {
-            if (!_useLocalDataValidation || _localData.Count == 0) return true;
+            localData ??= _localData;
+            if (localData.Count == 0) return true;
             var notInLocal = new List<string>();
             foreach (var kv in fieldValues)
             {
                 if (string.IsNullOrEmpty(kv.Value)) continue;
-                if (!_localData.Contains(kv.Value))
+                if (!localData.Contains(kv.Value))
                     notInLocal.Add($"{kv.Key}={kv.Value}");
             }
             if (notInLocal.Count > 0)
@@ -3084,7 +3136,7 @@ namespace BarTenderPrinter
             var enabled = _dataSources.Where(d => d.Enabled).ToList();
             if (enabled.Count == 0) { MessageBox.Show(this, "请配置数据源"); return; }
 
-            var fieldValues = new Dictionary<string, string>();
+            var fieldValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < enabled.Count; i++)
             {
                 var val = _inputTextBoxes[i]?.Text?.Trim() ?? "";
@@ -3094,6 +3146,8 @@ namespace BarTenderPrinter
             }
 
             if (!ValidateInputValues(enabled, fieldValues)) return;
+
+            if (!ValidateTemplateFieldCoverage(_selectedTemplatePath, _dataSources, fieldValues, "打印字段完整性")) return;
 
             // Local data validation - only if enabled
             if (_useLocalDataValidation)
@@ -3134,27 +3188,22 @@ namespace BarTenderPrinter
                             {
                                 SetStatus("打印完成，历史保存失败");
                                 AddLog("打印已完成，但历史记录保存失败；本次数据不会进入重复校验索引。", "ERROR");
-                                RestoreInputReadOnlyStates(readOnlyStates);
+                                var shouldAdvance = ConfirmPrintedWithoutHistoryAdvance();
+                                if (shouldAdvance)
+                                {
+                                    AdvanceSuccessfulPrintState(enabled);
+                                    AddLog("操作员确认实物已出纸，已推进待打印序列。", "WARNING");
+                                }
+                                else
+                                {
+                                    RestoreInputReadOnlyStates(readOnlyStates);
+                                    AddLog("操作员选择保留当前输入状态，等待人工处理。", "WARNING");
+                                }
                                 refreshHistoryAndStats = false;
                                 return;
                             }
 
-                            for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
-                            {
-                                if (enabled[i].LockAfterInput && !IsInputLocked(enabled[i]))
-                                {
-                                    enabled[i].LockedValue = _inputTextBoxes[i].Text.Trim();
-                                    if (enabled[i].AutoIncrement)
-                                        enabled[i].AutoIncrementLocked = true;
-                                    else
-                                        enabled[i].IsLocked = true;
-                                }
-                            }
-
-                            AutoIncrementFields(enabled);
-                            ClearNonAutoIncrementInputs(enabled);
-                            SaveConfig();
-                            SaveCurrentTemplateSettings();
+                            AdvanceSuccessfulPrintState(enabled);
                         }
                         else
                         {
@@ -3178,19 +3227,21 @@ namespace BarTenderPrinter
             });
         }
 
-        private bool ValidateInputValues(List<DataSourceItem> enabled, Dictionary<string, string> fieldValues, bool checkDuplicates = true)
+        private bool ValidateInputValues(List<DataSourceItem> enabled, Dictionary<string, string> fieldValues, bool checkDuplicates = true, TemplateSettings settings = null)
         {
-            if (_lengthValidationEnabled)
+            var lengthValidationEnabled = settings?.LengthValidation ?? _lengthValidationEnabled;
+            var globalExpectedLength = settings?.GlobalExpectedLength ?? _globalExpectedLength;
+            if (lengthValidationEnabled)
             {
                 for (int i = 0; i < enabled.Count; i++)
                 {
                     fieldValues.TryGetValue(enabled[i].Field, out var value);
                     value ??= "";
-                    var expectedLength = GetExpectedLength(enabled[i]);
+                    var expectedLength = enabled[i].ExpectedLength > 0 ? enabled[i].ExpectedLength : globalExpectedLength;
                     if (expectedLength > 0 && value.Length != expectedLength)
                     {
                         MessageBox.Show(this, $"\"{enabled[i].Name}\" 必须为 {expectedLength} 位，当前为 {value.Length} 位。", "长度校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        if (!_inputTextBoxes[i].ReadOnly)
+                        if (settings == null && i < _inputTextBoxes.Length && !_inputTextBoxes[i].ReadOnly)
                         {
                             _inputTextBoxes[i].Text = "";
                             _inputTextBoxes[i].Focus();
@@ -3200,7 +3251,8 @@ namespace BarTenderPrinter
                 }
             }
 
-            if (!_duplicateValidationEnabled || !checkDuplicates) return true;
+            var duplicateValidationEnabled = settings?.DuplicateValidation ?? _duplicateValidationEnabled;
+            if (!duplicateValidationEnabled || !checkDuplicates) return true;
             var seen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < enabled.Count; i++)
             {
@@ -3209,10 +3261,12 @@ namespace BarTenderPrinter
                 if (string.IsNullOrWhiteSpace(value)) continue;
                 var isEditable = !enabled[i].IsLocked && !enabled[i].AutoIncrementLocked;
                 var shouldCheckHistory = isEditable || enabled[i].AutoIncrement || enabled[i].AutoIncrementLocked;
-                if (seen.ContainsKey(value) || shouldCheckHistory && _history.ContainsAnyValue(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, value))
+                var templatePath = settings?.TemplatePath ?? _selectedTemplatePath;
+                var templateName = settings?.TemplateName ?? Path.GetFileName(templatePath);
+                if (seen.ContainsKey(value) || shouldCheckHistory && _history.ContainsAnyValue(templateName, templatePath, value))
                 {
                     MessageBox.Show(this, $"重复数据：{value}\n请重新输入 {enabled[i].Name}。", "数据校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    if (isEditable)
+                    if (settings == null && isEditable && i < _inputTextBoxes.Length)
                     {
                         _inputTextBoxes[i].Text = "";
                         _inputTextBoxes[i].Focus();
@@ -3224,6 +3278,37 @@ namespace BarTenderPrinter
                 seen[value] = i;
             }
             return true;
+        }
+
+        private void AdvanceSuccessfulPrintState(List<DataSourceItem> enabled)
+        {
+            for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
+            {
+                if (enabled[i].LockAfterInput && !IsInputLocked(enabled[i]))
+                {
+                    enabled[i].LockedValue = _inputTextBoxes[i].Text.Trim();
+                    if (enabled[i].AutoIncrement)
+                        enabled[i].AutoIncrementLocked = true;
+                    else
+                        enabled[i].IsLocked = true;
+                }
+            }
+
+            AutoIncrementFields(enabled);
+            ClearNonAutoIncrementInputs(enabled);
+            SaveConfig();
+            SaveCurrentTemplateSettings();
+        }
+
+        private bool ConfirmPrintedWithoutHistoryAdvance()
+        {
+            var choice = MessageBox.Show(this,
+                "BarTender 已返回打印成功，但历史记录保存失败。\n\n如果标签已经出纸，选择“是”推进增降序和锁定状态；如果需要保留当前输入等待人工处理，选择“否”。",
+                "历史保存失败",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            return choice == DialogResult.Yes;
         }
 
         #endregion
@@ -3408,12 +3493,15 @@ namespace BarTenderPrinter
             if (string.IsNullOrEmpty(printer) || !cmbPrinter.Items.Contains(printer))
             { MessageBox.Show(this, $"本次补打印机当前不可用：{printer}"); return; }
             var values = new Dictionary<string, string>(record.FieldValues, StringComparer.OrdinalIgnoreCase);
-            var enabled = _dataSources.Where(source => source.Enabled).ToList();
-            if (enabled.Count > 0 && string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
-            {
-                if (!ValidateInputValues(enabled, values, false)) return;
-                if (_useLocalDataValidation && !ValidateLocalData(values)) return;
-            }
+            if (!TryGetHistoryTemplateSettings(record, out var settings, out var warning)) return;
+            var configuredSources = settings?.DataSources ?? new List<DataSourceItem>();
+            var enabled = configuredSources.Where(source => source.Enabled).ToList();
+            if (enabled.Count == 0)
+            { MessageBox.Show(this, "历史模板缺少已启用的数据源设置，无法补打印。", "补打印校验", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (!ValidateTemplateFieldCoverage(record.TemplatePath, configuredSources, values, "补打印字段完整性")) return;
+            if (!ValidateInputValues(enabled, values, false, settings)) return;
+            if (settings.InputValidation && !ValidateLocalData(values, GetTemplateLocalData(settings))) return;
+            if (!string.IsNullOrEmpty(warning) && MessageBox.Show(this, warning + "\n\n是否继续补打印？", "补打印设置确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
             SetPrintEnvironmentEnabled(false);
             SetStatus("补打印中...");
             Task.Run(() =>
@@ -3445,6 +3533,29 @@ namespace BarTenderPrinter
                     }
                 });
             });
+        }
+
+        private bool TryGetHistoryTemplateSettings(PrintRecord record, out TemplateSettings settings, out string warning)
+        {
+            warning = "";
+            settings = null;
+            var orderTemplate = _orders.Orders
+                .SelectMany(order => order.Templates ?? new List<OrderTemplate>())
+                .FirstOrDefault(template => string.Equals(template.SourcePath, record.TemplatePath, StringComparison.OrdinalIgnoreCase));
+            if (orderTemplate?.Settings != null)
+            {
+                settings = orderTemplate.Settings;
+                return true;
+            }
+            if (_templateSettings.TryGet(record.TemplateName, record.TemplatePath, out settings)) return true;
+            if (string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase) && _dataSources.Any(source => source.Enabled))
+            {
+                settings = BuildTemplateSettings(record.TemplatePath, _dataSources);
+                warning = "未找到历史模板保存设置，将使用当前页面设置进行补打印校验。";
+                return true;
+            }
+            MessageBox.Show(this, "未找到历史模板保存设置，无法确认长度、本地完整匹配和字段启用规则。", "补打印校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
         }
 
         private void SetPrintEnvironmentEnabled(bool enabled)

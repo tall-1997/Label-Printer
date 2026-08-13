@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
@@ -325,8 +326,17 @@ namespace BarTenderPrinter
                 btFormat = _btApp.Formats.Open(templatePath, false, "");
                 LoggerService.Info("模板打开成功");
 
+                var templateFields = GetNamedSubStringNames(btFormat);
+                var providedFields = new HashSet<string>((fieldValues ?? new Dictionary<string, string>()).Keys, StringComparer.OrdinalIgnoreCase);
+                var notProvided = templateFields.Where(field => !providedFields.Contains(field)).ToList();
+                if (notProvided.Count > 0)
+                {
+                    CloseFormat(btFormat);
+                    return new PrintResult(false, $"模板字段未配置打印值: {string.Join(", ", notProvided)}");
+                }
+
                 var missing = new List<string>();
-                foreach (var kv in fieldValues)
+                foreach (var kv in fieldValues ?? new Dictionary<string, string>())
                 {
                     try
                     {
@@ -373,6 +383,29 @@ namespace BarTenderPrinter
                 CloseFormat(btFormat);
                 throw;
             }
+        }
+
+        private static List<string> GetNamedSubStringNames(dynamic btFormat)
+        {
+            var result = new List<string>();
+            try
+            {
+                var subStrings = btFormat.NamedSubStrings;
+                var count = (int)subStrings.Count;
+                for (int i = 1; i <= count; i++)
+                {
+                    try
+                    {
+                        var sub = subStrings.Item(i);
+                        var name = (string)sub.Name;
+                        if (!string.IsNullOrWhiteSpace(name) && !result.Contains(name, StringComparer.OrdinalIgnoreCase))
+                            result.Add(name);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return result;
         }
 
         private void EnsureOperationInterval()
