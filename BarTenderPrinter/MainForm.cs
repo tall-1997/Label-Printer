@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.59";
+        private readonly string _version = "v5.7.60";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -105,7 +105,6 @@ namespace BarTenderPrinter
         private readonly UserSession _session = new UserSession();
         private readonly AccountManager _accountManager = new AccountManager();
         private int _historyPageIndex;
-        private string _pendingReprintReason = "";
         private const int HistoryPageSize = 200;
 
         public MainForm(string startupTemplatePath = null)
@@ -3502,62 +3501,6 @@ namespace BarTenderPrinter
             return _printWorkflow.BuildTemplateVersion(template);
         }
 
-        private bool ShowPrintPreviewConfirm(string templateName, string templatePath, Dictionary<string, string> fieldValues, string printer, int copies, string operatorName, string templateVersion)
-        {
-            using (var form = new Form())
-            {
-                form.Text = "打印前确认";
-                form.Size = new Size(560, 520);
-                form.FormBorderStyle = FormBorderStyle.FixedDialog;
-                form.StartPosition = FormStartPosition.CenterParent;
-                form.MaximizeBox = false;
-                form.MinimizeBox = false;
-                var summary = new Label
-                {
-                    Text = $"订单: {_activeOrder?.DisplayName ?? "未绑定订单"}\r\n模板: {templateName}\r\n打印机: {printer}\r\n份数: {copies}\r\n操作员: {operatorName}\r\n模板版本: {templateVersion}",
-                    Location = new Point(12, 12),
-                    Size = new Size(520, 115),
-                    AutoEllipsis = true
-                };
-                var details = new TextBox
-                {
-                    Text = string.Join(Environment.NewLine, fieldValues.Select(item => $"{item.Key}: {item.Value}")),
-                    Location = new Point(12, 135),
-                    Size = new Size(520, 290),
-                    Multiline = true,
-                    ReadOnly = true,
-                    ScrollBars = ScrollBars.Vertical
-                };
-                var ok = new Button { Text = "确认打印", Location = new Point(350, 440), Size = new Size(85, 30), DialogResult = DialogResult.OK };
-                var preview = new Button { Text = "版面预览", Location = new Point(250, 440), Size = new Size(85, 30) };
-                preview.Click += (s, e) => ShowTemplateImagePreview(templatePath, fieldValues);
-                var cancel = new Button { Text = "取消", Location = new Point(450, 440), Size = new Size(75, 30), DialogResult = DialogResult.Cancel };
-                form.Controls.AddRange(new Control[] { summary, details, preview, ok, cancel });
-                form.AcceptButton = ok;
-                form.CancelButton = cancel;
-                return form.ShowDialog(this) == DialogResult.OK;
-            }
-        }
-
-        private void ShowTemplateImagePreview(string templatePath, Dictionary<string, string> fieldValues)
-        {
-            var imagePath = _btService.ExportPreviewImage(templatePath, fieldValues);
-            if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
-            { _dialogs.ShowWarning(this, "暂时无法导出模板版面预览，请确认 BarTender 支持预览导出。", "版面预览"); return; }
-            using (var form = new Form())
-            using (var picture = new PictureBox())
-            {
-                form.Text = "版面预览";
-                form.Size = new Size(760, 560);
-                form.StartPosition = FormStartPosition.CenterParent;
-                picture.Dock = DockStyle.Fill;
-                picture.SizeMode = PictureBoxSizeMode.Zoom;
-                picture.Image = Image.FromFile(imagePath);
-                form.Controls.Add(picture);
-                form.ShowDialog(this);
-            }
-        }
-
         private void DoPrint()
         {
             if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath))
@@ -3598,7 +3541,6 @@ namespace BarTenderPrinter
             var templateName = Path.GetFileName(templatePath);
             var templateVersion = GetTemplateVersion(_activeOrderTemplate);
             var operatorName = GetOperatorName();
-            if (!ShowPrintPreviewConfirm(templateName, templatePath, fieldValues, printer, copies, operatorName, templateVersion)) return;
             var readOnlyStates = _inputTextBoxes.Select(input => input?.ReadOnly ?? false).ToArray();
             SetStatus("打印中..."); SetInputsReadOnly(true); SetPrintEnvironmentEnabled(false);
             AddLog($"打印: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
@@ -3886,7 +3828,7 @@ namespace BarTenderPrinter
             using (var form = new Form())
             {
                 form.Text = "确认补打印";
-                form.Size = new Size(520, 480);
+                form.Size = new Size(520, 430);
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.StartPosition = FormStartPosition.CenterParent;
                 form.MaximizeBox = false;
@@ -3925,10 +3867,8 @@ namespace BarTenderPrinter
                 else
                     cmbReprintPrinter.SelectedIndex = 0;
 
-                var lblReason = new Label { Text = "补打印原因：", Location = new Point(12, 335), Size = new Size(110, 22) };
-                var txtReason = new TextBox { Location = new Point(125, 332), Size = new Size(365, 25), MaxLength = 200 };
-                var ok = new Button { Text = "补打印", Location = new Point(325, 390), Size = new Size(75, 28), DialogResult = DialogResult.OK };
-                var cancel = new Button { Text = "取消", Location = new Point(415, 390), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+                var ok = new Button { Text = "补打印", Location = new Point(325, 350), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(415, 350), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
                 ok.Click += (s, e) =>
                 {
                     UpdateSession();
@@ -3938,15 +3878,8 @@ namespace BarTenderPrinter
                         form.DialogResult = DialogResult.None;
                         return;
                     }
-                    if (string.IsNullOrWhiteSpace(txtReason.Text))
-                    {
-                        MessageBox.Show(form, "请填写补打印原因。", "补打印", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        form.DialogResult = DialogResult.None;
-                        return;
-                    }
-                    _pendingReprintReason = txtReason.Text.Trim();
                 };
-                form.Controls.AddRange(new Control[] { lblDetails, txtDetails, lblPrinter, cmbReprintPrinter, lblReason, txtReason, ok, cancel });
+                form.Controls.AddRange(new Control[] { lblDetails, txtDetails, lblPrinter, cmbReprintPrinter, ok, cancel });
                 form.AcceptButton = ok;
                 form.CancelButton = cancel;
 
@@ -3989,13 +3922,13 @@ namespace BarTenderPrinter
                     {
                         historySaved = _printWorkflow.RecordPrintResult(_history, record.TemplateName, record.TemplatePath, record.TemplateId, values,
                             result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies,
-                            GetOperatorName(), _pendingReprintReason, record.TemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
+                            GetOperatorName(), "", record.TemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
                         if (result.Success && historySaved) RestoreAutoIncrementInputsToPendingValues();
                         if (!historySaved)
                             AddLog(result.Success ? "补打印已完成，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
                         else if (result.Success)
                         {
-                            AuditLogger.Append(GetOperatorName(), "Reprint", $"record={record.RecordId};reason={_pendingReprintReason}");
+                            AuditLogger.Append(GetOperatorName(), "Reprint", $"record={record.RecordId}");
                             AddLog("历史记录补打印完成", "SUCCESS");
                         }
                         else
@@ -4126,7 +4059,7 @@ namespace BarTenderPrinter
                 sb.AppendLine($"操作员: {record.OperatorName}");
                 sb.AppendLine($"订单: {record.OrderName}");
                 sb.AppendLine($"订单ID: {record.OrderId}");
-                sb.AppendLine($"补打印原因: {record.ReprintReason}");
+                if (!string.IsNullOrWhiteSpace(record.ReprintReason)) sb.AppendLine($"补打印原因: {record.ReprintReason}");
                 sb.AppendLine($"模板ID: {record.TemplateId}");
                 sb.AppendLine($"模板版本: {record.TemplateVersion}");
                 if (!string.IsNullOrWhiteSpace(record.DiagnosticDetails)) sb.AppendLine($"诊断详情: {record.DiagnosticDetails}");
