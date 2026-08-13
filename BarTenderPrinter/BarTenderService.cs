@@ -287,7 +287,7 @@ namespace BarTenderPrinter
         private PrintResult PrintCore(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
         {
             if (!_connected || _btApp == null)
-                return new PrintResult(false, "BarTender 未连接");
+                return new PrintResult(false, "BarTender 未连接", $"template={templatePath};printer={printer};copies={copies};connected={_connected}");
 
             for (int retry = 0; retry < MaxRetries; retry++)
             {
@@ -314,7 +314,7 @@ namespace BarTenderPrinter
                 }
             }
 
-            return new PrintResult(false, "打印失败：BarTender 持续忙碌，请稍后重试");
+            return new PrintResult(false, "打印失败：BarTender 持续忙碌，请稍后重试", $"template={templatePath};printer={printer};copies={copies};retries={MaxRetries}");
         }
 
         private PrintResult PrintInternal(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
@@ -332,7 +332,7 @@ namespace BarTenderPrinter
                 if (notProvided.Count > 0)
                 {
                     CloseFormat(btFormat);
-                    return new PrintResult(false, $"模板字段未配置打印值: {string.Join(", ", notProvided)}");
+                    return new PrintResult(false, $"模板字段未配置打印值: {string.Join(", ", notProvided)}", $"template={templatePath};printer={printer};copies={copies};missingValues={string.Join("|", notProvided)}");
                 }
 
                 var missing = new List<string>();
@@ -348,28 +348,28 @@ namespace BarTenderPrinter
                 if (missing.Count > 0)
                 {
                     CloseFormat(btFormat);
-                    return new PrintResult(false, $"模板中未找到字段: {string.Join(", ", missing)}");
+                    return new PrintResult(false, $"模板中未找到字段: {string.Join(", ", missing)}", $"template={templatePath};printer={printer};copies={copies};missingFields={string.Join("|", missing)}");
                 }
 
                 try { btFormat.Printer = printer; LoggerService.Info($"打印机: {printer}"); }
                 catch (Exception ex)
                 {
                     CloseFormat(btFormat);
-                    return new PrintResult(false, $"设置打印机失败: {ex.Message}");
+                    return new PrintResult(false, $"设置打印机失败: {ex.Message}", $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
                 }
 
                 try { btFormat.PrintSetup.IdenticalCopiesOfLabel = copies; LoggerService.Info($"份数: {copies}"); }
                 catch (Exception ex)
                 {
                     CloseFormat(btFormat);
-                    return new PrintResult(false, $"设置份数失败: {ex.Message}");
+                    return new PrintResult(false, $"设置份数失败: {ex.Message}", $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
                 }
 
                 object printResult = btFormat.PrintOut(false, true);
                 if (printResult is bool boolResult && !boolResult)
                 {
                     CloseFormat(btFormat);
-                    return new PrintResult(false, "BarTender 打印返回失败");
+                    return new PrintResult(false, "BarTender 打印返回失败", $"template={templatePath};printer={printer};copies={copies};result=false");
                 }
                 LoggerService.Info("PrintOut 完成");
 
@@ -381,7 +381,7 @@ namespace BarTenderPrinter
             {
                 LoggerService.Error($"打印失败: {ex.Message}");
                 CloseFormat(btFormat);
-                throw;
+                return new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
             }
         }
 
@@ -522,6 +522,7 @@ namespace BarTenderPrinter
     {
         public bool Success { get; }
         public string ErrorMessage { get; }
-        public PrintResult(bool success, string msg) { Success = success; ErrorMessage = msg ?? ""; }
+        public string DiagnosticDetails { get; }
+        public PrintResult(bool success, string msg, string diagnostics = "") { Success = success; ErrorMessage = msg ?? ""; DiagnosticDetails = diagnostics ?? ""; }
     }
 }

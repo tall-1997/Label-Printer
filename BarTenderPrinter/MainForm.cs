@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.48";
+        private readonly string _version = "v5.7.49";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -88,11 +88,19 @@ namespace BarTenderPrinter
         private bool _applyingOrderGlobalLength;
         private bool _updatingOrderToggleAll;
         private CheckBox _chkOrderToggleAllSources;
+        private TextBox _txtOperator;
+        private Button _btnPrevHistoryPage;
+        private Button _btnNextHistoryPage;
+        private Label _lblHistoryPage;
+        private int _historyPageIndex;
+        private string _pendingReprintReason = "";
+        private const int HistoryPageSize = 200;
 
         public MainForm(string startupTemplatePath = null)
         {
             _startupTemplatePath = NormalizeStartupTemplatePath(startupTemplatePath);
             InitializeComponent();
+            InstallP2Controls();
             InstallOrderSidebar();
             _configFile = AppPaths.ConfigFile;
             Text = $"BarTender 标签打印工具 {_version}";
@@ -121,6 +129,23 @@ namespace BarTenderPrinter
             dgvHistory.ContextMenuStrip = historyMenu;
             cmbPrinter.SelectedIndexChanged += (s, e) => SaveCurrentConfigurationState();
             _historySearchTimer.Tick += (s, e) => { _historySearchTimer.Stop(); LoadHistory(); };
+        }
+
+        private void InstallP2Controls()
+        {
+            _txtOperator = new TextBox { Location = new Point(695, 2), Size = new Size(80, 25), Text = Environment.UserName ?? "" };
+            var lblOperator = new Label { Text = "操作员：", Location = new Point(638, 5), Size = new Size(55, 18) };
+            _btnPrevHistoryPage = new Button { Text = "上一页", Location = new Point(780, 1), Size = new Size(60, 24) };
+            _btnNextHistoryPage = new Button { Text = "下一页", Location = new Point(845, 1), Size = new Size(60, 24) };
+            _lblHistoryPage = new Label { Text = "第 1 页", Location = new Point(910, 5), Size = new Size(80, 18) };
+            _btnPrevHistoryPage.Click += (s, e) => { if (_historyPageIndex > 0) { _historyPageIndex--; LoadHistory(); } };
+            _btnNextHistoryPage.Click += (s, e) => { _historyPageIndex++; LoadHistory(); };
+            historyPanel.Controls.AddRange(new Control[] { lblOperator, _txtOperator, _btnPrevHistoryPage, _btnNextHistoryPage, _lblHistoryPage });
+            MiuiTheme.StyleLabel(lblOperator);
+            MiuiTheme.StyleLabel(_lblHistoryPage, true);
+            MiuiTheme.StyleTextBox(_txtOperator);
+            MiuiTheme.StyleButton(_btnPrevHistoryPage);
+            MiuiTheme.StyleButton(_btnNextHistoryPage);
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -650,14 +675,25 @@ namespace BarTenderPrinter
             }
             var current = template.Settings?.DataSources ?? new List<DataSourceItem>();
             if (fields.Count == current.Count && fields.All(field => current.Any(source => string.Equals(source.Field, field, StringComparison.OrdinalIgnoreCase)))) return true;
+            var oldFields = new HashSet<string>(current.Select(source => source.Field).Where(field => !string.IsNullOrWhiteSpace(field)), StringComparer.OrdinalIgnoreCase);
+            var newFields = new HashSet<string>(fields, StringComparer.OrdinalIgnoreCase);
+            var added = fields.Where(field => !oldFields.Contains(field)).ToList();
+            var removed = current.Select(source => source.Field).Where(field => !string.IsNullOrWhiteSpace(field) && !newFields.Contains(field)).ToList();
+            var kept = fields.Where(field => oldFields.Contains(field)).ToList();
             template.Settings ??= new TemplateSettings();
             template.Settings.DataSources = fields.Select(field =>
                 current.FirstOrDefault(source => string.Equals(source.Field, field, StringComparison.OrdinalIgnoreCase)) is DataSourceItem existing
                     ? CloneDataSource(existing)
                     : new DataSourceItem { Name = field, Field = field, Enabled = true }).ToList();
-            MessageBox.Show(this, "新版模板的数据源已变化，系统已保留同名字段设置并添加新字段，请在订单管理页面核对。", "模板数据源已更新",
+            var diff = $"新增: {FormatFieldList(added)}\r\n删除: {FormatFieldList(removed)}\r\n保留: {FormatFieldList(kept)}";
+            MessageBox.Show(this, "新版模板的数据源已变化，系统已保留同名字段设置并添加新字段，请在订单管理页面核对。\r\n\r\n" + diff, "模板数据源已更新",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return true;
+        }
+
+        private static string FormatFieldList(List<string> fields)
+        {
+            return fields == null || fields.Count == 0 ? "无" : string.Join(", ", fields.Take(30)) + (fields.Count > 30 ? " ..." : "");
         }
 
         private bool ValidateTemplateFieldCoverage(string templatePath, IEnumerable<DataSourceItem> configuredSources, Dictionary<string, string> fieldValues, string title)
@@ -813,12 +849,16 @@ namespace BarTenderPrinter
             loadFields.Click += (s, e) => LoadOrderDataSourceRows();
             var removeTemplate = new Button { Text = "删除模板", Location = new Point(templateActionX - actionWidth - fieldGap, 288), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             removeTemplate.Click += (s, e) => RemoveSelectedOrderTemplateDraft();
+            var copyTemplateSettings = new Button { Text = "复制配置", Location = new Point(templateActionX - actionWidth - fieldGap, 323), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            copyTemplateSettings.Click += (s, e) => CopySelectedTemplateSettingsToOthers();
             _orderContentPanel.Controls.Add(browseTemplate);
             _orderContentPanel.Controls.Add(loadFields);
             _orderContentPanel.Controls.Add(removeTemplate);
+            _orderContentPanel.Controls.Add(copyTemplateSettings);
             MiuiTheme.StyleButton(browseTemplate);
             MiuiTheme.StyleButton(loadFields);
             MiuiTheme.StyleButton(removeTemplate);
+            MiuiTheme.StyleButton(copyTemplateSettings);
 
             var printerLabelX = 10;
             var printerLabel = new Label { Text = "打印机：", Location = new Point(printerLabelX, 329), Size = new Size(65, 18) };
@@ -843,16 +883,20 @@ namespace BarTenderPrinter
             _numOrderGlobalLength = new NumericUpDown { Location = new Point(415, 361), Size = new Size(70, 25), Minimum = 0, Maximum = 512 };
             var chooseValidationData = new Button { Text = "选择校验数据", Location = new Point(500, 359), Size = new Size(100, 28) };
             chooseValidationData.Click += (s, e) => SelectOrderValidationData();
-            _lblOrderLocalData = new Label { Text = "校验数据：未配置", Location = new Point(610, 366), Size = new Size(Math.Max(180, contentWidth - 600), 18), AutoEllipsis = true };
+            var manageValidationData = new Button { Text = "管理校验", Location = new Point(605, 359), Size = new Size(80, 28) };
+            manageValidationData.Click += (s, e) => ManageOrderValidationData();
+            _lblOrderLocalData = new Label { Text = "校验数据：未配置", Location = new Point(695, 366), Size = new Size(Math.Max(180, contentWidth - 685), 18), AutoEllipsis = true };
             _orderContentPanel.Controls.Add(_chkOrderInputValidation);
             _orderContentPanel.Controls.Add(_chkOrderDuplicateValidation);
             _orderContentPanel.Controls.Add(_chkOrderLengthValidation);
             _orderContentPanel.Controls.Add(globalLengthLabel);
             _orderContentPanel.Controls.Add(_numOrderGlobalLength);
             _orderContentPanel.Controls.Add(chooseValidationData);
+            _orderContentPanel.Controls.Add(manageValidationData);
             _orderContentPanel.Controls.Add(_lblOrderLocalData);
             MiuiTheme.StyleLabel(globalLengthLabel);
             MiuiTheme.StyleLabel(_lblOrderLocalData, true);
+            MiuiTheme.StyleButton(manageValidationData);
 
             var dataSourceTitle = new Label
             {
@@ -1018,6 +1062,27 @@ namespace BarTenderPrinter
             }
         }
 
+        private void CopySelectedTemplateSettingsToOthers()
+        {
+            if (_selectedOrderTemplateDraft == null)
+            { MessageBox.Show(this, "请先选择来源模板。", "复制配置", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (!SaveSelectedOrderTemplateDraft()) return;
+            var targets = _orderTemplateDrafts.Where(template => !ReferenceEquals(template, _selectedOrderTemplateDraft)).ToList();
+            if (targets.Count == 0)
+            { MessageBox.Show(this, "当前订单没有其他模板可复制。", "复制配置", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (MessageBox.Show(this, $"确定将当前模板的数据源、校验、长度、打印机和份数配置复制到其他 {targets.Count} 个模板？", "复制配置", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            foreach (var target in targets)
+            {
+                var sourceSettings = CloneTemplateSettings(_selectedOrderTemplateDraft.Settings);
+                sourceSettings.TemplateName = Path.GetFileName(target.SourcePath);
+                sourceSettings.TemplatePath = target.SourcePath;
+                target.Settings = sourceSettings;
+            }
+            RefreshOrderTemplateCards();
+            MarkOrderEditorDirty();
+            AddLog($"已复制模板配置到 {targets.Count} 个模板", "SUCCESS");
+        }
+
         private static OrderTemplate CloneOrderTemplate(OrderTemplate template)
         {
             return new OrderTemplate
@@ -1122,6 +1187,28 @@ namespace BarTenderPrinter
                     MessageBox.Show(this, $"读取校验数据失败：{ex.Message}", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
+        }
+
+        private void ManageOrderValidationData()
+        {
+            if (_selectedOrderTemplateDraft?.Settings == null)
+            { MessageBox.Show(this, "请先选择一个模板卡片。", "校验数据", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            var settings = _selectedOrderTemplateDraft.Settings;
+            var count = GetTemplateLocalData(settings).Count;
+            var message = $"路径: {settings.LocalDataPath}\n快照: {settings.LocalDataStoragePath}\n列: {settings.LocalDataColumnName}\n绑定字段: {settings.LocalDataTargetField}\n数据量: {count}\n\n选择“是”替换校验数据，选择“否”清除当前模板校验数据。";
+            var choice = MessageBox.Show(this, message, "校验数据管理", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (choice == DialogResult.Yes) { SelectOrderValidationData(); return; }
+            if (choice != DialogResult.No) return;
+            settings.LocalDataPath = "";
+            settings.LocalDataStoragePath = "";
+            settings.LocalDataColumnName = "";
+            settings.LocalDataTargetField = "";
+            settings.LocalData = new List<string>();
+            settings.InputValidation = false;
+            _chkOrderInputValidation.Checked = false;
+            _chkOrderInputValidation.Enabled = false;
+            _lblOrderLocalData.Text = "校验数据：未配置";
+            MarkOrderEditorDirty();
         }
 
         private void LoadOrderValidationDataAsync(string path, OrderTemplate targetTemplate)
@@ -3163,6 +3250,54 @@ namespace BarTenderPrinter
             return true;
         }
 
+        private string GetOperatorName()
+        {
+            var value = _txtOperator?.Text?.Trim();
+            return string.IsNullOrWhiteSpace(value) ? Environment.UserName ?? "" : value;
+        }
+
+        private static string GetTemplateVersion(OrderTemplate template)
+        {
+            if (template == null) return "";
+            var hash = string.IsNullOrWhiteSpace(template.SourceSha256) ? "nohash" : template.SourceSha256.Substring(0, Math.Min(12, template.SourceSha256.Length));
+            return $"ticks={template.SourceLastWriteTimeUtcTicks};len={template.SourceLength};sha={hash}";
+        }
+
+        private bool ShowPrintPreviewConfirm(string templateName, string templatePath, Dictionary<string, string> fieldValues, string printer, int copies, string operatorName, string templateVersion)
+        {
+            using (var form = new Form())
+            {
+                form.Text = "打印前确认";
+                form.Size = new Size(560, 520);
+                form.FormBorderStyle = FormBorderStyle.FixedDialog;
+                form.StartPosition = FormStartPosition.CenterParent;
+                form.MaximizeBox = false;
+                form.MinimizeBox = false;
+                var summary = new Label
+                {
+                    Text = $"订单: {_activeOrder?.DisplayName ?? "未绑定订单"}\r\n模板: {templateName}\r\n打印机: {printer}\r\n份数: {copies}\r\n操作员: {operatorName}\r\n模板版本: {templateVersion}",
+                    Location = new Point(12, 12),
+                    Size = new Size(520, 115),
+                    AutoEllipsis = true
+                };
+                var details = new TextBox
+                {
+                    Text = string.Join(Environment.NewLine, fieldValues.Select(item => $"{item.Key}: {item.Value}")),
+                    Location = new Point(12, 135),
+                    Size = new Size(520, 290),
+                    Multiline = true,
+                    ReadOnly = true,
+                    ScrollBars = ScrollBars.Vertical
+                };
+                var ok = new Button { Text = "确认打印", Location = new Point(350, 440), Size = new Size(85, 30), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(450, 440), Size = new Size(75, 30), DialogResult = DialogResult.Cancel };
+                form.Controls.AddRange(new Control[] { summary, details, ok, cancel });
+                form.AcceptButton = ok;
+                form.CancelButton = cancel;
+                return form.ShowDialog(this) == DialogResult.OK;
+            }
+        }
+
         private void DoPrint()
         {
             if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath))
@@ -3201,6 +3336,9 @@ namespace BarTenderPrinter
             int copies = (int)numCopies.Value;
             var templatePath = _selectedTemplatePath;
             var templateName = Path.GetFileName(templatePath);
+            var templateVersion = GetTemplateVersion(_activeOrderTemplate);
+            var operatorName = GetOperatorName();
+            if (!ShowPrintPreviewConfirm(templateName, templatePath, fieldValues, printer, copies, operatorName, templateVersion)) return;
             var readOnlyStates = _inputTextBoxes.Select(input => input?.ReadOnly ?? false).ToArray();
             SetStatus("打印中..."); SetInputsReadOnly(true); SetPrintEnvironmentEnabled(false);
             AddLog($"打印: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
@@ -3215,7 +3353,7 @@ namespace BarTenderPrinter
                 catch (Exception ex)
                 {
                     LoggerService.Error("打印失败", ex);
-                    result = new PrintResult(false, ex.Message);
+                    result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
                 }
                 PostToUi(() =>
                 {
@@ -3226,7 +3364,7 @@ namespace BarTenderPrinter
                         {
                             SetStatus("打印完成");
                             AddLog("打印完成", "SUCCESS");
-                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "PASS", printer, copies))
+                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "PASS", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? ""))
                             {
                                 SetStatus("打印完成，历史保存失败");
                                 AddLog("打印已完成，但历史记录保存失败；本次数据不会进入重复校验索引。", "ERROR");
@@ -3251,7 +3389,7 @@ namespace BarTenderPrinter
                         {
                             SetStatus("打印失败");
                             AddLog($"打印失败: {result.ErrorMessage}", "ERROR");
-                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "FAIL", printer, copies))
+                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? ""))
                                 AddLog("失败打印历史记录保存失败。", "ERROR");
                             RestoreInputReadOnlyStates(readOnlyStates);
                         }
@@ -3359,11 +3497,12 @@ namespace BarTenderPrinter
 
         private void txtSearch_TextChanged(object sender, EventArgs e)
         {
+            _historyPageIndex = 0;
             _historySearchTimer.Stop();
             _historySearchTimer.Start();
         }
-        private void chkExactSearch_CheckedChanged(object sender, EventArgs e) => LoadHistory();
-        private void btnClearSearch_Click(object sender, EventArgs e) { txtSearch.Text = ""; }
+        private void chkExactSearch_CheckedChanged(object sender, EventArgs e) { _historyPageIndex = 0; LoadHistory(); }
+        private void btnClearSearch_Click(object sender, EventArgs e) { _historyPageIndex = 0; txtSearch.Text = ""; }
         private void btnClearHistory_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrEmpty(_selectedTemplatePath))
@@ -3487,7 +3626,7 @@ namespace BarTenderPrinter
             using (var form = new Form())
             {
                 form.Text = "确认补打印";
-                form.Size = new Size(520, 430);
+                form.Size = new Size(520, 480);
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.StartPosition = FormStartPosition.CenterParent;
                 form.MaximizeBox = false;
@@ -3526,9 +3665,21 @@ namespace BarTenderPrinter
                 else
                     cmbReprintPrinter.SelectedIndex = 0;
 
-                var ok = new Button { Text = "补打印", Location = new Point(325, 345), Size = new Size(75, 28), DialogResult = DialogResult.OK };
-                var cancel = new Button { Text = "取消", Location = new Point(415, 345), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
-                form.Controls.AddRange(new Control[] { lblDetails, txtDetails, lblPrinter, cmbReprintPrinter, ok, cancel });
+                var lblReason = new Label { Text = "补打印原因：", Location = new Point(12, 335), Size = new Size(110, 22) };
+                var txtReason = new TextBox { Location = new Point(125, 332), Size = new Size(365, 25), MaxLength = 200 };
+                var ok = new Button { Text = "补打印", Location = new Point(325, 390), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(415, 390), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+                ok.Click += (s, e) =>
+                {
+                    if (string.IsNullOrWhiteSpace(txtReason.Text))
+                    {
+                        MessageBox.Show(form, "请填写补打印原因。", "补打印", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        form.DialogResult = DialogResult.None;
+                        return;
+                    }
+                    _pendingReprintReason = txtReason.Text.Trim();
+                };
+                form.Controls.AddRange(new Control[] { lblDetails, txtDetails, lblPrinter, cmbReprintPrinter, lblReason, txtReason, ok, cancel });
                 form.AcceptButton = ok;
                 form.CancelButton = cancel;
 
@@ -3558,14 +3709,15 @@ namespace BarTenderPrinter
             {
                 PrintResult result;
                 try { result = _btService.Print(record.TemplatePath, values, printer, record.Copies); }
-                catch (Exception ex) { result = new PrintResult(false, ex.Message); }
+                catch (Exception ex) { result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={record.TemplatePath};printer={printer};copies={record.Copies};message={ex.Message}"); }
                 PostToUi(() =>
                 {
                     var historySaved = true;
                     try
                     {
                         historySaved = _history.Add(record.TemplateName, record.TemplatePath, record.TemplateId, values,
-                            result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies);
+                            result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies,
+                            GetOperatorName(), _pendingReprintReason, record.TemplateVersion, result.DiagnosticDetails, record.OrderName);
                         if (result.Success && historySaved) RestoreAutoIncrementInputsToPendingValues();
                         if (!historySaved)
                             AddLog(result.Success ? "补打印已完成，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
@@ -3626,7 +3778,7 @@ namespace BarTenderPrinter
 
         private List<PrintRecord> GetCurrentHistoryRecords()
         {
-            return _history.Search(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, GetCurrentTemplateId(), txtSearch?.Text ?? "", chkExactSearch.Checked, 2000, true);
+            return _history.Search(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, GetCurrentTemplateId(), txtSearch?.Text ?? "", chkExactSearch.Checked, HistoryPageSize, true, _historyPageIndex * HistoryPageSize);
         }
 
         private void LoadHistory()
@@ -3659,6 +3811,9 @@ namespace BarTenderPrinter
                 }
             }
             dgvHistory.ClearSelection();
+            if (_lblHistoryPage != null) _lblHistoryPage.Text = $"第 {_historyPageIndex + 1} 页";
+            if (_btnPrevHistoryPage != null) _btnPrevHistoryPage.Enabled = _historyPageIndex > 0;
+            if (_btnNextHistoryPage != null) _btnNextHistoryPage.Enabled = dt.Rows.Count >= HistoryPageSize;
         }
         private void RefreshStats()
         {
@@ -3675,6 +3830,8 @@ namespace BarTenderPrinter
         {
             if (e.RowIndex < 0) return;
             var row = dgvHistory.Rows[e.RowIndex];
+            var recordId = row.Cells["记录ID"].Value?.ToString() ?? "";
+            var record = _history.GetById(recordId);
             var imei = row.Cells["数据"].Value?.ToString() ?? "";
             var time = row.Cells["打印时间"].Value?.ToString() ?? "";
             var status = row.Cells["状态"].Value?.ToString() ?? "";
@@ -3683,6 +3840,15 @@ namespace BarTenderPrinter
             var sb = new System.Text.StringBuilder();
             sb.AppendLine($"打印时间: {time}");
             sb.AppendLine($"状态: {status}");
+            if (record != null)
+            {
+                sb.AppendLine($"操作员: {record.OperatorName}");
+                sb.AppendLine($"订单: {record.OrderName}");
+                sb.AppendLine($"补打印原因: {record.ReprintReason}");
+                sb.AppendLine($"模板ID: {record.TemplateId}");
+                sb.AppendLine($"模板版本: {record.TemplateVersion}");
+                if (!string.IsNullOrWhiteSpace(record.DiagnosticDetails)) sb.AppendLine($"诊断详情: {record.DiagnosticDetails}");
+            }
             sb.AppendLine();
             sb.AppendLine("数据详情:");
             for (int i = 0; i < parts.Length; i++)
