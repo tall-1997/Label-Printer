@@ -30,6 +30,29 @@ namespace BarTenderPrinter
         public List<string> TemplateFields { get; set; }
         public string RecordChecksum { get; set; }
 
+        public PrintRecord()
+        {
+            SchemaVersion = 2;
+            RecordId = Guid.NewGuid().ToString("N");
+            Imei = "";
+            TemplateName = "";
+            TemplatePath = "";
+            TemplateId = "";
+            OrderId = "";
+            FieldValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            PrintTime = "";
+            Status = "PASS";
+            Printer = "";
+            Copies = 1;
+            OperatorName = "";
+            ReprintReason = "";
+            TemplateVersion = "";
+            DiagnosticDetails = "";
+            OrderName = "";
+            TemplateFields = new List<string>();
+            RecordChecksum = "";
+        }
+
         public PrintRecord(string imei, string printTime, string status)
         {
             RecordId = Guid.NewGuid().ToString("N");

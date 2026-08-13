@@ -591,3 +591,8 @@
 - 已为 `HistoryManager`、`OrderManager`、`TemplateSettingsManager` 增加自定义路径构造，测试可使用临时目录。
 - 已新增 JSONL 损坏行、CSV 迁移和测试隔离用例。
 - 已增加补打印模板版本差异确认。
+
+### v5.7.54 JSONL 历史反序列化修复
+
+- 已为 `PrintRecord` 增加无参构造函数，修复 `System.Text.Json` 读取 JSONL 历史记录失败的问题。
+- `v5.7.53` 标签已触发测试失败，按发布规则保留失败标签并使用 `v5.7.54` 重新发布。

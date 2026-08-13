@@ -69,6 +69,7 @@ jobs:
             - HistoryManager、OrderManager、TemplateSettingsManager 支持自定义路径，测试使用临时目录隔离
             - 增加 JSONL 损坏行、CSV 迁移和历史测试隔离用例
             - 补打印前检测历史模板版本与当前模板版本差异，并要求确认
+            - 修复 PrintRecord JSONL 反序列化缺少无参构造函数的问题
 
             ### 系统要求
             - Windows 10/11 x64
