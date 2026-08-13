@@ -605,3 +605,18 @@
 - JSONL/CSV 历史继续兼容读取，并自动迁移到 SQLite。
 - 删除历史和补打印操作写入哈希链审计日志。
 - 测试增加 SQLite 主存储、JSONL 坏行和 CSV 迁移覆盖。
+
+### v5.7.56 SQLite 迁移闭环与审计强化
+
+- 历史写入使用 SQLite 事务并同步 `PrintRecords`、`FieldValues`、`TemplateSnapshots`、`Orders`。
+- 保留 JSONL 兼容备份与 CSV 回退迁移路径。
+- 删除历史和补打印操作写入哈希链审计日志。
+- 补打印前检测历史模板版本与当前模板版本差异并要求确认。
+- 历史查询支持状态、日期、打印机和订单过滤参数下推。
+- 测试覆盖 SQLite 主存储、JSONL 坏行隔离和 CSV 回退迁移。
+- PrintWorkflow 已开始接管打印历史写入封装。
+- 已增加角色会话、补打印审批、删除历史权限控制和审计日志。
+- 已增加模板治理入口，支持版本快照、哈希、字段差异和字段快照审批更新。
+- 历史筛选工具栏改为自适应 FlowLayoutPanel。
+- DialogService 增加 Info/Warning/Error/Confirm 统一入口，并接入历史删除路径。
+- 打印前确认框增加 BarTender 版面预览入口，支持导出预览图查看版面。

@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.55** - C# WinForms 安装版
+**v5.7.56** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -74,7 +74,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender 标签打印工具 v5.7.55    [导出日志]  │
+│ BarTender 标签打印工具 v5.7.56    [导出日志]  │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -125,6 +125,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
+| [v5.7.56](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.56) | ~49 MB | SQLite 迁移闭环与审计强化版 |
 | [v5.7.55](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.55) | ~49 MB | SQLite 历史主存储与审计增强版 |
 | [v5.7.54](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.54) | ~49 MB | JSONL 历史反序列化修复版 |
 | [v5.7.53](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.53) | ~49 MB | 历史可靠性和测试隔离增强版 |

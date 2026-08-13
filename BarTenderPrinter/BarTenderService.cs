@@ -284,6 +284,36 @@ namespace BarTenderPrinter
             return InvokeSta(() => PrintCore(templatePath, fieldValues, printer, copies));
         }
 
+        public string ExportPreviewImage(string templatePath, Dictionary<string, string> fieldValues)
+        {
+            return InvokeSta(() => ExportPreviewImageCore(templatePath, fieldValues));
+        }
+
+        private string ExportPreviewImageCore(string templatePath, Dictionary<string, string> fieldValues)
+        {
+            if (!_connected || _btApp == null) return "";
+            dynamic btFormat = null;
+            try
+            {
+                EnsureOperationInterval();
+                btFormat = _btApp.Formats.Open(templatePath, false, "");
+                foreach (var kv in fieldValues ?? new Dictionary<string, string>())
+                {
+                    try { btFormat.SetNamedSubStringValue(kv.Key, kv.Value); } catch { }
+                }
+                var previewPath = Path.Combine(Path.GetTempPath(), $"btp-preview-{Guid.NewGuid():N}.png");
+                btFormat.ExportImageToFile(previewPath, "PNG", 96, 96, 24, 1, 1);
+                CloseFormat(btFormat);
+                return File.Exists(previewPath) ? previewPath : "";
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Warn($"导出模板预览失败: {ex.Message}");
+                CloseFormat(btFormat);
+                return "";
+            }
+        }
+
         private PrintResult PrintCore(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
         {
             if (!_connected || _btApp == null)

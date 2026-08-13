@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.55";
+        private readonly string _version = "v5.7.56";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -92,6 +92,7 @@ namespace BarTenderPrinter
         private bool _updatingOrderToggleAll;
         private CheckBox _chkOrderToggleAllSources;
         private TextBox _txtOperator;
+        private ComboBox _cmbRole;
         private Button _btnPrevHistoryPage;
         private Button _btnNextHistoryPage;
         private Label _lblHistoryPage;
@@ -100,6 +101,7 @@ namespace BarTenderPrinter
         private TextBox _txtHistoryDate;
         private readonly ToolTip _toolTips = new ToolTip();
         private readonly Dictionary<string, int> _historyColumnWidths = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private readonly UserSession _session = new UserSession();
         private int _historyPageIndex;
         private string _pendingReprintReason = "";
         private const int HistoryPageSize = 200;
@@ -142,26 +144,44 @@ namespace BarTenderPrinter
 
         private void InstallP2Controls()
         {
+            var existingHistoryControls = historyPanel.Controls.Cast<Control>().ToArray();
+            historyPanel.Controls.Clear();
+            historyPanel.Height = 58;
+            var historyToolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = true, Padding = new Padding(2) };
+            historyToolbar.Controls.AddRange(existingHistoryControls);
+            historyPanel.Controls.Add(historyToolbar);
             _txtOperator = new TextBox { Location = new Point(695, 2), Size = new Size(80, 25), Text = Environment.UserName ?? "" };
             var lblOperator = new Label { Text = "操作员：", Location = new Point(638, 5), Size = new Size(55, 18) };
-            _btnPrevHistoryPage = new Button { Text = "上一页", Location = new Point(780, 1), Size = new Size(60, 24) };
-            _btnNextHistoryPage = new Button { Text = "下一页", Location = new Point(845, 1), Size = new Size(60, 24) };
-            _lblHistoryPage = new Label { Text = "第 1 页", Location = new Point(910, 5), Size = new Size(80, 18) };
-            _cmbHistoryStatus = new ComboBox { Location = new Point(985, 2), Size = new Size(90, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            _cmbRole = new ComboBox { Location = new Point(780, 2), Size = new Size(85, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            _cmbRole.Items.AddRange(new object[] { "Admin", "Supervisor", "Operator" });
+            _cmbRole.SelectedIndex = 0;
+            _cmbRole.SelectedIndexChanged += (s, e) => UpdateSession();
+            _txtOperator.TextChanged += (s, e) => UpdateSession();
+            _btnPrevHistoryPage = new Button { Text = "上一页", Location = new Point(870, 1), Size = new Size(60, 24) };
+            _btnNextHistoryPage = new Button { Text = "下一页", Location = new Point(935, 1), Size = new Size(60, 24) };
+            _lblHistoryPage = new Label { Text = "第 1 页", Location = new Point(1000, 5), Size = new Size(80, 18) };
+            _cmbHistoryStatus = new ComboBox { Location = new Point(1085, 2), Size = new Size(90, 25), DropDownStyle = ComboBoxStyle.DropDownList };
             _cmbHistoryStatus.Items.AddRange(new object[] { "全部状态", "PASS", "FAIL", "REPRINT_PASS", "REPRINT_FAIL" });
             _cmbHistoryStatus.SelectedIndex = 0;
-            _txtHistoryDate = new TextBox { Location = new Point(1080, 2), Size = new Size(90, 25), PlaceholderText = "yyyy-MM-dd" };
+            _txtHistoryDate = new TextBox { Location = new Point(1180, 2), Size = new Size(90, 25), PlaceholderText = "yyyy-MM-dd" };
             _btnPrevHistoryPage.Click += (s, e) => { if (_historyPageIndex > 0) { _historyPageIndex--; LoadHistory(); } };
             _btnNextHistoryPage.Click += (s, e) => { _historyPageIndex++; LoadHistory(); };
             _cmbHistoryStatus.SelectedIndexChanged += (s, e) => { _historyPageIndex = 0; LoadHistory(); };
             _txtHistoryDate.TextChanged += (s, e) => { _historyPageIndex = 0; _historySearchTimer.Stop(); _historySearchTimer.Start(); };
-            historyPanel.Controls.AddRange(new Control[] { lblOperator, _txtOperator, _btnPrevHistoryPage, _btnNextHistoryPage, _lblHistoryPage, _cmbHistoryStatus, _txtHistoryDate });
+            historyToolbar.Controls.AddRange(new Control[] { lblOperator, _txtOperator, _cmbRole, _btnPrevHistoryPage, _btnNextHistoryPage, _lblHistoryPage, _cmbHistoryStatus, _txtHistoryDate });
             MiuiTheme.StyleLabel(lblOperator);
             MiuiTheme.StyleLabel(_lblHistoryPage, true);
             MiuiTheme.StyleTextBox(_txtOperator);
             MiuiTheme.StyleButton(_btnPrevHistoryPage);
             MiuiTheme.StyleButton(_btnNextHistoryPage);
             MiuiTheme.StyleTextBox(_txtHistoryDate);
+            UpdateSession();
+        }
+
+        private void UpdateSession()
+        {
+            _session.OperatorName = GetOperatorName();
+            _session.Role = _cmbRole?.SelectedItem?.ToString() ?? "Admin";
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -870,14 +890,18 @@ namespace BarTenderPrinter
             removeTemplate.Click += (s, e) => RemoveSelectedOrderTemplateDraft();
             var copyTemplateSettings = new Button { Text = "复制配置", Location = new Point(templateActionX - actionWidth - fieldGap, 323), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             copyTemplateSettings.Click += (s, e) => CopySelectedTemplateSettingsToOthers();
+            var governTemplate = new Button { Text = "模板治理", Location = new Point(templateActionX - (actionWidth + fieldGap) * 2, 323), Size = new Size(actionWidth, 28), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            governTemplate.Click += (s, e) => ShowTemplateGovernance();
             _orderContentPanel.Controls.Add(browseTemplate);
             _orderContentPanel.Controls.Add(loadFields);
             _orderContentPanel.Controls.Add(removeTemplate);
             _orderContentPanel.Controls.Add(copyTemplateSettings);
+            _orderContentPanel.Controls.Add(governTemplate);
             MiuiTheme.StyleButton(browseTemplate);
             MiuiTheme.StyleButton(loadFields);
             MiuiTheme.StyleButton(removeTemplate);
             MiuiTheme.StyleButton(copyTemplateSettings);
+            MiuiTheme.StyleButton(governTemplate);
 
             var printerLabelX = 10;
             var printerLabel = new Label { Text = "打印机：", Location = new Point(printerLabelX, 329), Size = new Size(65, 18) };
@@ -1100,6 +1124,27 @@ namespace BarTenderPrinter
             RefreshOrderTemplateCards();
             MarkOrderEditorDirty();
             AddLog($"已复制模板配置到 {targets.Count} 个模板", "SUCCESS");
+        }
+
+        private void ShowTemplateGovernance()
+        {
+            if (_selectedOrderTemplateDraft == null)
+            { MessageBox.Show(this, "请先选择模板。", "模板治理", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            var template = _selectedOrderTemplateDraft;
+            var currentFields = _btService.IsConnected && File.Exists(template.SourcePath)
+                ? _btService.GetTemplateDataSources(template.SourcePath).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(field => field, NaturalStringComparer.Instance).ToList()
+                : new List<string>();
+            var snapshot = template.FieldSnapshot ?? new List<string>();
+            var added = currentFields.Where(field => !snapshot.Contains(field, StringComparer.OrdinalIgnoreCase)).ToList();
+            var removed = snapshot.Where(field => !currentFields.Contains(field, StringComparer.OrdinalIgnoreCase)).ToList();
+            var kept = currentFields.Where(field => snapshot.Contains(field, StringComparer.OrdinalIgnoreCase)).ToList();
+            var message = $"模板: {template.DisplayName}\n路径: {template.SourcePath}\n哈希: {template.SourceSha256}\n修改Ticks: {template.SourceLastWriteTimeUtcTicks}\n大小: {template.SourceLength}\n\n新增字段: {FormatFieldList(added)}\n删除字段: {FormatFieldList(removed)}\n保留字段: {FormatFieldList(kept)}\n\n选择“是”审批当前字段快照并更新映射确认。";
+            if (MessageBox.Show(this, message, "模板治理", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            template.FieldSnapshot = currentFields;
+            template.Settings ??= new TemplateSettings();
+            template.Settings.TemplateFields = currentFields;
+            MarkOrderEditorDirty();
+            AddLog("模板字段快照已审批更新", "SUCCESS");
         }
 
         private static OrderTemplate CloneOrderTemplate(OrderTemplate template)
@@ -3333,11 +3378,32 @@ namespace BarTenderPrinter
                     ScrollBars = ScrollBars.Vertical
                 };
                 var ok = new Button { Text = "确认打印", Location = new Point(350, 440), Size = new Size(85, 30), DialogResult = DialogResult.OK };
+                var preview = new Button { Text = "版面预览", Location = new Point(250, 440), Size = new Size(85, 30) };
+                preview.Click += (s, e) => ShowTemplateImagePreview(templatePath, fieldValues);
                 var cancel = new Button { Text = "取消", Location = new Point(450, 440), Size = new Size(75, 30), DialogResult = DialogResult.Cancel };
-                form.Controls.AddRange(new Control[] { summary, details, ok, cancel });
+                form.Controls.AddRange(new Control[] { summary, details, preview, ok, cancel });
                 form.AcceptButton = ok;
                 form.CancelButton = cancel;
                 return form.ShowDialog(this) == DialogResult.OK;
+            }
+        }
+
+        private void ShowTemplateImagePreview(string templatePath, Dictionary<string, string> fieldValues)
+        {
+            var imagePath = _btService.ExportPreviewImage(templatePath, fieldValues);
+            if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+            { _dialogs.ShowWarning(this, "暂时无法导出模板版面预览，请确认 BarTender 支持预览导出。", "版面预览"); return; }
+            using (var form = new Form())
+            using (var picture = new PictureBox())
+            {
+                form.Text = "版面预览";
+                form.Size = new Size(760, 560);
+                form.StartPosition = FormStartPosition.CenterParent;
+                picture.Dock = DockStyle.Fill;
+                picture.SizeMode = PictureBoxSizeMode.Zoom;
+                picture.Image = Image.FromFile(imagePath);
+                form.Controls.Add(picture);
+                form.ShowDialog(this);
             }
         }
 
@@ -3407,7 +3473,7 @@ namespace BarTenderPrinter
                         {
                             SetStatus("打印完成");
                             AddLog("打印完成", "SUCCESS");
-                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "PASS", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? "", _activeOrder?.OrderId ?? "", _activeOrderTemplate?.FieldSnapshot ?? new List<string>()))
+                            if (!_printWorkflow.RecordPrintResult(_history, templateName, templatePath, GetCurrentTemplateId(), fieldValues, "PASS", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? "", _activeOrder?.OrderId ?? "", _activeOrderTemplate?.FieldSnapshot ?? new List<string>()))
                             {
                                 SetStatus("打印完成，历史保存失败");
                                 AddLog("打印已完成，但历史记录保存失败；本次数据不会进入重复校验索引。", "ERROR");
@@ -3432,7 +3498,7 @@ namespace BarTenderPrinter
                         {
                             SetStatus("打印失败");
                             AddLog($"打印失败: {result.ErrorMessage}", "ERROR");
-                            if (!_history.Add(templateName, templatePath, GetCurrentTemplateId(), fieldValues, "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? "", _activeOrder?.OrderId ?? "", _activeOrderTemplate?.FieldSnapshot ?? new List<string>()))
+                            if (!_printWorkflow.RecordPrintResult(_history, templateName, templatePath, GetCurrentTemplateId(), fieldValues, "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? "", _activeOrder?.OrderId ?? "", _activeOrderTemplate?.FieldSnapshot ?? new List<string>()))
                                 AddLog("失败打印历史记录保存失败。", "ERROR");
                             RestoreInputReadOnlyStates(readOnlyStates);
                         }
@@ -3714,6 +3780,13 @@ namespace BarTenderPrinter
                 var cancel = new Button { Text = "取消", Location = new Point(415, 390), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
                 ok.Click += (s, e) =>
                 {
+                    UpdateSession();
+                    if (!_session.CanApproveReprint)
+                    {
+                        MessageBox.Show(form, "当前角色无补打印审批权限，请切换 Supervisor 或 Admin。", "补打印审批", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        form.DialogResult = DialogResult.None;
+                        return;
+                    }
                     if (string.IsNullOrWhiteSpace(txtReason.Text))
                     {
                         MessageBox.Show(form, "请填写补打印原因。", "补打印", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -3763,7 +3836,7 @@ namespace BarTenderPrinter
                     var historySaved = true;
                     try
                     {
-                        historySaved = _history.Add(record.TemplateName, record.TemplatePath, record.TemplateId, values,
+                        historySaved = _printWorkflow.RecordPrintResult(_history, record.TemplateName, record.TemplatePath, record.TemplateId, values,
                             result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies,
                             GetOperatorName(), _pendingReprintReason, record.TemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
                         if (result.Success && historySaved) RestoreAutoIncrementInputsToPendingValues();
@@ -3949,13 +4022,16 @@ namespace BarTenderPrinter
 
         private void DeleteSelectedHistoryRecord_Click(object sender, EventArgs e)
         {
+            UpdateSession();
+            if (!_session.CanDeleteHistory)
+            { _dialogs.ShowWarning(this, "当前角色无历史删除权限。", "权限不足"); return; }
             if (dgvHistory.SelectedRows.Count == 0)
             { MessageBox.Show(this, "请先选择一条历史记录"); return; }
 
             var row = dgvHistory.SelectedRows[0];
             var recordId = row.Cells["记录ID"].Value?.ToString() ?? "";
             var data = row.Cells["数据"].Value?.ToString() ?? "";
-            if (MessageBox.Show(this, $"确定删除这条打印记录？\n\n{data}", "删除历史记录", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            if (!_dialogs.Confirm(this, $"确定删除这条打印记录？\n\n{data}", "删除历史记录"))
                 return;
             var existedBeforeDelete = _history.GetById(recordId) != null;
 

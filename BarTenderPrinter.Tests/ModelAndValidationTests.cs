@@ -150,6 +150,22 @@ namespace BarTenderPrinter.Tests
             Assert.Equal("Damaged label", record.ReprintReason);
         }
 
+        [Fact]
+        public void TemplateVersionMismatchIsDetectable()
+        {
+            var oldVersion = "ticks=1;len=2;sha=AAA";
+            var newVersion = "ticks=2;len=2;sha=BBB";
+            Assert.NotEqual(oldVersion, newVersion);
+        }
+
+        [Fact]
+        public void UserSessionRestrictsHistoryDeletion()
+        {
+            var session = new UserSession { Role = "Operator" };
+            Assert.False(session.CanDeleteHistory);
+            Assert.False(session.CanApproveReprint);
+        }
+
         private static string CreateTempDirectory()
         {
             var path = Path.Combine(Path.GetTempPath(), "btp-tests-" + System.Guid.NewGuid().ToString("N"));

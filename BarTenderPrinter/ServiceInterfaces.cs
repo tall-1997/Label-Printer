@@ -11,6 +11,7 @@ namespace BarTenderPrinter
         List<string> GetTemplateDataSources(string templatePath);
         void RunDiagnostics(string templatePath);
         PrintResult Print(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies);
+        string ExportPreviewImage(string templatePath, Dictionary<string, string> fieldValues);
         string[] GetAvailableTemplates(string directory);
         string[] GetPrinters();
         void Disconnect();
