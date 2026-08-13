@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -378,8 +379,15 @@ namespace BarTenderPrinter
             var documents = GetRequiredProperty(_previewEngine, "Documents");
             document = InvokeRequired(documents, "Open", templatePath);
             var subStrings = GetRequiredProperty(document, "SubStrings");
+            var availableFields = GetNamedDataSourceNames(subStrings);
+            var projectedValues = ProjectPreviewFields(fieldValues, availableFields);
+            var ignoredFields = fieldValues.Keys.Where(field => !availableFields.Contains(field)).ToList();
+            if (ignoredFields.Count > 0)
+                LoggerService.Warn($"预览已忽略当前模板不存在的历史字段: {string.Join(", ", ignoredFields)}");
+            if (projectedValues.Count == 0)
+                return ExportTemplateThumbnail(templatePath);
             var failedFields = new List<string>();
-            foreach (var item in fieldValues)
+            foreach (var item in projectedValues)
             {
                 try { InvokeRequired(subStrings, "SetSubString", item.Key, item.Value ?? ""); }
                 catch (Exception ex)
@@ -411,6 +419,49 @@ namespace BarTenderPrinter
             {
                 try { if (File.Exists(candidatePath)) File.Delete(candidatePath); } catch { }
             }
+        }
+
+        internal static Dictionary<string, string> ProjectPreviewFields(
+            IDictionary<string, string> fieldValues, IEnumerable<string> availableFields)
+        {
+            var available = new HashSet<string>(availableFields ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+            return (fieldValues ?? new Dictionary<string, string>())
+                .Where(item => available.Contains(item.Key))
+                .ToDictionary(item => item.Key, item => item.Value ?? "", StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static HashSet<string> GetNamedDataSourceNames(object subStrings)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (subStrings is IEnumerable enumerable)
+            {
+                foreach (var item in enumerable) AddNamedDataSource(names, item);
+                return names;
+            }
+
+            var countValue = GetRequiredProperty(subStrings, "Count");
+            var count = Convert.ToInt32(countValue);
+            var itemProperty = subStrings.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                .FirstOrDefault(property => property.Name == "Item" && property.GetIndexParameters().Length == 1)
+                ?? throw new InvalidDataException("BarTender SDK 无法读取模板命名数据源");
+            var oneBased = false;
+            if (count > 0)
+            {
+                try { AddNamedDataSource(names, itemProperty.GetValue(subStrings, new object[] { 0 })); }
+                catch { oneBased = true; }
+            }
+            for (var index = 0; index < count; index++)
+            {
+                if (!oneBased && index == 0) continue;
+                AddNamedDataSource(names, itemProperty.GetValue(subStrings, new object[] { index + (oneBased ? 1 : 0) }));
+            }
+            return names;
+        }
+
+        private static void AddNamedDataSource(ISet<string> names, object item)
+        {
+            var name = item?.GetType().GetProperty("Name", BindingFlags.Instance | BindingFlags.Public)?.GetValue(item)?.ToString();
+            if (!string.IsNullOrWhiteSpace(name)) names.Add(name);
         }
 
         internal static string BuildPreviewCacheKey(string templatePath, Dictionary<string, string> fieldValues)

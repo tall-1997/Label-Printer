@@ -21,10 +21,11 @@ namespace BarTenderPrinter
         private readonly PrintWorkflow _printWorkflow = new PrintWorkflow();
         private readonly OrderEditorController _orderEditor = new OrderEditorController();
         private readonly IDialogService _dialogs = new DialogService();
+        private readonly ApplicationStateManager _applicationStateManager = new ApplicationStateManager();
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.65";
+        private readonly string _version = "v5.7.67";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -112,6 +113,8 @@ namespace BarTenderPrinter
         private int _pendingPrintJobCount;
         private int _historyPageIndex;
         private const int HistoryPageSize = 200;
+        private ApplicationState _applicationState = new ApplicationState();
+        private readonly HashSet<string> _availablePrinters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public MainForm(string startupTemplatePath = null)
         {
@@ -122,6 +125,7 @@ namespace BarTenderPrinter
             SilentLogin();
             InstallOrderSidebar();
             _configFile = AppPaths.ConfigFile;
+            _applicationState = _applicationStateManager.Load();
             Text = $"BarTender 标签打印工具 {_version}";
             titleLabel.Text = $"BarTender 标签打印工具 {_version}";
             MiuiTheme.ApplyTheme(this);
@@ -133,6 +137,7 @@ namespace BarTenderPrinter
                 { e.Cancel = true; return; }
                 if (!ConfirmOrderEditorChanges()) { e.Cancel = true; return; }
                 SaveCurrentTemplateSettings();
+                SaveApplicationState();
                 ClosePreviewForm();
                 _historySearchTimer.Dispose();
                 _btService.Dispose();
@@ -188,6 +193,7 @@ namespace BarTenderPrinter
         {
             if (_previewForm != null && !_previewForm.IsDisposed) return;
             _previewForm = new PreviewForm();
+            _previewForm.ImageAspectRatioChanged += (sender, args) => DockPreviewForm();
             _previewForm.PreviewClosed += (sender, args) =>
             {
                 _previewForm = null;
@@ -215,13 +221,19 @@ namespace BarTenderPrinter
         {
             if (_previewForm == null || _previewForm.IsDisposed || !_previewForm.Visible) return;
             const int gap = 8;
-            const int width = 420;
             var workingArea = Screen.FromControl(this).WorkingArea;
-            var left = Right + gap;
-            if (left + width > workingArea.Right) left = Math.Max(workingArea.Left, Left - width - gap);
-            var top = Math.Max(workingArea.Top, Top);
-            var height = Math.Min(Height, workingArea.Bottom - top);
-            _previewForm.Bounds = new Rectangle(left, top, width, Math.Max(_previewForm.MinimumSize.Height, height));
+            var top = Math.Max(workingArea.Top, Math.Min(Top, workingArea.Bottom - _previewForm.MinimumSize.Height));
+            var height = Math.Min(workingArea.Height, Math.Max(_previewForm.MinimumSize.Height, Math.Min(Height, workingArea.Bottom - top)));
+            var ratio = Math.Max(0.35F, Math.Min(3F, _previewForm.ImageAspectRatio));
+            var desiredWidth = (int)Math.Round(Math.Max(0, height - 66) * ratio + 24);
+            var width = Math.Min(workingArea.Width, Math.Max(320, Math.Min(720, desiredWidth)));
+            var rightSpace = workingArea.Right - Right - gap;
+            var leftSpace = Left - workingArea.Left - gap;
+            int left;
+            if (rightSpace >= width) left = Right + gap;
+            else if (leftSpace >= width) left = Left - width - gap;
+            else left = Math.Max(workingArea.Left, Math.Min(workingArea.Right - width, Right - width));
+            _previewForm.Bounds = new Rectangle(left, top, width, height);
         }
 
         private async Task RefreshPreviewAsync(Dictionary<string, string> successfulValues = null)
@@ -249,6 +261,7 @@ namespace BarTenderPrinter
             }
             _previewForm?.ShowLoading(source);
             string imagePath;
+            string previewError = null;
             try
             {
                 imagePath = await _btService.ExportPreviewAsync(templatePath, values);
@@ -256,6 +269,7 @@ namespace BarTenderPrinter
             catch (Exception ex)
             {
                 LoggerService.Error("生成预览失败", ex);
+                previewError = ex.GetBaseException().Message;
                 imagePath = "";
             }
             if (requestVersion != _previewRequestVersion || _chkPreview?.Checked != true ||
@@ -263,7 +277,9 @@ namespace BarTenderPrinter
                 return;
             if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
             {
-                _previewForm?.ShowError("标签预览生成失败");
+                _previewForm?.ShowError(string.IsNullOrWhiteSpace(previewError)
+                    ? "标签预览生成失败"
+                    : $"标签预览生成失败：{previewError}");
                 return;
             }
             try { _previewForm?.ShowPreview(imagePath, source); }
@@ -854,6 +870,7 @@ namespace BarTenderPrinter
             LoadHistory();
             RefreshStats();
             AddLog($"已选择订单: {order.DisplayName}", "INFO");
+            if (!_isInitializing && _chkPreview?.Checked == true) _ = RefreshPreviewAsync();
             return true;
         }
 
@@ -1527,7 +1544,10 @@ namespace BarTenderPrinter
             var count = GetTemplateLocalData(settings).Count;
             if (count == 0 && string.IsNullOrWhiteSpace(settings.LocalDataPath) && string.IsNullOrWhiteSpace(settings.LocalDataStoragePath))
             { MessageBox.Show(this, "当前模板未选择校验数据文件，请先点击“选择校验数据”。", "校验数据管理", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            var message = $"路径: {settings.LocalDataPath}\n快照: {settings.LocalDataStoragePath}\n列: {settings.LocalDataColumnName}\n绑定字段: {settings.LocalDataTargetField}\n数据量: {count}\n\n选择“是”替换校验数据，选择“否”清除当前模板校验数据。";
+            var selectedFields = (settings.DataSources ?? new List<DataSourceItem>())
+                .Where(source => source.Enabled && source.UseLocalDataValidation)
+                .Select(source => source.Field);
+            var message = $"路径: {settings.LocalDataPath}\n快照: {settings.LocalDataStoragePath}\n列: {settings.LocalDataColumnName}\n校验字段: {string.Join(", ", selectedFields)}\n数据量: {count}\n\n选择“是”替换校验数据，选择“否”清除当前模板校验数据。";
             var choice = MessageBox.Show(this, message, "校验数据管理", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
             if (choice == DialogResult.Yes) { SelectOrderValidationData(); return; }
             if (choice != DialogResult.No) return;
@@ -1537,6 +1557,7 @@ namespace BarTenderPrinter
             settings.LocalDataTargetField = "";
             settings.LocalData = new List<string>();
             settings.InputValidation = false;
+            foreach (var source in settings.DataSources ?? new List<DataSourceItem>()) source.UseLocalDataValidation = false;
             _chkOrderInputValidation.Checked = false;
             _chkOrderInputValidation.Enabled = false;
             _lblOrderLocalData.Text = "校验数据：未配置";
@@ -1592,11 +1613,11 @@ namespace BarTenderPrinter
         {
             targetTemplate ??= _selectedOrderTemplateDraft;
             if (targetTemplate?.Settings == null) return;
-            var targetField = PromptForLocalDataTargetField(targetTemplate.Settings.DataSources, imported.ColumnName);
-            if (targetField == null) return;
             targetTemplate.Settings.LocalDataPath = path;
             targetTemplate.Settings.LocalDataColumnName = imported.ColumnName;
-            targetTemplate.Settings.LocalDataTargetField = targetField;
+            targetTemplate.Settings.LocalDataTargetField = "";
+            foreach (var source in targetTemplate.Settings.DataSources ?? new List<DataSourceItem>())
+                source.UseLocalDataValidation = source.Enabled;
             var scope = FirstNonEmpty(_editingOrder?.OrderId, _activeOrder?.OrderId, _txtOrderNumber?.Text, "draft");
             targetTemplate.Settings.LocalDataStoragePath = SaveValidationDataSnapshot(scope, targetTemplate.Id, targetTemplate.SourcePath, imported.Values);
             targetTemplate.Settings.LocalData = new List<string>();
@@ -1604,42 +1625,12 @@ namespace BarTenderPrinter
             {
                 _chkOrderInputValidation.Enabled = true;
                 _chkOrderInputValidation.Checked = true;
-                _lblOrderLocalData.Text = $"校验数据：{path}（{imported.Values.Count} 条，{imported.ColumnName} -> {targetTemplate.Settings.LocalDataTargetField}）";
+                _lblOrderLocalData.Text = $"校验数据：{path}（{imported.Values.Count} 条，已默认勾选全部启用数据源）";
                 _toolTips.SetToolTip(_lblOrderLocalData, _lblOrderLocalData.Text);
+                LoadOrderSettingsIntoGrid(targetTemplate.Settings);
             }
             MessageBox.Show(this, $"校验数据导入完成\n总行数：{imported.TotalRows}\n去重后：{imported.Values.Count}\n重复数：{imported.DuplicateRows}\n空值数：{imported.EmptyRows}", "校验数据", MessageBoxButtons.OK, MessageBoxIcon.Information);
             MarkOrderEditorDirty();
-        }
-
-        private string PromptForLocalDataTargetField(IEnumerable<DataSourceItem> sources, string columnName)
-        {
-            var fields = (sources ?? new List<DataSourceItem>())
-                .Where(source => source.Enabled && !string.IsNullOrWhiteSpace(source.Field))
-                .Select(source => source.Field)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(field => field, NaturalStringComparer.Instance)
-                .ToList();
-            if (fields.Count == 0) return "";
-            var preferred = fields.FirstOrDefault(field => string.Equals(field, columnName, StringComparison.OrdinalIgnoreCase)) ?? fields[0];
-            using (var form = new Form())
-            {
-                form.Text = "绑定校验字段";
-                form.Size = new Size(420, 190);
-                form.FormBorderStyle = FormBorderStyle.FixedDialog;
-                form.StartPosition = FormStartPosition.CenterParent;
-                form.MaximizeBox = false;
-                form.MinimizeBox = false;
-                var label = new Label { Text = $"请选择“{columnName}”校验数据要匹配的数据源字段：", Location = new Point(12, 12), Size = new Size(380, 36) };
-                var combo = new ComboBox { Location = new Point(12, 55), Size = new Size(380, 25), DropDownStyle = ComboBoxStyle.DropDownList };
-                foreach (var field in fields) combo.Items.Add(field);
-                combo.SelectedItem = preferred;
-                var ok = new Button { Text = "确定", Location = new Point(225, 105), Size = new Size(75, 28), DialogResult = DialogResult.OK };
-                var cancel = new Button { Text = "取消", Location = new Point(315, 105), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
-                form.Controls.AddRange(new Control[] { label, combo, ok, cancel });
-                form.AcceptButton = ok;
-                form.CancelButton = cancel;
-                return form.ShowDialog(this) == DialogResult.OK ? combo.SelectedItem?.ToString() ?? "" : null;
-            }
         }
 
         private static string SaveValidationDataSnapshot(string orderScope, string templateId, string templatePath, HashSet<string> values)
@@ -1883,6 +1874,7 @@ namespace BarTenderPrinter
             var settings = _selectedOrderTemplateDraft?.Settings;
             if (settings != null)
             {
+                ValidationService.MigrateLocalDataSelection(settings);
                 _cmbOrderPrinter.SelectedIndex = -1;
                 if (!string.IsNullOrWhiteSpace(settings.Printer))
                 {
@@ -1917,6 +1909,7 @@ namespace BarTenderPrinter
         private TemplateSettings BuildOrderTemplateSettings(string templatePath, List<DataSourceItem> dataSources)
         {
             var settings = BuildTemplateSettings(templatePath, dataSources);
+            settings.SchemaVersion = 3;
             settings.Scope = "OrderTemplate";
             settings.OrderId = _editingOrder?.OrderId ?? "";
             settings.TemplateId = _selectedOrderTemplateDraft?.Id ?? "";
@@ -1954,6 +1947,7 @@ namespace BarTenderPrinter
         {
             _orderDataSourcesGrid.Columns.Clear();
             _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "使用", Width = 60 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "UseLocalDataValidation", HeaderText = "使用校验数据", Width = 105 });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Field", HeaderText = "字段名", ReadOnly = true, MinimumWidth = 180, Width = 220 });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "LockEnabled", HeaderText = "锁定", Visible = false });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewButtonColumn { Name = "LockToggle", HeaderText = "锁定", Width = 52, FlatStyle = FlatStyle.Flat });
@@ -2049,7 +2043,7 @@ namespace BarTenderPrinter
                 RefreshOrderTemplateCards();
                 UpdateOrderToggleAllState();
             }
-            if (columnName == "ExpectedLength" || columnName == "LockedValue" || columnName == "AutoStep" || columnName == "Enabled")
+            if (columnName == "ExpectedLength" || columnName == "LockedValue" || columnName == "AutoStep" || columnName == "Enabled" || columnName == "UseLocalDataValidation")
             {
                 if (columnName == "ExpectedLength" && !_applyingOrderGlobalLength)
                     _orderDataSourcesGrid.Rows[e.RowIndex].Cells["ExpectedLength"].Tag = true;
@@ -2173,7 +2167,7 @@ namespace BarTenderPrinter
         {
             var lockEnabled = source.IsLocked || source.LockAfterInput || source.AutoIncrement;
             var displayStep = source.AutoIncrement ? source.AutoStep : 0;
-            var rowIndex = _orderDataSourcesGrid.Rows.Add(source.Enabled, source.Field, lockEnabled,
+            var rowIndex = _orderDataSourcesGrid.Rows.Add(source.Enabled, source.UseLocalDataValidation, source.Field, lockEnabled,
                 "",
                 displayStep, source.LockedValue, source.ExpectedLength);
             _orderDataSourcesGrid.Rows[rowIndex].Cells["ExpectedLength"].Tag = source.LengthEdited;
@@ -2325,6 +2319,7 @@ namespace BarTenderPrinter
                     Name = field,
                     Field = field,
                     Enabled = ToBoolean(row.Cells["Enabled"].Value),
+                    UseLocalDataValidation = ToBoolean(row.Cells["UseLocalDataValidation"].Value),
                     AutoIncrement = autoIncrement,
                     AutoStep = lockEnabled ? Math.Max(-99, Math.Min(99, step)) : 0,
                     IsLocked = lockEnabled && !string.IsNullOrWhiteSpace(lockedValue),
@@ -2356,17 +2351,12 @@ namespace BarTenderPrinter
                 ApplyBarTenderConnection(connectTask.Result);
                 PopulateTemplateList(templatesTask.Result);
                 PopulatePrinters(printersTask.Result);
-                ApplyStartupTemplateSelection();
+                RestoreStartupContext();
                 LoadHistory();
                 RefreshStats();
                 _isInitializing = false;
 
-                if (!string.IsNullOrEmpty(_selectedTemplatePath) && File.Exists(_selectedTemplatePath) && _btService.IsConnected)
-                {
-                    var item = cmbTemplate.SelectedItem as TemplateItem;
-                    if (item == null || !RestoreTemplateSettings(item.Name, item.FullPath))
-                        LoadTemplateDataSources(_selectedTemplatePath);
-                }
+                RestoreApplicationStateControls();
 
                 AddLog("系统启动完成", "INFO");
             }
@@ -2437,6 +2427,9 @@ namespace BarTenderPrinter
 
         private void PopulatePrinters(string[] printers)
         {
+            _availablePrinters.Clear();
+            foreach (var printer in printers ?? Array.Empty<string>())
+                if (!string.IsNullOrWhiteSpace(printer)) _availablePrinters.Add(printer);
             var configuredPrinter = _activeOrderTemplate?.Settings?.Printer;
             if (string.IsNullOrWhiteSpace(configuredPrinter)) configuredPrinter = cmbPrinter.SelectedItem?.ToString();
             if (string.IsNullOrWhiteSpace(configuredPrinter)) configuredPrinter = IniReadValue("General", "Printer", _configFile);
@@ -2445,7 +2438,7 @@ namespace BarTenderPrinter
             try
             {
                 cmbPrinter.Items.Clear();
-                foreach (var printer in printers) cmbPrinter.Items.Add(printer);
+                foreach (var printer in printers ?? Array.Empty<string>()) cmbPrinter.Items.Add(printer);
                 if (!string.IsNullOrWhiteSpace(configuredPrinter))
                 {
                     if (!cmbPrinter.Items.Contains(configuredPrinter)) cmbPrinter.Items.Add(configuredPrinter);
@@ -2491,6 +2484,88 @@ namespace BarTenderPrinter
             lblSelectedTemplate.Text = match.Name;
             SaveTemplateFolderConfig();
             AddLog($"已通过右键菜单打开模板: {match.Name}", "INFO");
+        }
+
+        private void RestoreStartupContext()
+        {
+            if (!string.IsNullOrEmpty(_startupTemplatePath) && File.Exists(_startupTemplatePath))
+            {
+                ApplyStartupTemplateSelection();
+                RestoreSelectedTemplate();
+                return;
+            }
+
+            var recentOrder = _orders.Orders.FirstOrDefault(order =>
+                string.Equals(order.OrderId, _applicationState.ActiveOrderId, StringComparison.OrdinalIgnoreCase));
+            if (recentOrder != null && ApplyOrder(recentOrder, false, _applicationState.ActiveTemplateId))
+            {
+                SelectOrder(recentOrder);
+                AddLog($"已恢复最近订单: {recentOrder.DisplayName}", "INFO");
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_applicationState.SelectedTemplatePath) && File.Exists(_applicationState.SelectedTemplatePath))
+            {
+                SelectStandaloneTemplate(_applicationState.SelectedTemplatePath);
+                RestoreSelectedTemplate();
+                AddLog($"已恢复最近模板: {Path.GetFileName(_applicationState.SelectedTemplatePath)}", "INFO");
+                return;
+            }
+
+            RestoreSelectedTemplate();
+        }
+
+        private void SelectStandaloneTemplate(string templatePath)
+        {
+            _activeOrder = null;
+            _activeOrderTemplate = null;
+            _templatesFolder = Path.GetDirectoryName(templatePath) ?? "";
+            txtTemplateDir.Text = _templatesFolder;
+            PopulateTemplateList(GetTemplateFiles(_templatesFolder));
+            var match = cmbTemplate.Items.Cast<TemplateItem>()
+                .FirstOrDefault(item => string.Equals(item.FullPath, templatePath, StringComparison.OrdinalIgnoreCase));
+            if (match == null)
+            {
+                match = new TemplateItem(Path.GetFileName(templatePath), templatePath);
+                cmbTemplate.Items.Add(match);
+            }
+            cmbTemplate.SelectedItem = match;
+            _selectedTemplatePath = match.FullPath;
+            lblSelectedTemplate.Text = match.Name;
+        }
+
+        private void RestoreSelectedTemplate()
+        {
+            if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath) || !_btService.IsConnected) return;
+            var item = cmbTemplate.SelectedItem as TemplateItem;
+            if (_activeOrderTemplate != null)
+                ApplyTemplateSettings(_activeOrderTemplate.Settings ?? new TemplateSettings());
+            else if (item == null || !RestoreTemplateSettings(item.Name, item.FullPath))
+                LoadTemplateDataSources(_selectedTemplatePath);
+        }
+
+        private void RestoreApplicationStateControls()
+        {
+            if (_applicationState.SchemaVersion <= 0)
+            {
+                UpdateEffectiveSummary();
+                return;
+            }
+            var wasLoading = _isLoadingConfig;
+            _isLoadingConfig = true;
+            try
+            {
+                numCopies.Value = Math.Max(numCopies.Minimum, Math.Min(numCopies.Maximum, _applicationState.Copies));
+                if (!string.IsNullOrWhiteSpace(_applicationState.Printer) && _availablePrinters.Contains(_applicationState.Printer))
+                    cmbPrinter.SelectedItem = _applicationState.Printer;
+                else if (!_availablePrinters.Contains(cmbPrinter.SelectedItem?.ToString() ?? "") && _availablePrinters.Count > 0)
+                    cmbPrinter.SelectedItem = cmbPrinter.Items.Cast<object>().FirstOrDefault(item => _availablePrinters.Contains(item?.ToString() ?? ""));
+            }
+            finally { _isLoadingConfig = wasLoading; }
+
+            if (_chkPreview.Enabled && _applicationState.PreviewEnabled)
+                _chkPreview.Checked = true;
+            UpdateEffectiveSummary();
         }
 
         private void btnBrowseDir_Click(object sender, EventArgs e)
@@ -3389,17 +3464,16 @@ namespace BarTenderPrinter
 
         private void ApplyLoadedLocalData(string path, HashSet<string> data, string columnName, string sourceType)
         {
-            var targetField = PromptForLocalDataTargetField(_dataSources, columnName);
-            if (targetField == null) return;
             _localData = data;
             _localDataPath = path;
             _localDataStoragePath = SaveValidationDataSnapshot(_activeOrder?.OrderId ?? "global", _activeOrderTemplate?.Id ?? "global", _selectedTemplatePath, data);
             _localDataColumnName = columnName;
-            _localDataTargetField = targetField;
+            _localDataTargetField = "";
+            foreach (var source in _dataSources) source.UseLocalDataValidation = source.Enabled;
             UpdateLocalDataValidationAvailability();
             _useLocalDataValidation = data.Count > 0;
             chkUseLocalData.Checked = _useLocalDataValidation;
-            UpdateLocalDataLabel($"已加载: {data.Count} 条 [{columnName}->{_localDataTargetField}] ({Path.GetFileName(path)})");
+            UpdateLocalDataLabel($"已加载: {data.Count} 条 [{columnName}，全部启用字段] ({Path.GetFileName(path)})");
             MessageBox.Show(this, $"校验数据导入完成\n总行数：{data.Count}\n去重后：{data.Count}\n重复数：0\n空值数：0", "校验数据", MessageBoxButtons.OK, MessageBoxIcon.Information);
             AddLog($"加载 {sourceType}: {data.Count} 条, 列: {columnName}", "SUCCESS");
             SaveCurrentConfigurationState();
@@ -3568,12 +3642,12 @@ namespace BarTenderPrinter
                 lblLocalData.Text = text;
         }
 
-        private bool ValidateLocalData(Dictionary<string, string> fieldValues, HashSet<string> localData = null, string targetField = null)
+        private bool ValidateLocalData(Dictionary<string, string> fieldValues, HashSet<string> localData = null, IEnumerable<DataSourceItem> sources = null)
         {
             localData ??= _localData;
             if (localData.Count == 0) return true;
-            targetField ??= _localDataTargetField;
-            var notInLocal = ValidationService.FindLocalDataMismatches(fieldValues, localData, targetField);
+            sources ??= _dataSources;
+            var notInLocal = ValidationService.FindLocalDataMismatches(fieldValues, localData, sources);
             if (notInLocal.Count > 0)
             {
                 var msg = $"以下数据未完整匹配本地校验数据：\n{string.Join("\n", notInLocal)}";
@@ -4043,7 +4117,7 @@ namespace BarTenderPrinter
             { MessageBox.Show(this, "历史模板缺少已启用的数据源设置，无法补打印。", "补打印校验", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (!ValidateTemplateFieldCoverage(record.TemplatePath, configuredSources, values, "补打印字段完整性")) return;
             if (!ValidateInputValues(enabled, values, false, settings)) return;
-            if (settings.InputValidation && !ValidateLocalData(values, GetTemplateLocalData(settings), settings.LocalDataTargetField)) return;
+            if (settings.InputValidation && !ValidateLocalData(values, GetTemplateLocalData(settings), settings.DataSources)) return;
             if (!string.IsNullOrEmpty(warning) && MessageBox.Show(this, warning + "\n\n是否继续补打印？", "补打印设置确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
             SetPrintEnvironmentEnabled(false);
             SetStatus("补打印中...");
@@ -4345,6 +4419,7 @@ namespace BarTenderPrinter
 
         private void ApplyTemplateSettings(TemplateSettings settings)
         {
+            ValidationService.MigrateLocalDataSelection(settings);
             _isLoadingConfig = true;
             try
             {
@@ -4412,8 +4487,28 @@ namespace BarTenderPrinter
                 AutoIncrementLocked = source.AutoIncrementLocked,
                 ExpectedLength = source.ExpectedLength,
                 LengthRevision = source.LengthRevision,
-                LengthEdited = source.LengthEdited
+                LengthEdited = source.LengthEdited,
+                UseLocalDataValidation = source.UseLocalDataValidation
             };
+        }
+
+        private void SaveApplicationState()
+        {
+            try
+            {
+                if (_activeOrder == null && !string.IsNullOrWhiteSpace(_selectedTemplatePath))
+                    _applicationState.SelectedTemplatePath = _selectedTemplatePath;
+                _applicationState.ActiveOrderId = _activeOrder?.OrderId ?? "";
+                _applicationState.ActiveTemplateId = _activeOrderTemplate?.Id ?? "";
+                _applicationState.Printer = cmbPrinter.SelectedItem?.ToString() ?? "";
+                _applicationState.Copies = (int)numCopies.Value;
+                _applicationState.PreviewEnabled = _chkPreview?.Checked == true;
+                _applicationStateManager.Save(_applicationState);
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Warn($"保存最近使用状态失败: {ex.Message}");
+            }
         }
 
         private void SaveConfig()
@@ -4460,7 +4555,8 @@ namespace BarTenderPrinter
                         ["AutoIncrementLocked"] = _dataSources[i].AutoIncrementLocked.ToString(),
                         ["ExpectedLength"] = _dataSources[i].ExpectedLength.ToString(),
                         ["LengthRevision"] = _dataSources[i].LengthRevision.ToString(),
-                        ["LengthEdited"] = _dataSources[i].LengthEdited.ToString()
+                        ["LengthEdited"] = _dataSources[i].LengthEdited.ToString(),
+                        ["UseLocalDataValidation"] = _dataSources[i].UseLocalDataValidation.ToString()
                     });
                 }
                 AtomicFileWriter.WriteAllText(_configFile, sb.ToString(), Encoding.Unicode);
@@ -4547,6 +4643,7 @@ namespace BarTenderPrinter
                     var lockAfterInput = false; bool.TryParse(IniReadValue($"DS{i}", "LockAfterInput", path), out lockAfterInput);
                     var autoIncrementLocked = false; bool.TryParse(IniReadValue($"DS{i}", "AutoIncrementLocked", path), out autoIncrementLocked);
                     var lengthEdited = false; bool.TryParse(IniReadValue($"DS{i}", "LengthEdited", path), out lengthEdited);
+                    var useLocalDataValidation = false; bool.TryParse(IniReadValue($"DS{i}", "UseLocalDataValidation", path), out useLocalDataValidation);
                     int.TryParse(IniReadValue($"DS{i}", "ExpectedLength", path), out int expectedLength);
                     long.TryParse(IniReadValue($"DS{i}", "LengthRevision", path), out long lengthRevision);
                     _lengthRevisionCounter = Math.Max(_lengthRevisionCounter, lengthRevision);
@@ -4563,7 +4660,8 @@ namespace BarTenderPrinter
                         AutoIncrementLocked = autoIncrementLocked,
                         ExpectedLength = expectedLength,
                         LengthRevision = lengthRevision,
-                        LengthEdited = lengthEdited
+                        LengthEdited = lengthEdited,
+                        UseLocalDataValidation = useLocalDataValidation
                     });
                 }
                 UpdateLocalDataValidationAvailability();
@@ -4642,6 +4740,7 @@ namespace BarTenderPrinter
             public string Field;
             public Panel RowPanel;
             public CheckBox CbEnabled;
+            public CheckBox CbUseLocalDataValidation;
             public Label LblField;
             public CheckBox CbAutoInc;
             public NumericUpDown NumStep;
@@ -4674,11 +4773,12 @@ namespace BarTenderPrinter
 
             var hdrGrip = new Label { Text = "排序", Location = new Point(15, 55), Size = new Size(22, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
             var hdrName = new Label { Text = "字段名", Location = new Point(40, 55), Size = new Size(180, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrAuto = new Label { Text = "增序", Location = new Point(255, 55), Size = new Size(30, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrStep = new Label { Text = "步长", Location = new Point(300, 55), Size = new Size(60, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrLock = new Label { Text = "锁定方式", Location = new Point(380, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrLockedValue = new Label { Text = "锁定值（可空）", Location = new Point(505, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
-            var hdrLength = new Label { Text = "长度", Location = new Point(795, 55), Size = new Size(70, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrValidation = new Label { Text = "校验", Location = new Point(245, 55), Size = new Size(40, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrAuto = new Label { Text = "增序", Location = new Point(300, 55), Size = new Size(30, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrStep = new Label { Text = "步长", Location = new Point(340, 55), Size = new Size(60, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrLock = new Label { Text = "锁定方式", Location = new Point(410, 55), Size = new Size(80, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrLockedValue = new Label { Text = "锁定值（可空）", Location = new Point(535, 55), Size = new Size(120, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
+            var hdrLength = new Label { Text = "长度", Location = new Point(825, 55), Size = new Size(70, 16), Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold) };
 
             _scrollPanel = new Panel { Location = new Point(10, 75), Size = new Size(940, 255), AutoScroll = true, BorderStyle = BorderStyle.FixedSingle };
 
@@ -4703,7 +4803,7 @@ namespace BarTenderPrinter
                 bool isChecked = existing != null ? existing.Enabled : (!preserveExistingOrder || current.Count == 0);
                 CreateRow(field, isChecked, existing?.Name ?? field, existing?.AutoIncrement ?? false, existing?.AutoStep ?? 1,
                     existing?.IsLocked ?? false, existing?.LockAfterInput ?? false, existing?.LockedValue ?? "",
-                    existing?.AutoIncrementLocked ?? false, existing?.ExpectedLength ?? 0);
+                    existing?.AutoIncrementLocked ?? false, existing?.ExpectedLength ?? 0, existing?.UseLocalDataValidation ?? false);
             }
 
             RelayoutRows();
@@ -4741,6 +4841,7 @@ namespace BarTenderPrinter
                             Name = r.Field,
                             Field = r.Field,
                             Enabled = true,
+                            UseLocalDataValidation = r.CbUseLocalDataValidation.Checked,
                             AutoIncrement = r.CbAutoInc.Checked,
                             AutoStep = (int)r.NumStep.Value,
                             IsLocked = r.CmbLockMode.SelectedIndex == 1 || (r.CmbLockMode.SelectedIndex == 2 && !string.IsNullOrWhiteSpace(r.TxtLockedValue.Text)),
@@ -4755,12 +4856,12 @@ namespace BarTenderPrinter
             };
             var cancel = new Button { Text = "取消", Location = new Point(865, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
 
-            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrAuto, hdrStep, hdrLock, hdrLockedValue, hdrLength, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
+            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrValidation, hdrAuto, hdrStep, hdrLock, hdrLockedValue, hdrLength, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
             AcceptButton = ok; CancelButton = cancel;
         }
 
         private void CreateRow(string field, bool checkedVal, string displayName, bool autoInc, int autoStep,
-            bool isLocked, bool lockAfterInput, string lockedValue, bool autoIncrementLocked, int expectedLength)
+            bool isLocked, bool lockAfterInput, string lockedValue, bool autoIncrementLocked, int expectedLength, bool useLocalDataValidation)
         {
             var displayLength = expectedLength > 0 ? expectedLength : (_lengthValidationEnabled ? _globalExpectedLength : 0);
             var row = new DataSourceRow
@@ -4800,15 +4901,17 @@ namespace BarTenderPrinter
             row.LblField = new Label { Text = field, Location = new Point(50, 4), Size = new Size(190, 18), Cursor = Cursors.SizeAll };
             row.LblField.MouseDown += Row_MouseDown;
 
-            row.CbAutoInc = new CheckBox { Location = new Point(255, 2), Size = new Size(20, 20), Checked = autoInc };
+            row.CbUseLocalDataValidation = new CheckBox { Location = new Point(250, 2), Size = new Size(20, 20), Checked = useLocalDataValidation };
 
-            row.NumStep = new NumericUpDown { Location = new Point(295, 0), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = Math.Max(-99, Math.Min(99, autoStep)) };
+            row.CbAutoInc = new CheckBox { Location = new Point(300, 2), Size = new Size(20, 20), Checked = autoInc };
 
-            row.CmbLockMode = new ComboBox { Location = new Point(375, 0), Size = new Size(120, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            row.NumStep = new NumericUpDown { Location = new Point(335, 0), Size = new Size(55, 25), Minimum = -99, Maximum = 99, Value = Math.Max(-99, Math.Min(99, autoStep)) };
+
+            row.CmbLockMode = new ComboBox { Location = new Point(405, 0), Size = new Size(120, 25), DropDownStyle = ComboBoxStyle.DropDownList };
             row.CmbLockMode.Items.AddRange(new object[] { "不锁定", "固定锁定", "输入后锁定" });
             row.CmbLockMode.SelectedIndex = lockAfterInput ? 2 : isLocked ? 1 : 0;
-            row.TxtLockedValue = new TextBox { Location = new Point(505, 0), Size = new Size(250, 25), Text = lockedValue ?? "" };
-            row.NumExpectedLength = new NumericUpDown { Location = new Point(795, 0), Size = new Size(70, 25), Minimum = 0, Maximum = 512, Value = Math.Max(0, Math.Min(512, displayLength)) };
+            row.TxtLockedValue = new TextBox { Location = new Point(535, 0), Size = new Size(250, 25), Text = lockedValue ?? "" };
+            row.NumExpectedLength = new NumericUpDown { Location = new Point(825, 0), Size = new Size(70, 25), Minimum = 0, Maximum = 512, Value = Math.Max(0, Math.Min(512, displayLength)) };
             row.NumExpectedLength.ValueChanged += (s, e) => row.LengthEdited = true;
             row.TxtLockedValue.Enabled = row.CmbLockMode.SelectedIndex != 0;
             row.CmbLockMode.SelectedIndexChanged += (s, e) =>
@@ -4826,7 +4929,7 @@ namespace BarTenderPrinter
                 else if (!lockAfterInput) row.WasInputLocked = false;
             };
 
-            row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.LblField, row.CbAutoInc, row.NumStep, row.CmbLockMode, row.TxtLockedValue, row.NumExpectedLength });
+            row.RowPanel.Controls.AddRange(new Control[] { row.Grip, row.CbEnabled, row.LblField, row.CbUseLocalDataValidation, row.CbAutoInc, row.NumStep, row.CmbLockMode, row.TxtLockedValue, row.NumExpectedLength });
             _scrollPanel.Controls.Add(row.RowPanel);
 
             _rows.Add(row);
@@ -5079,5 +5182,6 @@ namespace BarTenderPrinter
         public int ExpectedLength { get; set; }
         public long LengthRevision { get; set; }
         public bool LengthEdited { get; set; }
+        public bool UseLocalDataValidation { get; set; }
     }
 }

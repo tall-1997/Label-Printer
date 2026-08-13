@@ -193,6 +193,7 @@ namespace BarTenderPrinter
                         template.SchemaVersion = Math.Max(template.SchemaVersion, 2);
                         template.FieldSnapshot ??= new List<string>();
                         template.Settings ??= new TemplateSettings();
+                        ValidationService.MigrateLocalDataSelection(template.Settings);
                         template.Settings.OrderId = item.Id;
                         template.Settings.TemplateId = template.Id;
                         template.Settings.Scope = "OrderTemplate";

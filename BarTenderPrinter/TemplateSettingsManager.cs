@@ -8,7 +8,7 @@ namespace BarTenderPrinter
 {
     public class TemplateSettings
     {
-        public int SchemaVersion { get; set; } = 2;
+        public int SchemaVersion { get; set; } = 3;
         public string Scope { get; set; } = "GlobalTemplate";
         public string OrderId { get; set; } = "";
         public string TemplateId { get; set; } = "";
@@ -74,7 +74,11 @@ namespace BarTenderPrinter
             try
             {
                 var items = JsonSerializer.Deserialize<List<TemplateSettings>>(File.ReadAllText(_path)) ?? new List<TemplateSettings>();
-                foreach (var item in items) _settings[GetKey(item)] = item;
+                foreach (var item in items)
+                {
+                    ValidationService.MigrateLocalDataSelection(item);
+                    _settings[GetKey(item)] = item;
+                }
             }
             catch (Exception ex)
             {
@@ -84,7 +88,11 @@ namespace BarTenderPrinter
                 try
                 {
                     var items = JsonSerializer.Deserialize<List<TemplateSettings>>(File.ReadAllText(backupPath)) ?? new List<TemplateSettings>();
-                    foreach (var item in items) _settings[GetKey(item)] = item;
+                    foreach (var item in items)
+                    {
+                        ValidationService.MigrateLocalDataSelection(item);
+                        _settings[GetKey(item)] = item;
+                    }
                 }
                 catch (Exception backupEx) { LoggerService.Error("加载模板设置备份失败", backupEx); }
             }

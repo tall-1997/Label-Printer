@@ -1,6 +1,6 @@
 # BarTenderPrinter 使用说明与操作步骤
 
-适用版本：`v5.7.66`
+适用版本：`v5.7.67`
 
 本文面向现场操作员、班组长、工艺/模板维护人员和系统管理员，说明 BarTenderPrinter 的安装、登录、订单管理、模板配置、数据源设置、打印、补打印、历史追溯和日常维护流程。
 
@@ -29,11 +29,11 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 
 从 GitHub Release 下载最新安装包：
 
-`BarTenderPrinter-Setup-v5.7.66-win-x64.exe`
+`BarTenderPrinter-Setup-v5.7.67-win-x64.exe`
 
 发布地址：
 
-`https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.66`
+`https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.67`
 
 ## 3. 首次启动
 
@@ -43,6 +43,7 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 2. 从桌面快捷方式或开始菜单启动 `BarTenderPrinter`。
 3. 软件启动后会自动连接 BarTender。
 4. 如果未安装或未正确注册 BarTender COM，软件会进入离线模式，非打印功能仍可使用。
+5. 软件会恢复最近订单、模板、打印机、份数和预览开关；通过 `.btw` 右键菜单启动时优先打开指定模板。
 
 ### 3.2 默认账户
 
@@ -299,9 +300,10 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 2. 点击 `选择校验数据`。
 3. 选择 CSV、Excel 或 TXT 文件。
 4. 如果文件有多列，选择用于校验的列。
-5. 选择该列绑定的数据源字段。
-6. 软件显示导入统计。
-7. 勾选 `本地完整匹配`。
+5. 软件默认勾选当前模板的全部启用数据源使用校验数据。
+6. 在数据源详细设置中按需取消字段的 `使用校验数据`。
+7. 软件显示导入统计。
+8. 勾选 `本地完整匹配`。
 
 导入统计包含：
 
@@ -313,6 +315,8 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 ### 8.4 管理校验数据
 
 点击 `管理校验` 可以查看、替换或清除当前模板校验数据。
+
+每个模板保存一份校验数据快照，每个启用数据源独立保存 `使用校验数据` 选项。打印和补打印只检查已启用且勾选该选项的字段。
 
 如果尚未导入校验数据，软件会提示先选择校验数据文件。
 
@@ -359,7 +363,7 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 
 ### 9.5 标签预览
 
-应用启动时检测目标机器安装的 BarTender 2022 R2 `Seagull.BarTender.Print` SDK。检测成功后显示 `开启预览`；SDK 缺失、架构不匹配或版本不匹配时显示 `预览不可用`，鼠标停留可查看原因。该功能需在安装 BarTender 的 Windows 机器上完成静默性和打印隔离验收后用于生产。
+应用启动时检测目标机器安装的 BarTender 2022 R2 `Seagull.BarTender.Print` SDK。检测成功后显示 `开启预览`；SDK 缺失、架构不匹配或版本不匹配时显示 `预览不可用`，鼠标停留可查看原因。打印后预览只使用当前模板仍存在的历史字段，旧字段会被忽略；无可用动态字段时显示原模板缩略图。预览窗口按图片比例和屏幕工作区自动调整。该功能需在安装 BarTender 的 Windows 机器上完成静默性和打印隔离验收后用于生产。
 
 ## 10. 补打印
 

@@ -24,6 +24,44 @@ namespace BarTenderPrinter
             return result;
         }
 
+        public static List<string> FindLocalDataMismatches(Dictionary<string, string> fieldValues, HashSet<string> localData, IEnumerable<DataSourceItem> sources)
+        {
+            var selectedFields = new HashSet<string>((sources ?? new List<DataSourceItem>())
+                .Where(source => source.Enabled && source.UseLocalDataValidation)
+                .Select(source => source.Field)
+                .Where(field => !string.IsNullOrWhiteSpace(field)), System.StringComparer.OrdinalIgnoreCase);
+            if (selectedFields.Count == 0) return new List<string>();
+            return FindLocalDataMismatches(fieldValues, localData, selectedFields);
+        }
+
+        public static List<string> FindLocalDataMismatches(Dictionary<string, string> fieldValues, HashSet<string> localData, ISet<string> selectedFields)
+        {
+            var result = new List<string>();
+            if (fieldValues == null || localData == null || localData.Count == 0 || selectedFields == null) return result;
+            foreach (var item in fieldValues)
+            {
+                if (!selectedFields.Contains(item.Key) || string.IsNullOrEmpty(item.Value)) continue;
+                if (!localData.Contains(item.Value)) result.Add($"{item.Key}={item.Value}");
+            }
+            return result;
+        }
+
+        public static void MigrateLocalDataSelection(TemplateSettings settings)
+        {
+            if (settings == null) return;
+            settings.DataSources ??= new List<DataSourceItem>();
+            if (settings.SchemaVersion >= 3) return;
+            var hasLocalData = !string.IsNullOrWhiteSpace(settings.LocalDataStoragePath) ||
+                (settings.LocalData?.Count ?? 0) > 0 || !string.IsNullOrWhiteSpace(settings.LocalDataPath);
+            foreach (var source in settings.DataSources)
+            {
+                source.UseLocalDataValidation = hasLocalData && source.Enabled &&
+                    (string.IsNullOrWhiteSpace(settings.LocalDataTargetField) ||
+                     string.Equals(source.Field, settings.LocalDataTargetField, System.StringComparison.OrdinalIgnoreCase));
+            }
+            settings.SchemaVersion = 3;
+        }
+
         public static List<string> FindTemplateFieldIssues(IEnumerable<string> templateFields, IEnumerable<DataSourceItem> configuredSources, Dictionary<string, string> fieldValues)
         {
             var fields = (templateFields ?? new List<string>()).ToList();

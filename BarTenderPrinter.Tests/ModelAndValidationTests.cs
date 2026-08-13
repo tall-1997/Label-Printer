@@ -38,6 +38,64 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
+        public void LocalDataValidationChecksOnlySelectedEnabledSources()
+        {
+            var mismatches = ValidationService.FindLocalDataMismatches(
+                new Dictionary<string, string> { ["IMEI"] = "A", ["BOX"] = "B", ["SERIAL"] = "C" },
+                new HashSet<string> { "A" },
+                new[]
+                {
+                    new DataSourceItem { Field = "IMEI", Enabled = true, UseLocalDataValidation = true },
+                    new DataSourceItem { Field = "BOX", Enabled = true, UseLocalDataValidation = false },
+                    new DataSourceItem { Field = "SERIAL", Enabled = false, UseLocalDataValidation = true }
+                });
+
+            Assert.Empty(mismatches);
+        }
+
+        [Fact]
+        public void LegacyTargetFieldMigratesToMatchingSource()
+        {
+            var settings = new TemplateSettings
+            {
+                SchemaVersion = 2,
+                LocalDataTargetField = "imei",
+                LocalData = new List<string> { "A" },
+                DataSources = new List<DataSourceItem>
+                {
+                    new DataSourceItem { Field = "IMEI", Enabled = true },
+                    new DataSourceItem { Field = "BOX", Enabled = true }
+                }
+            };
+
+            ValidationService.MigrateLocalDataSelection(settings);
+
+            Assert.Equal(3, settings.SchemaVersion);
+            Assert.True(settings.DataSources[0].UseLocalDataValidation);
+            Assert.False(settings.DataSources[1].UseLocalDataValidation);
+        }
+
+        [Fact]
+        public void LegacyLocalDataWithoutTargetSelectsAllEnabledSources()
+        {
+            var settings = new TemplateSettings
+            {
+                SchemaVersion = 2,
+                LocalData = new List<string> { "A" },
+                DataSources = new List<DataSourceItem>
+                {
+                    new DataSourceItem { Field = "IMEI", Enabled = true },
+                    new DataSourceItem { Field = "BOX", Enabled = false }
+                }
+            };
+
+            ValidationService.MigrateLocalDataSelection(settings);
+
+            Assert.True(settings.DataSources[0].UseLocalDataValidation);
+            Assert.False(settings.DataSources[1].UseLocalDataValidation);
+        }
+
+        [Fact]
         public void FailedHistoryRecordDoesNotEnterDuplicateIndex()
         {
             var dir = CreateTempDirectory();
@@ -175,6 +233,26 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
+        public void OrderEditorControllerDeepClonesValidationSelection()
+        {
+            var original = new OrderTemplate
+            {
+                Settings = new TemplateSettings
+                {
+                    DataSources = new List<DataSourceItem>
+                    {
+                        new DataSourceItem { Field = "IMEI", Enabled = true, UseLocalDataValidation = true }
+                    }
+                }
+            };
+
+            var clone = new OrderEditorController().CloneTemplates(new[] { original })[0];
+            clone.Settings.DataSources[0].UseLocalDataValidation = false;
+
+            Assert.True(original.Settings.DataSources[0].UseLocalDataValidation);
+        }
+
+        [Fact]
         public void DataGridViewNullConversionRegressionUsesSafeBoolean()
         {
             object value = null;
@@ -236,6 +314,54 @@ namespace BarTenderPrinter.Tests
 
             Assert.NotEqual(original, templateChanged);
             Assert.NotEqual(templateChanged, fieldChanged);
+        }
+
+        [Fact]
+        public void PreviewFieldsProjectCaseInsensitivelyAndIgnoreUnknownFields()
+        {
+            var projected = BarTenderService.ProjectPreviewFields(
+                new Dictionary<string, string> { ["imei"] = "123", ["Removed"] = "old" },
+                new[] { "IMEI", "BOX" });
+
+            Assert.Single(projected);
+            Assert.Equal("123", projected["IMEI"]);
+        }
+
+        [Fact]
+        public void PreviewFieldsReturnEmptyWhenHistoryHasNoCurrentFields()
+        {
+            var projected = BarTenderService.ProjectPreviewFields(
+                new Dictionary<string, string> { ["Removed"] = "old" },
+                new[] { "IMEI" });
+
+            Assert.Empty(projected);
+        }
+
+        [Fact]
+        public void ApplicationStateRoundTripsAndFallsBackFromInvalidJson()
+        {
+            var path = Path.Combine(CreateTempDirectory(), "application-state.json");
+            var manager = new ApplicationStateManager(path);
+            manager.Save(new ApplicationState
+            {
+                ActiveOrderId = "order-1",
+                ActiveTemplateId = "template-1",
+                SelectedTemplatePath = "C:\\labels\\a.btw",
+                Printer = "Printer",
+                Copies = 3,
+                PreviewEnabled = true
+            });
+
+            var restored = manager.Load();
+            Assert.Equal("order-1", restored.ActiveOrderId);
+            Assert.Equal(3, restored.Copies);
+            Assert.True(restored.PreviewEnabled);
+
+            File.WriteAllText(path, "{broken");
+            var fallback = manager.Load();
+            Assert.Equal(0, fallback.SchemaVersion);
+            Assert.Equal(1, fallback.Copies);
+            Assert.Equal("", fallback.ActiveOrderId);
         }
 
         [Fact]

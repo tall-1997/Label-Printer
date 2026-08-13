@@ -11,6 +11,8 @@ namespace BarTenderPrinter
         private readonly Label _statusLabel;
 
         public event EventHandler PreviewClosed;
+        public event EventHandler ImageAspectRatioChanged;
+        public float ImageAspectRatio { get; private set; } = 1F;
 
         public PreviewForm()
         {
@@ -18,7 +20,7 @@ namespace BarTenderPrinter
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            MinimumSize = new Size(320, 420);
+            MinimumSize = new Size(280, 240);
             BackColor = MiuiTheme.Background;
 
             var header = new Panel
@@ -49,14 +51,20 @@ namespace BarTenderPrinter
             };
             header.Controls.Add(_statusLabel);
             header.Controls.Add(closeButton);
+            var imagePanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(12),
+                BackColor = MiuiTheme.Background
+            };
             _pictureBox = new PictureBox
             {
                 Dock = DockStyle.Fill,
                 BackColor = MiuiTheme.CardBackground,
-                SizeMode = PictureBoxSizeMode.Zoom,
-                Margin = new Padding(12)
+                SizeMode = PictureBoxSizeMode.Zoom
             };
-            Controls.Add(_pictureBox);
+            imagePanel.Controls.Add(_pictureBox);
+            Controls.Add(imagePanel);
             Controls.Add(header);
             FormClosed += (sender, args) =>
             {
@@ -82,9 +90,13 @@ namespace BarTenderPrinter
         {
             using (var stream = new MemoryStream(File.ReadAllBytes(imagePath)))
             using (var image = Image.FromStream(stream))
+            {
+                ImageAspectRatio = image.Height > 0 ? (float)image.Width / image.Height : 1F;
                 ReplaceImage(new Bitmap(image));
+            }
             _statusLabel.Text = source;
             _statusLabel.ForeColor = MiuiTheme.TextPrimary;
+            ImageAspectRatioChanged?.Invoke(this, EventArgs.Empty);
         }
 
         private void ReplaceImage(Image image)

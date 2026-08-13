@@ -4,7 +4,7 @@ namespace BarTenderPrinter
 {
     public class TemplateSessionState
     {
-        public int SchemaVersion { get; set; } = 2;
+        public int SchemaVersion { get; set; } = 3;
         public string Scope { get; set; } = "GlobalTemplate";
         public string OrderId { get; set; } = "";
         public string TemplateId { get; set; } = "";
@@ -48,9 +48,9 @@ namespace BarTenderPrinter
                 LocalDataStoragePath = LocalDataStoragePath,
                 LocalDataColumnName = LocalDataColumnName,
                 LocalDataTargetField = LocalDataTargetField,
-                TemplateFields = TemplateFields ?? new List<string>(),
-                LocalData = LocalData ?? new List<string>(),
-                DataSources = DataSources ?? new List<DataSourceItem>()
+                TemplateFields = new List<string>(TemplateFields ?? new List<string>()),
+                LocalData = new List<string>(LocalData ?? new List<string>()),
+                DataSources = CloneDataSources(DataSources)
             };
         }
 
@@ -77,10 +77,35 @@ namespace BarTenderPrinter
                 LocalDataStoragePath = settings.LocalDataStoragePath,
                 LocalDataColumnName = settings.LocalDataColumnName,
                 LocalDataTargetField = settings.LocalDataTargetField,
-                TemplateFields = settings.TemplateFields ?? new List<string>(),
-                LocalData = settings.LocalData ?? new List<string>(),
-                DataSources = settings.DataSources ?? new List<DataSourceItem>()
+                TemplateFields = new List<string>(settings.TemplateFields ?? new List<string>()),
+                LocalData = new List<string>(settings.LocalData ?? new List<string>()),
+                DataSources = CloneDataSources(settings.DataSources)
             };
+        }
+
+        private static List<DataSourceItem> CloneDataSources(IEnumerable<DataSourceItem> sources)
+        {
+            var result = new List<DataSourceItem>();
+            foreach (var source in sources ?? new List<DataSourceItem>())
+            {
+                result.Add(new DataSourceItem
+                {
+                    Name = source.Name,
+                    Field = source.Field,
+                    Enabled = source.Enabled,
+                    AutoIncrement = source.AutoIncrement,
+                    AutoStep = source.AutoStep,
+                    IsLocked = source.IsLocked,
+                    LockAfterInput = source.LockAfterInput,
+                    LockedValue = source.LockedValue,
+                    AutoIncrementLocked = source.AutoIncrementLocked,
+                    ExpectedLength = source.ExpectedLength,
+                    LengthRevision = source.LengthRevision,
+                    LengthEdited = source.LengthEdited,
+                    UseLocalDataValidation = source.UseLocalDataValidation
+                });
+            }
+            return result;
         }
     }
 }
