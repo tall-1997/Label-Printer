@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.65** - C# WinForms 安装版
+**v5.7.66** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -23,6 +23,8 @@
 - **打印完成后自动清空**：清空非增序字段，增序字段自动更新并锁定
 - **连续静默打印**：扫码作业进入本地 FIFO 队列后立即恢复输入，后台按顺序提交并短暂重试 BarTender Busy 错误
 - **右侧标签预览框架**：通过目标机器安装的 BarTender 2022 R2 .NET SDK 导出 PNG；原模板使用 `LabelFormatThumbnail`，动态字段使用 `ExportImageToFile`
+- **SDK 运行时防护**：优先选择 BarTender 2022 R2 `SDK/Redist/x64` 中最新的 `11.3.x` SDK，字段赋值失败时阻止错误预览，Engine 启动失败后自动清理
+- **预览渲染缓存**：模板路径、修改时间或字段快照未变化时复用已验证 PNG，减少 Engine 与模板重复调用
 
 ### 数据源增序功能
 - **自动增序/降序**：支持设置步长（+1 增序，-1 降序）
@@ -76,7 +78,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender 标签打印工具 v5.7.65    [导出日志]  │
+│ BarTender 标签打印工具 v5.7.66    [导出日志]  │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -127,6 +129,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
+| [v5.7.66](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.66) | ~49 MB | SDK 发现、Engine 生命周期与预览缓存优化版 |
 | [v5.7.65](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.65) | ~49 MB | 原模板缩略图与动态字段预览分流版 |
 | [v5.7.64](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.64) | ~49 MB | BarTender 2022 R2 官方 SDK 静默预览候选版 |
 | [v5.7.63](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.63) | ~49 MB | 右侧停靠标签预览框架版；已发布版本中的图片导出尚未通过运行时验证 |

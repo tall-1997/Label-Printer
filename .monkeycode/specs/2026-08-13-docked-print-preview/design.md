@@ -44,6 +44,10 @@ flowchart LR
 
 - 模板文件缺失时在预览窗显示模板不可用。
 - SDK 导出失败时在预览窗显示错误并记录日志。
+- SDK 自动发现先读取程序集与 PE 元数据，优先加载 `SDK/Redist/x64` 中最新的 BarTender 2022 R2 `11.3.x` 程序集。
+- 任一命名数据源赋值失败时终止动态预览，避免展示字段缺失的标签图。
+- SDK Engine 仅在成功启动后进入共享状态，启动失败时立即清理临时实例。
+- 预览缓存键包含模板绝对路径、模板修改时间和排序后的字段快照；缓存 PNG 仍需通过图片解码校验。
 - 快速切换模板时使用请求版本号忽略过期结果。
 - 打印队列存在待处理作业时延后预览，队列清空后再执行静默导出。
 - 预览必须通过目标 BarTender 版本附带的 `Seagull.BarTender.Print` SDK 实现并完成实机验证。
@@ -51,5 +55,12 @@ flowchart LR
 ## Test Strategy
 
 - 单元测试覆盖最近成功记录选择和失败记录过滤。
+- 单元测试覆盖缓存键的字段顺序稳定性、模板与字段失效条件、SDK Redist 路径识别和 PE x64 检测。
 - GitHub Actions 执行 WinForms 编译与现有回归测试。
 - Windows 实机验证停靠、模板切换、首次预览和成功打印刷新。
+
+## References
+
+- Seagull Support: https://support.seagullsoftware.com/hc/en-us/articles/360000056227-How-to-automate-exporting-Image-Previews-of-BarTender-documents-via-NET-SDK
+- Seagull Support: https://support.seagullsoftware.com/hc/en-us/articles/360023921313-How-does-the-BarTender-net-SDK-iterate-through-substrings-named-data-sources
+- BarcodeX community example: https://barcodex.cn/guide/18.html

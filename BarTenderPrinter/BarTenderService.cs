@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
@@ -19,6 +20,7 @@ namespace BarTenderPrinter
         private Assembly _previewSdkAssembly;
         private string _previewSdkDirectory;
         private string _previewUnavailableReason = "正在检测 BarTender .NET SDK";
+        private string _previewCacheKey = "";
         private bool _connected;
         private bool _offlineMode;
         private readonly SemaphoreSlim _operationLock = new SemaphoreSlim(1, 1);
@@ -341,42 +343,22 @@ namespace BarTenderPrinter
             object document = null;
             try
             {
-                if (fieldValues.Count == 0)
-                    return ExportTemplateThumbnail(templatePath);
-
-                EnsurePreviewEngine();
-                var documents = GetRequiredProperty(_previewEngine, "Documents");
-                document = InvokeRequired(documents, "Open", templatePath);
-                var subStrings = GetRequiredProperty(document, "SubStrings");
-                foreach (var item in fieldValues)
-                {
-                    try { InvokeRequired(subStrings, "SetSubString", item.Key, item.Value ?? ""); }
-                    catch (Exception ex)
-                    {
-                        LoggerService.Warn($"预览字段设置失败: {item.Key}; {GetBaseExceptionMessage(ex)}");
-                    }
-                }
-
-                Directory.CreateDirectory(AppPaths.PreviewDirectory);
+                var cacheKey = BuildPreviewCacheKey(templatePath, fieldValues);
                 var outputPath = Path.Combine(AppPaths.PreviewDirectory, "current-preview.png");
-                var candidatePath = Path.Combine(AppPaths.PreviewDirectory, $"preview-{Guid.NewGuid():N}.png");
-                try
-                {
-                    var imageType = GetEnumValue("ImageType", "PNG");
-                    var colorDepth = GetEnumValue("ColorDepth", "ColorDepth24bit");
-                    var overwrite = GetEnumValue("OverwriteOptions", "Overwrite");
-                    var resolutionType = GetRequiredSdkType("Resolution");
-                    var resolution = Activator.CreateInstance(resolutionType, 300, 300);
-                    InvokeRequired(document, "ExportImageToFile", candidatePath, imageType, colorDepth, resolution, overwrite);
-                    if (!IsValidPreviewImage(candidatePath))
-                        throw new InvalidDataException("BarTender SDK 未生成有效的预览图片");
-                    File.Move(candidatePath, outputPath, true);
+                if (string.Equals(cacheKey, _previewCacheKey, StringComparison.Ordinal) && IsValidPreviewImage(outputPath))
                     return outputPath;
-                }
-                finally
+
+                string previewPath;
+                if (fieldValues.Count == 0)
+                    previewPath = ExportTemplateThumbnail(templatePath);
+                else
                 {
-                    try { if (File.Exists(candidatePath)) File.Delete(candidatePath); } catch { }
+                    EnsurePreviewEngine();
+                    previewPath = ExportDocumentPreview(templatePath, fieldValues, ref document);
                 }
+
+                _previewCacheKey = cacheKey;
+                return previewPath;
             }
             catch (Exception ex)
             {
@@ -389,6 +371,55 @@ namespace BarTenderPrinter
                 ClosePreviewDocument(document);
                 _operationLock.Release();
             }
+        }
+
+        private string ExportDocumentPreview(string templatePath, Dictionary<string, string> fieldValues, ref object document)
+        {
+            var documents = GetRequiredProperty(_previewEngine, "Documents");
+            document = InvokeRequired(documents, "Open", templatePath);
+            var subStrings = GetRequiredProperty(document, "SubStrings");
+            var failedFields = new List<string>();
+            foreach (var item in fieldValues)
+            {
+                try { InvokeRequired(subStrings, "SetSubString", item.Key, item.Value ?? ""); }
+                catch (Exception ex)
+                {
+                    failedFields.Add(item.Key);
+                    LoggerService.Warn($"预览字段设置失败: {item.Key}; {GetBaseExceptionMessage(ex)}");
+                }
+            }
+            if (failedFields.Count > 0)
+                throw new InvalidDataException($"模板中无法设置预览字段: {string.Join(", ", failedFields)}");
+
+            Directory.CreateDirectory(AppPaths.PreviewDirectory);
+            var outputPath = Path.Combine(AppPaths.PreviewDirectory, "current-preview.png");
+            var candidatePath = Path.Combine(AppPaths.PreviewDirectory, $"preview-{Guid.NewGuid():N}.png");
+            try
+            {
+                var imageType = GetEnumValue("ImageType", "PNG");
+                var colorDepth = GetEnumValue("ColorDepth", "ColorDepth24bit");
+                var overwrite = GetEnumValue("OverwriteOptions", "Overwrite");
+                var resolutionType = GetRequiredSdkType("Resolution");
+                var resolution = Activator.CreateInstance(resolutionType, 300, 300);
+                InvokeRequired(document, "ExportImageToFile", candidatePath, imageType, colorDepth, resolution, overwrite);
+                if (!IsValidPreviewImage(candidatePath))
+                    throw new InvalidDataException("BarTender SDK 未生成有效的预览图片");
+                File.Move(candidatePath, outputPath, true);
+                return outputPath;
+            }
+            finally
+            {
+                try { if (File.Exists(candidatePath)) File.Delete(candidatePath); } catch { }
+            }
+        }
+
+        internal static string BuildPreviewCacheKey(string templatePath, Dictionary<string, string> fieldValues)
+        {
+            var builder = new StringBuilder(Path.GetFullPath(templatePath));
+            builder.Append('\0').Append(File.GetLastWriteTimeUtc(templatePath).Ticks);
+            foreach (var item in fieldValues.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+                builder.Append('\0').Append(item.Key).Append('\0').Append(item.Value ?? "");
+            return builder.ToString();
         }
 
         private void TryLoadPreviewSdk()
@@ -428,23 +459,67 @@ namespace BarTenderPrinter
         private static string FindPreviewSdkPath()
         {
             const string fileName = "Seagull.BarTender.Print.dll";
-            var roots = new[]
+            var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Seagull");
+            if (!Directory.Exists(root)) return "";
+
+            try
             {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Seagull")
-            };
-            foreach (var root in roots.Where(Directory.Exists))
-            {
-                try
-                {
-                    var path = Directory.EnumerateFiles(root, fileName, SearchOption.AllDirectories).FirstOrDefault();
-                    if (!string.IsNullOrEmpty(path)) return Path.GetFullPath(path);
-                }
-                catch (Exception ex)
-                {
-                    LoggerService.Debug($"搜索 BarTender SDK 失败: {root}; {ex.Message}");
-                }
+                return Directory.EnumerateFiles(root, fileName, SearchOption.AllDirectories)
+                    .Select(path =>
+                    {
+                        try
+                        {
+                            return new
+                            {
+                                Path = path,
+                                Version = AssemblyName.GetAssemblyName(path).Version,
+                                IsX64 = IsX64Pe(path),
+                                IsSdkRedistributable = IsSdkRedistributablePath(path)
+                            };
+                        }
+                        catch (Exception ex)
+                        {
+                            LoggerService.Debug($"读取 BarTender SDK 元数据失败: {path}; {ex.Message}");
+                            return null;
+                        }
+                    })
+                    .Where(candidate => candidate?.IsX64 == true && candidate.Version is { Major: 11, Minor: 3 })
+                    .OrderByDescending(candidate => candidate.IsSdkRedistributable)
+                    .ThenByDescending(candidate => candidate.Version)
+                    .Select(candidate => Path.GetFullPath(candidate.Path))
+                    .FirstOrDefault() ?? "";
             }
-            return "";
+            catch (Exception ex)
+            {
+                LoggerService.Debug($"搜索 BarTender SDK 失败: {root}; {ex.Message}");
+                return "";
+            }
+        }
+
+        internal static bool IsSdkRedistributablePath(string path)
+        {
+            var segments = Path.GetFullPath(path)
+                .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+            for (var index = 0; index <= segments.Length - 3; index++)
+            {
+                if (string.Equals(segments[index], "SDK", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(segments[index + 1], "Redist", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(segments[index + 2], "x64", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        internal static bool IsX64Pe(string path)
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new BinaryReader(stream);
+            if (stream.Length < 0x40 || reader.ReadUInt16() != 0x5A4D) return false;
+            stream.Position = 0x3C;
+            var peHeaderOffset = reader.ReadInt32();
+            if (peHeaderOffset < 0 || peHeaderOffset > stream.Length - 6) return false;
+            stream.Position = peHeaderOffset;
+            return reader.ReadUInt32() == 0x00004550 && reader.ReadUInt16() == 0x8664;
         }
 
         private void ValidatePreviewSdkApi()
@@ -507,8 +582,18 @@ namespace BarTenderPrinter
         {
             if (_previewEngine != null) return;
             var engineType = GetRequiredSdkType("Engine");
-            _previewEngine = Activator.CreateInstance(engineType);
-            InvokeRequired(_previewEngine, "Start");
+            var engine = Activator.CreateInstance(engineType)
+                ?? throw new InvalidOperationException("无法创建 BarTender 预览引擎");
+            try
+            {
+                InvokeRequired(engine, "Start");
+                _previewEngine = engine;
+            }
+            catch
+            {
+                try { InvokeRequired(engine, "Stop"); } catch { }
+                throw;
+            }
         }
 
         private Type GetRequiredSdkType(string typeName)

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using BarTenderPrinter;
 using Xunit;
 
@@ -204,6 +205,83 @@ namespace BarTenderPrinter.Tests
             var session = new UserSession { Role = "Operator" };
             Assert.False(session.CanDeleteHistory);
             Assert.False(session.CanApproveReprint);
+        }
+
+        [Fact]
+        public void PreviewCacheKeyIgnoresFieldInsertionOrder()
+        {
+            var template = CreateTemplateFile();
+            var first = BarTenderService.BuildPreviewCacheKey(template, new Dictionary<string, string>
+            {
+                ["IMEI"] = "123",
+                ["BOX"] = "456"
+            });
+            var second = BarTenderService.BuildPreviewCacheKey(template, new Dictionary<string, string>
+            {
+                ["BOX"] = "456",
+                ["IMEI"] = "123"
+            });
+
+            Assert.Equal(first, second);
+        }
+
+        [Fact]
+        public void PreviewCacheKeyChangesWithTemplateOrFields()
+        {
+            var template = CreateTemplateFile();
+            var original = BarTenderService.BuildPreviewCacheKey(template, new Dictionary<string, string> { ["IMEI"] = "123" });
+            File.SetLastWriteTimeUtc(template, File.GetLastWriteTimeUtc(template).AddSeconds(2));
+            var templateChanged = BarTenderService.BuildPreviewCacheKey(template, new Dictionary<string, string> { ["IMEI"] = "123" });
+            var fieldChanged = BarTenderService.BuildPreviewCacheKey(template, new Dictionary<string, string> { ["IMEI"] = "456" });
+
+            Assert.NotEqual(original, templateChanged);
+            Assert.NotEqual(templateChanged, fieldChanged);
+        }
+
+        [Fact]
+        public void PreviewSdkPathRequiresSdkRedistX64Sequence()
+        {
+            Assert.True(BarTenderService.IsSdkRedistributablePath(Path.Combine("C:\\", "Seagull", "SDK", "Redist", "x64", "Seagull.BarTender.Print.dll")));
+            Assert.False(BarTenderService.IsSdkRedistributablePath(Path.Combine("C:\\", "Seagull", "SDK", "bin", "x64", "Seagull.BarTender.Print.dll")));
+        }
+
+        [Theory]
+        [InlineData(0x8664, true)]
+        [InlineData(0x014c, false)]
+        public void PeArchitectureDetectionAcceptsOnlyX64(int machine, bool expected)
+        {
+            var path = Path.Combine(CreateTempDirectory(), "assembly.dll");
+            WritePeHeader(path, machine);
+
+            Assert.Equal(expected, BarTenderService.IsX64Pe(path));
+        }
+
+        [Fact]
+        public void PeArchitectureDetectionRejectsInvalidFiles()
+        {
+            var path = Path.Combine(CreateTempDirectory(), "invalid.dll");
+            File.WriteAllBytes(path, new byte[] { 0x4D });
+
+            Assert.False(BarTenderService.IsX64Pe(path));
+        }
+
+        private static string CreateTemplateFile()
+        {
+            var path = Path.Combine(CreateTempDirectory(), "template.btw");
+            File.WriteAllText(path, "template");
+            return path;
+        }
+
+        private static void WritePeHeader(string path, int machine)
+        {
+            using var stream = File.Create(path);
+            using var writer = new BinaryWriter(stream, Encoding.ASCII, true);
+            writer.Write((ushort)0x5A4D);
+            stream.Position = 0x3C;
+            writer.Write(0x80);
+            stream.Position = 0x80;
+            writer.Write(0x00004550u);
+            writer.Write((ushort)machine);
         }
 
         private static string CreateTempDirectory()
