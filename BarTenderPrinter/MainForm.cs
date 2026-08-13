@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.57";
+        private readonly string _version = "v5.7.58";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -1945,6 +1945,12 @@ namespace BarTenderPrinter
             if (!lockEnabled)
             {
                 var stepIndex = _orderDataSourcesGrid.Columns["AutoStep"].Index;
+                int.TryParse(row.Cells["AutoStep"].Value?.ToString(), out var currentStep);
+                if (currentStep != 0 && MessageBox.Show(this, $"当前步长为 {currentStep}，关闭锁定将恢复默认步长 0。是否确认关闭？", "确认关闭锁定", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                {
+                    row.Cells["LockEnabled"].Value = true;
+                    return;
+                }
                 row.Tag = new OrderRowLockState
                 {
                     AutoStep = row.Cells["AutoStep"].Value,
