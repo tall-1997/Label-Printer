@@ -326,7 +326,7 @@ namespace BarTenderPrinter
                 btFormat = _btApp.Formats.Open(templatePath, false, "");
                 LoggerService.Info("模板打开成功");
 
-                var templateFields = GetNamedSubStringNames(btFormat);
+                List<string> templateFields = GetNamedSubStringNames(btFormat);
                 var providedFields = new HashSet<string>((fieldValues ?? new Dictionary<string, string>()).Keys, StringComparer.OrdinalIgnoreCase);
                 var notProvided = templateFields.Where(field => !providedFields.Contains(field)).ToList();
                 if (notProvided.Count > 0)
