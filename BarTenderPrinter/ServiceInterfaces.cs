@@ -26,8 +26,8 @@ namespace BarTenderPrinter
         List<PrintRecord> Records { get; }
         void Load();
         bool Add(string templateName, string templatePath, string templateId, Dictionary<string, string> fieldValues, string status, string printer, int copies, string operatorName = "", string reprintReason = "", string templateVersion = "", string diagnosticDetails = "", string orderName = "", string orderId = "", List<string> templateFields = null);
-        bool Clear(string templateName, string templatePath, string templateId);
-        bool Delete(string recordId);
+        bool Clear(string templateName, string templatePath, string templateId, string operatorName = "", string reason = "");
+        bool Delete(string recordId, string operatorName = "", string reason = "");
         PrintRecord GetById(string recordId);
         PrintRecord GetLatestSuccessful(string templateName, string templatePath, string templateId);
         List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit = 0, bool newestFirst = false, int offset = 0);

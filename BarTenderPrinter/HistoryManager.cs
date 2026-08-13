@@ -11,7 +11,7 @@ namespace BarTenderPrinter
 {
     public class PrintRecord
     {
-        public int SchemaVersion { get; set; } = 2;
+        public int SchemaVersion { get; set; } = 3;
         public string RecordId { get; set; }
         public string Imei { get; set; }
         public string TemplateName { get; set; }
@@ -30,10 +30,15 @@ namespace BarTenderPrinter
         public string OrderName { get; set; }
         public List<string> TemplateFields { get; set; }
         public string RecordChecksum { get; set; }
+        public bool IsExcluded { get; set; }
+        public string ExcludedAtUtc { get; set; }
+        public string ExcludedBy { get; set; }
+        public string ExclusionReason { get; set; }
+        public string ExclusionBatchId { get; set; }
 
         public PrintRecord()
         {
-            SchemaVersion = 2;
+            SchemaVersion = 3;
             RecordId = Guid.NewGuid().ToString("N");
             Imei = "";
             TemplateName = "";
@@ -52,6 +57,10 @@ namespace BarTenderPrinter
             OrderName = "";
             TemplateFields = new List<string>();
             RecordChecksum = "";
+            ExcludedAtUtc = "";
+            ExcludedBy = "";
+            ExclusionReason = "";
+            ExclusionBatchId = "";
         }
 
         public PrintRecord(string imei, string printTime, string status)
@@ -112,6 +121,7 @@ namespace BarTenderPrinter
         private readonly string _recordsFile;
         private readonly string _recordsJsonlFile;
         private readonly string _recordsSqliteFile;
+        private readonly string _historyRecordsDirectory;
         private readonly Dictionary<string, HashSet<string>> _templateValueIndexes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         private bool _usesCurrentFormat;
         private const string Header = "record_id,template_name,template_path,template_id,field_values,print_time,status,printer,copies,operator,reprint_reason,template_version,diagnostic_details,order_name";
@@ -120,26 +130,34 @@ namespace BarTenderPrinter
         public List<PrintRecord> Records { get; private set; }
 
         public HistoryManager()
-            : this(AppPaths.RecordsFile, AppPaths.RecordsJsonlFile, AppPaths.RecordsSqliteFile, true)
+            : this(AppPaths.RecordsFile, AppPaths.RecordsJsonlFile, AppPaths.RecordsSqliteFile, AppPaths.HistoryRecordsDirectory, true)
         {
         }
 
         public HistoryManager(string recordsFile, string recordsJsonlFile = null)
-            : this(recordsFile, recordsJsonlFile, null, false)
+            : this(recordsFile, recordsJsonlFile, null, null, false)
         {
         }
 
         public HistoryManager(string recordsFile, string recordsJsonlFile, string recordsSqliteFile)
-            : this(recordsFile, recordsJsonlFile, recordsSqliteFile, false)
+            : this(recordsFile, recordsJsonlFile, recordsSqliteFile, null, false)
         {
         }
 
-        private HistoryManager(string recordsFile, string recordsJsonlFile, string recordsSqliteFile, bool initializePaths)
+        public HistoryManager(string recordsFile, string recordsJsonlFile, string recordsSqliteFile, string historyRecordsDirectory)
+            : this(recordsFile, recordsJsonlFile, recordsSqliteFile, historyRecordsDirectory, false)
+        {
+        }
+
+        private HistoryManager(string recordsFile, string recordsJsonlFile, string recordsSqliteFile, string historyRecordsDirectory, bool initializePaths)
         {
             if (initializePaths) AppPaths.Initialize();
             _recordsFile = recordsFile;
             _recordsJsonlFile = string.IsNullOrWhiteSpace(recordsJsonlFile) ? Path.ChangeExtension(recordsFile, ".jsonl") : recordsJsonlFile;
             _recordsSqliteFile = string.IsNullOrWhiteSpace(recordsSqliteFile) ? Path.ChangeExtension(recordsFile, ".db") : recordsSqliteFile;
+            _historyRecordsDirectory = string.IsNullOrWhiteSpace(historyRecordsDirectory)
+                ? Path.Combine(Path.GetDirectoryName(_recordsSqliteFile) ?? AppContext.BaseDirectory, "history-records")
+                : historyRecordsDirectory;
             Records = new List<PrintRecord>();
         }
 
@@ -148,14 +166,15 @@ namespace BarTenderPrinter
             Records.Clear();
             _templateValueIndexes.Clear();
             EnsureDatabase();
-            if (LoadSqlite()) return;
+            if (LoadSqlite()) { EnsureRecordArchives(); SyncJsonlMirror(); return; }
+            if (IsLegacyMigrationComplete()) return;
             if (File.Exists(_recordsJsonlFile))
             {
                 LoadJsonl();
-                if (Records.Count > 0 || !File.Exists(_recordsFile)) return;
+                if (Records.Count > 0 || !File.Exists(_recordsFile)) { Save(); EnsureRecordArchives(); return; }
                 LoggerService.Warn("JSONL 历史为空，回退读取 CSV 历史。");
             }
-            if (!File.Exists(_recordsFile)) return;
+            if (!File.Exists(_recordsFile)) { Save(); return; }
             try
             {
                 _usesCurrentFormat = false;
@@ -173,7 +192,8 @@ namespace BarTenderPrinter
                     }
                     LoadRecordLine(line, lineNumber, usesPreviousFormat, true);
                 }
-                if (Records.Count > 0) Save();
+                Save();
+                EnsureRecordArchives();
             }
             catch (Exception ex)
             {
@@ -267,8 +287,12 @@ namespace BarTenderPrinter
                 foreach (var record in Records)
                     if (string.IsNullOrWhiteSpace(record.RecordChecksum)) StampChecksum(record);
                 SaveSqlite(Records);
-                var lines = Records.Select(record => JsonSerializer.Serialize(record));
-                AtomicFileWriter.WriteAllLines(_recordsJsonlFile, lines, Encoding.UTF8);
+                try
+                {
+                    var lines = Records.Select(record => JsonSerializer.Serialize(record));
+                    AtomicFileWriter.WriteAllLines(_recordsJsonlFile, lines, Encoding.UTF8);
+                }
+                catch (Exception ex) { LoggerService.Error("同步 JSONL 历史兼容副本失败", ex); }
                 _usesCurrentFormat = true;
                 return true;
             }
@@ -290,6 +314,7 @@ namespace BarTenderPrinter
             Records.Add(record);
             IndexRecord(record);
             if (!Append(record)) { Records.Remove(record); RebuildIndexes(); return false; }
+            WriteRecordArchive(record);
             return true;
         }
 
@@ -317,17 +342,18 @@ namespace BarTenderPrinter
             Records.Add(record);
             IndexRecord(record);
             if (!Append(record)) { Records.Remove(record); RebuildIndexes(); return false; }
+            WriteRecordArchive(record);
             return true;
         }
 
         public bool IsPrinted(string imei)
         {
-            return Records.Any(r => r.Imei == imei);
+            return Records.Any(r => !r.IsExcluded && r.Imei == imei);
         }
 
         public bool ContainsAnyValue(string value)
         {
-            return Records.Any(r => GetValues(r).Contains(value, StringComparer.OrdinalIgnoreCase));
+            return Records.Any(r => !r.IsExcluded && GetValues(r).Contains(value, StringComparer.OrdinalIgnoreCase));
         }
 
         public bool ContainsAnyValue(string templateName, string templatePath, string value)
@@ -345,26 +371,30 @@ namespace BarTenderPrinter
 
         public PrintRecord GetById(string recordId)
         {
-            return Records.FirstOrDefault(record => string.Equals(record.RecordId, recordId, StringComparison.Ordinal));
+            return Records.FirstOrDefault(record => !record.IsExcluded && string.Equals(record.RecordId, recordId, StringComparison.Ordinal));
         }
 
-        public bool Delete(string recordId)
+        public bool Delete(string recordId, string operatorName = "", string reason = "")
         {
-            var snapshot = Records.ToList();
-            var removed = Records.RemoveAll(record => string.Equals(record.RecordId, recordId, StringComparison.Ordinal)) > 0;
-            if (!removed) return false;
+            var record = Records.FirstOrDefault(item => !item.IsExcluded && string.Equals(item.RecordId, recordId, StringComparison.Ordinal));
+            if (record == null) return false;
+            var snapshot = CloneExclusion(record);
+            ExcludeRecord(record, operatorName, reason, Guid.NewGuid().ToString("N"));
             RebuildIndexes();
-            if (!Save()) { Records = snapshot; RebuildIndexes(); return false; }
+            if (!Save()) { RestoreExclusion(record, snapshot); RebuildIndexes(); return false; }
             return true;
         }
 
         public bool Clear()
         {
-            var snapshot = Records.ToList();
-            Records.Clear();
-            _templateValueIndexes.Clear();
+            var active = Records.Where(record => !record.IsExcluded).ToList();
+            if (active.Count == 0) return true;
+            var snapshots = active.ToDictionary(record => record.RecordId, CloneExclusion);
+            var batchId = Guid.NewGuid().ToString("N");
+            foreach (var record in active) ExcludeRecord(record, "", "清空全部历史控件", batchId);
+            RebuildIndexes();
             if (Save()) return true;
-            Records = snapshot;
+            foreach (var record in active) RestoreExclusion(record, snapshots[record.RecordId]);
             RebuildIndexes();
             return false;
         }
@@ -374,13 +404,16 @@ namespace BarTenderPrinter
             return Clear(templateName, templatePath, "");
         }
 
-        public bool Clear(string templateName, string templatePath, string templateId)
+        public bool Clear(string templateName, string templatePath, string templateId, string operatorName = "", string reason = "")
         {
-            var snapshot = Records.ToList();
-            Records.RemoveAll(record => IsTemplateMatch(record, templateName, templatePath, templateId));
+            var active = Records.Where(record => !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId)).ToList();
+            if (active.Count == 0) return true;
+            var snapshots = active.ToDictionary(record => record.RecordId, CloneExclusion);
+            var batchId = Guid.NewGuid().ToString("N");
+            foreach (var record in active) ExcludeRecord(record, operatorName, reason, batchId);
             RebuildIndexes();
             if (Save()) return true;
-            Records = snapshot;
+            foreach (var record in active) RestoreExclusion(record, snapshots[record.RecordId]);
             RebuildIndexes();
             return false;
         }
@@ -393,7 +426,7 @@ namespace BarTenderPrinter
         public PrintRecord GetLatestSuccessful(string templateName, string templatePath, string templateId)
         {
             return Records.AsEnumerable().Reverse().FirstOrDefault(record =>
-                IsTemplateMatch(record, templateName, templatePath, templateId) && IsSuccessfulStatus(record.Status));
+                !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId) && IsSuccessfulStatus(record.Status));
         }
 
         public List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit = 0, bool newestFirst = false, int offset = 0)
@@ -409,6 +442,7 @@ namespace BarTenderPrinter
             var skipped = 0;
             foreach (var record in source)
             {
+                if (record.IsExcluded) continue;
                 if (!IsTemplateMatch(record, templateName, templatePath, templateId)) continue;
                 if (!string.IsNullOrWhiteSpace(status) && !string.Equals(record.Status, status, StringComparison.OrdinalIgnoreCase)) continue;
                 if (!string.IsNullOrWhiteSpace(datePrefix) && !(record.PrintTime ?? "").StartsWith(datePrefix, StringComparison.OrdinalIgnoreCase)) continue;
@@ -439,13 +473,13 @@ namespace BarTenderPrinter
 
         public int Count(string templateName, string templatePath, string templateId)
         {
-            return Records.Count(record => IsTemplateMatch(record, templateName, templatePath, templateId));
+            return Records.Count(record => !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId));
         }
 
         public int TodayCount(string templateName, string templatePath, string templateId)
         {
             var today = DateTime.Now.ToString("yyyy-MM-dd");
-            return Records.Count(record => IsTemplateMatch(record, templateName, templatePath, templateId) && record.PrintTime.StartsWith(today));
+            return Records.Count(record => !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId) && record.PrintTime.StartsWith(today));
         }
 
         public void Export(string path, IEnumerable<PrintRecord> records)
@@ -453,12 +487,12 @@ namespace BarTenderPrinter
             var filtered = records?.ToList() ?? new List<PrintRecord>();
 
             var sb = new StringBuilder();
-            sb.AppendLine("template_name,template_path,template_id,order_id,order_name,template_fields,field_values,print_time,status,printer,copies,operator,reprint_reason,template_version,diagnostic_details");
+            sb.AppendLine("record_id,template_name,template_path,template_id,order_id,order_name,template_fields,field_values,print_time,status,printer,copies,operator,reprint_reason,template_version,diagnostic_details");
             foreach (var r in filtered)
             {
                 var values = string.Join("; ", (r.FieldValues ?? new Dictionary<string, string>()).Select(item => $"{item.Key}={item.Value}"));
                 if (string.IsNullOrEmpty(values)) values = r.Imei;
-                sb.AppendLine(string.Join(",", new[] { Csv(r.TemplateName), Csv(r.TemplatePath), Csv(r.TemplateId), Csv(r.OrderId), Csv(r.OrderName), Csv(string.Join(";", r.TemplateFields ?? new List<string>())), Csv(values), Csv(r.PrintTime), Csv(r.Status), Csv(r.Printer), r.Copies.ToString(), Csv(r.OperatorName), Csv(r.ReprintReason), Csv(r.TemplateVersion), Csv(r.DiagnosticDetails) }));
+                sb.AppendLine(string.Join(",", new[] { Csv(r.RecordId), Csv(r.TemplateName), Csv(r.TemplatePath), Csv(r.TemplateId), Csv(r.OrderId), Csv(r.OrderName), Csv(string.Join(";", r.TemplateFields ?? new List<string>())), Csv(values), Csv(r.PrintTime), Csv(r.Status), Csv(r.Printer), r.Copies.ToString(), Csv(r.OperatorName), Csv(r.ReprintReason), Csv(r.TemplateVersion), Csv(r.DiagnosticDetails) }));
             }
                 AtomicFileWriter.WriteAllText(path, sb.ToString(), Encoding.UTF8);
         }
@@ -466,19 +500,19 @@ namespace BarTenderPrinter
         public int TodayCount()
         {
             var today = DateTime.Now.ToString("yyyy-MM-dd");
-            return Records.Count(r => r.PrintTime.StartsWith(today));
+            return Records.Count(r => !r.IsExcluded && r.PrintTime.StartsWith(today));
         }
 
         public int TotalCount()
         {
-            return Records.Count;
+            return Records.Count(record => !record.IsExcluded);
         }
 
         private static List<string> ParseCsvLine(string line) => CsvUtils.ParseLine(line);
 
         private void IndexRecord(PrintRecord record)
         {
-            if (!IsSuccessfulStatus(record.Status)) return;
+            if (record.IsExcluded || !IsSuccessfulStatus(record.Status)) return;
             var key = GetTemplateKey(record);
             if (!_templateValueIndexes.TryGetValue(key, out var values))
             {
@@ -504,7 +538,8 @@ namespace BarTenderPrinter
             try
             {
                 InsertSqlite(record);
-                File.AppendAllText(_recordsJsonlFile, JsonSerializer.Serialize(record) + Environment.NewLine, Encoding.UTF8);
+                try { File.AppendAllText(_recordsJsonlFile, JsonSerializer.Serialize(record) + Environment.NewLine, Encoding.UTF8); }
+                catch (Exception ex) { LoggerService.Error("追加 JSONL 历史兼容副本失败", ex); }
                 return true;
             }
             catch (Exception ex)
@@ -528,6 +563,93 @@ namespace BarTenderPrinter
         {
             _templateValueIndexes.Clear();
             foreach (var record in Records) IndexRecord(record);
+        }
+
+        private sealed class ExclusionSnapshot
+        {
+            public int SchemaVersion { get; set; }
+            public bool IsExcluded { get; set; }
+            public string ExcludedAtUtc { get; set; }
+            public string ExcludedBy { get; set; }
+            public string ExclusionReason { get; set; }
+            public string ExclusionBatchId { get; set; }
+        }
+
+        private static ExclusionSnapshot CloneExclusion(PrintRecord record)
+        {
+            return new ExclusionSnapshot
+            {
+                SchemaVersion = record.SchemaVersion,
+                IsExcluded = record.IsExcluded,
+                ExcludedAtUtc = record.ExcludedAtUtc,
+                ExcludedBy = record.ExcludedBy,
+                ExclusionReason = record.ExclusionReason,
+                ExclusionBatchId = record.ExclusionBatchId
+            };
+        }
+
+        private static void ExcludeRecord(PrintRecord record, string operatorName, string reason, string batchId)
+        {
+            record.SchemaVersion = 3;
+            record.IsExcluded = true;
+            record.ExcludedAtUtc = DateTime.UtcNow.ToString("O");
+            record.ExcludedBy = operatorName ?? "";
+            record.ExclusionReason = reason ?? "";
+            record.ExclusionBatchId = batchId ?? "";
+            StampChecksum(record);
+        }
+
+        private static void RestoreExclusion(PrintRecord record, ExclusionSnapshot snapshot)
+        {
+            record.SchemaVersion = snapshot.SchemaVersion;
+            record.IsExcluded = snapshot.IsExcluded;
+            record.ExcludedAtUtc = snapshot.ExcludedAtUtc;
+            record.ExcludedBy = snapshot.ExcludedBy;
+            record.ExclusionReason = snapshot.ExclusionReason;
+            record.ExclusionBatchId = snapshot.ExclusionBatchId;
+            StampChecksum(record);
+        }
+
+        private void EnsureRecordArchives()
+        {
+            foreach (var record in Records)
+                WriteRecordArchive(record);
+        }
+
+        private void SyncJsonlMirror()
+        {
+            try
+            {
+                var lines = Records.Select(record => JsonSerializer.Serialize(record));
+                AtomicFileWriter.WriteAllLines(_recordsJsonlFile, lines, Encoding.UTF8);
+            }
+            catch (Exception ex) { LoggerService.Error("重建 JSONL 历史兼容副本失败", ex); }
+        }
+
+        private bool WriteRecordArchive(PrintRecord record)
+        {
+            try
+            {
+                var timestamp = ParsePrintTime(record.PrintTime);
+                var directory = Path.Combine(_historyRecordsDirectory, timestamp.ToString("yyyy"), timestamp.ToString("MM"), timestamp.ToString("dd"));
+                Directory.CreateDirectory(directory);
+                var safeRecordId = new string((record.RecordId ?? "").Where(char.IsLetterOrDigit).ToArray());
+                if (string.IsNullOrWhiteSpace(safeRecordId)) safeRecordId = Guid.NewGuid().ToString("N");
+                var path = Path.Combine(directory, $"{timestamp:yyyyMMdd_HHmmss}_{safeRecordId}.json");
+                if (File.Exists(path)) return true;
+                AtomicFileWriter.WriteAllText(path, JsonSerializer.Serialize(record, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error($"保存历史记录独立副本失败: {record?.RecordId}", ex);
+                return false;
+            }
+        }
+
+        private static DateTime ParsePrintTime(string printTime)
+        {
+            return DateTime.TryParse(printTime, out var parsed) ? parsed : DateTime.Now;
         }
 
         private static IEnumerable<string> GetValues(PrintRecord record)
@@ -601,6 +723,7 @@ namespace BarTenderPrinter
                 ExecuteNonQuery(connection, "CREATE TABLE IF NOT EXISTS FieldValues (RecordId TEXT NOT NULL, FieldName TEXT NOT NULL, FieldValue TEXT, TemplateId TEXT, OrderId TEXT)");
                 ExecuteNonQuery(connection, "CREATE TABLE IF NOT EXISTS TemplateSnapshots (TemplateId TEXT, RecordId TEXT, FieldName TEXT)");
                 ExecuteNonQuery(connection, "CREATE TABLE IF NOT EXISTS Orders (OrderId TEXT PRIMARY KEY, OrderName TEXT)");
+                ExecuteNonQuery(connection, "CREATE TABLE IF NOT EXISTS StorageMetadata (Key TEXT PRIMARY KEY, Value TEXT NOT NULL)");
                 ExecuteNonQuery(connection, "CREATE INDEX IF NOT EXISTS IX_PrintRecords_OrderId ON PrintRecords(OrderId)");
                 ExecuteNonQuery(connection, "CREATE INDEX IF NOT EXISTS IX_PrintRecords_TemplateId ON PrintRecords(TemplateId)");
                 ExecuteNonQuery(connection, "CREATE INDEX IF NOT EXISTS IX_PrintRecords_PrintTime ON PrintRecords(PrintTime)");
@@ -645,6 +768,7 @@ namespace BarTenderPrinter
                 ExecuteNonQuery(connection, "DELETE FROM TemplateSnapshots", transaction);
                 ExecuteNonQuery(connection, "DELETE FROM Orders", transaction);
                 foreach (var record in records) InsertSqlite(record, connection, transaction);
+                ExecuteNonQuery(connection, "INSERT OR REPLACE INTO StorageMetadata (Key, Value) VALUES ('LegacyMigrationComplete', '1')", transaction);
                 transaction.Commit();
             }
         }
@@ -679,6 +803,16 @@ namespace BarTenderPrinter
             return connection;
         }
 
+        private bool IsLegacyMigrationComplete()
+        {
+            using (var connection = OpenConnection())
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT Value FROM StorageMetadata WHERE Key = 'LegacyMigrationComplete' LIMIT 1";
+                return string.Equals(command.ExecuteScalar()?.ToString(), "1", StringComparison.Ordinal);
+            }
+        }
+
         private static void ExecuteNonQuery(SqliteConnection connection, string sql, SqliteTransaction transaction = null, params (string Name, object Value)[] parameters)
         {
             using (var command = connection.CreateCommand())
@@ -699,18 +833,33 @@ namespace BarTenderPrinter
         private static bool IsChecksumValid(PrintRecord record)
         {
             if (record == null || string.IsNullOrWhiteSpace(record.RecordChecksum)) return true;
-            return string.Equals(record.RecordChecksum, ComputeChecksum(record), StringComparison.OrdinalIgnoreCase);
+            return string.Equals(record.RecordChecksum, ComputeChecksum(record, true), StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(record.RecordChecksum, ComputeChecksum(record, false), StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ComputeChecksum(PrintRecord record)
         {
-            var payload = string.Join("|", new[]
+            return ComputeChecksum(record, record.SchemaVersion >= 3);
+        }
+
+        private static string ComputeChecksum(PrintRecord record, bool includeLifecycle)
+        {
+            var values = new List<string>
             {
                 record.RecordId, record.TemplateName, record.TemplatePath, record.TemplateId, record.OrderId,
                 SerializeFields(record.FieldValues), record.PrintTime, record.Status, record.Printer, record.Copies.ToString(),
                 record.OperatorName, record.ReprintReason, record.TemplateVersion, record.DiagnosticDetails, record.OrderName,
                 string.Join(";", record.TemplateFields ?? new List<string>())
-            });
+            };
+            if (includeLifecycle)
+            {
+                values.Add(record.IsExcluded.ToString());
+                values.Add(record.ExcludedAtUtc ?? "");
+                values.Add(record.ExcludedBy ?? "");
+                values.Add(record.ExclusionReason ?? "");
+                values.Add(record.ExclusionBatchId ?? "");
+            }
+            var payload = string.Join("|", values);
             using (var sha = SHA256.Create())
                 return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(payload)));
         }

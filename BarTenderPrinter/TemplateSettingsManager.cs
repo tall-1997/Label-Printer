@@ -74,10 +74,18 @@ namespace BarTenderPrinter
             try
             {
                 var items = JsonSerializer.Deserialize<List<TemplateSettings>>(File.ReadAllText(_path)) ?? new List<TemplateSettings>();
+                var migrated = false;
                 foreach (var item in items)
                 {
+                    var previousVersion = item.SchemaVersion;
                     ValidationService.MigrateLocalDataSelection(item);
+                    if (item.SchemaVersion != previousVersion) migrated = true;
                     _settings[GetKey(item)] = item;
+                }
+                if (migrated)
+                {
+                    try { AtomicFileWriter.WriteAllText(_path, JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true })); }
+                    catch (Exception ex) { LoggerService.Error("保存迁移后的模板设置失败", ex); }
                 }
             }
             catch (Exception ex)

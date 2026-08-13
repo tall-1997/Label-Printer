@@ -117,7 +117,7 @@ namespace BarTenderPrinter
             this.btnClearSearch.Click += new System.EventHandler(this.btnClearSearch_Click);
             this.chkExactSearch = new System.Windows.Forms.CheckBox { Text = "精确", Location = new System.Drawing.Point(282, 4), Size = new System.Drawing.Size(55, 20) };
             this.chkExactSearch.CheckedChanged += new System.EventHandler(this.chkExactSearch_CheckedChanged);
-            this.btnClearHistory = new System.Windows.Forms.Button { Text = "清空记录", Location = new System.Drawing.Point(340, 1), Size = new System.Drawing.Size(70, 24) };
+            this.btnClearHistory = new System.Windows.Forms.Button { Text = "清空控件", Location = new System.Drawing.Point(340, 1), Size = new System.Drawing.Size(70, 24) };
             this.btnClearHistory.Click += new System.EventHandler(this.btnClearHistory_Click);
             this.btnExportHistory = new System.Windows.Forms.Button { Text = "导出", Location = new System.Drawing.Point(416, 1), Size = new System.Drawing.Size(50, 24) };
             this.btnExportHistory.Click += new System.EventHandler(this.btnExportHistory_Click);

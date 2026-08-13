@@ -25,7 +25,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.67";
+        private readonly string _version = "v5.7.68";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -43,6 +43,8 @@ namespace BarTenderPrinter
         private bool _isInitializing = true;
         private bool _isLoadingConfig;
         private bool _hasSavedDataSourceOrder;
+        private List<DataSourceItem> _legacyDataSourcesPending = new List<DataSourceItem>();
+        private int _dataSourceLoadVersion;
         private bool _lengthValidationEnabled;
         private int _globalExpectedLength;
         private long _globalLengthRevision;
@@ -151,7 +153,7 @@ namespace BarTenderPrinter
             dgvHistory.CellMouseDown += DgvHistory_CellMouseDown;
             dgvHistory.ColumnWidthChanged += (s, e) => { if (e.Column != null) { _historyColumnWidths[e.Column.Name] = e.Column.Width; SaveConfig(); } };
             var historyMenu = new ContextMenuStrip();
-            historyMenu.Items.Add("删除此条记录", null, DeleteSelectedHistoryRecord_Click);
+            historyMenu.Items.Add("从历史控件排除此记录", null, DeleteSelectedHistoryRecord_Click);
             historyMenu.Opening += HistoryMenu_Opening;
             dgvHistory.ContextMenuStrip = historyMenu;
             cmbPrinter.SelectedIndexChanged += (s, e) => SaveCurrentConfigurationState();
@@ -2669,27 +2671,53 @@ namespace BarTenderPrinter
                 AddLog("离线模式：请手动配置数据源", "INFO");
                 return;
             }
+            var requestVersion = ++_dataSourceLoadVersion;
+            var existingSources = (_legacyDataSourcesPending.Count > 0 ? _legacyDataSourcesPending : _dataSources)
+                .Select(CloneDataSource).ToList();
             Task.Run(() =>
             {
-                var names = _btService.GetTemplateDataSources(path);
-                PostToUi(() =>
+                try
                 {
-                    if (!string.Equals(path, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)) return;
-                    if (names.Count == 0) return;
-                    var previousSources = _dataSources.ToList();
-                    var dlg = new DataSourceSelectDialog(names, _dataSources, _hasSavedDataSourceOrder, _lengthValidationEnabled, _globalExpectedLength);
-                    if (dlg.ShowDialog(this) == DialogResult.OK)
+                    var names = _btService.GetTemplateDataSources(path);
+                    PostToUi(() =>
                     {
-                        _dataSources = dlg.SelectedSources;
+                        if (requestVersion != _dataSourceLoadVersion || !string.Equals(path, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)) return;
+                        if (names.Count == 0) return;
+                        var previousSources = _dataSources.Select(CloneDataSource).ToList();
+                        _dataSources = MergeTemplateDataSources(names, existingSources);
                         UpdateLengthRevisions(previousSources, _dataSources);
+                        _legacyDataSourcesPending.Clear();
                         _hasSavedDataSourceOrder = true;
                         RebuildInputFields();
                         SaveConfig();
                         SaveCurrentTemplateSettings();
-                        AddLog($"已加载 {names.Count} 个数据源，选择了 {_dataSources.Count} 个", "SUCCESS");
-                    }
-                });
+                        AddLog($"已静默同步 {names.Count} 个模板数据源，启用 {_dataSources.Count(source => source.Enabled)} 个", "SUCCESS");
+                    });
+                }
+                catch (Exception ex)
+                {
+                    PostToUi(() => AddLog($"读取模板数据源失败: {ex.Message}", "ERROR"));
+                }
             });
+        }
+
+        internal static List<DataSourceItem> MergeTemplateDataSources(IEnumerable<string> fields, IEnumerable<DataSourceItem> existingSources)
+        {
+            var existing = (existingSources ?? new List<DataSourceItem>()).ToList();
+            var templateFields = (fields ?? new List<string>())
+                .Where(field => !string.IsNullOrWhiteSpace(field))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var fieldSet = new HashSet<string>(templateFields, StringComparer.OrdinalIgnoreCase);
+            var merged = existing
+                .Where(source => source != null && !string.IsNullOrWhiteSpace(source.Field) && fieldSet.Contains(source.Field))
+                .GroupBy(source => source.Field, StringComparer.OrdinalIgnoreCase)
+                .Select(group => CloneDataSource(group.First()))
+                .ToList();
+            merged.AddRange(templateFields
+                .Where(field => !merged.Any(source => string.Equals(source.Field, field, StringComparison.OrdinalIgnoreCase)))
+                .Select(field => new DataSourceItem { Name = field, Field = field, Enabled = true }));
+            return merged;
         }
 
         private void ResetTemplateState()
@@ -3918,12 +3946,21 @@ namespace BarTenderPrinter
         private void btnClearSearch_Click(object sender, EventArgs e) { _historyPageIndex = 0; txtSearch.Text = ""; }
         private void btnClearHistory_Click(object sender, EventArgs e)
         {
+            UpdateSession();
+            if (!_session.CanDeleteHistory)
+            { _dialogs.ShowWarning(this, "当前角色无历史清空权限。", "权限不足"); return; }
             if (string.IsNullOrEmpty(_selectedTemplatePath))
             { MessageBox.Show(this, "请先选择模板"); return; }
-            if (MessageBox.Show(this, "确定清空当前模板的全部记录？", "确认", MessageBoxButtons.YesNo) == DialogResult.Yes)
+            var templateName = Path.GetFileName(_selectedTemplatePath);
+            var templateId = GetCurrentTemplateId();
+            var activeCount = _history.Count(templateName, _selectedTemplatePath, templateId);
+            var warning = $"这是高风险操作，将从当前历史控件、重复校验和各项检测中排除当前模板的 {activeCount} 条活动记录。\n\n原始记录仍保存在数据库、JSONL 和独立历史副本中。确定继续？";
+            if (MessageBox.Show(this, warning, "清空历史控件确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
             {
-                if (!_history.Clear(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, GetCurrentTemplateId()))
-                { MessageBox.Show(this, "清空历史记录失败，请检查文件权限。", "历史记录", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+                if (!_history.Clear(templateName, _selectedTemplatePath, templateId, GetOperatorName(), "清空当前模板历史控件"))
+                { MessageBox.Show(this, "清空历史控件失败，请检查文件权限。", "历史记录", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+                AuditLogger.Append(GetOperatorName(), "ExcludeTemplateHistory", $"template={templateId};count={activeCount}");
+                AddLog($"已从历史控件和检测中排除当前模板 {activeCount} 条记录，原始数据已保留", "WARNING");
                 LoadHistory(); RefreshStats();
             }
         }
@@ -4328,20 +4365,20 @@ namespace BarTenderPrinter
             var row = dgvHistory.SelectedRows[0];
             var recordId = row.Cells["记录ID"].Value?.ToString() ?? "";
             var data = row.Cells["数据"].Value?.ToString() ?? "";
-            if (!_dialogs.Confirm(this, $"确定删除这条打印记录？\n\n{data}", "删除历史记录"))
+            if (!_dialogs.Confirm(this, $"这是高风险操作，将从历史控件、重复校验和各项检测中排除此记录。\n\n原始记录仍保存在数据库、JSONL 和独立历史副本中。\n\n{data}\n\n确定继续？", "排除历史记录确认"))
                 return;
             var existedBeforeDelete = _history.GetById(recordId) != null;
 
-            if (_history.Delete(recordId))
+            if (_history.Delete(recordId, GetOperatorName(), "从历史控件排除单条记录"))
             {
-                AuditLogger.Append(GetOperatorName(), "DeleteHistory", recordId);
-                AddLog("已删除单条历史记录", "INFO");
+                AuditLogger.Append(GetOperatorName(), "ExcludeHistory", recordId);
+                AddLog("已从历史控件和检测中排除单条记录，原始数据已保留", "WARNING");
                 LoadHistory();
                 RefreshStats();
             }
             else
             {
-                MessageBox.Show(this, existedBeforeDelete ? "删除历史记录失败，请检查文件权限。" : "该历史记录已不存在，请刷新后重试。", "删除历史记录", MessageBoxButtons.OK, existedBeforeDelete ? MessageBoxIcon.Error : MessageBoxIcon.Information);
+                MessageBox.Show(this, existedBeforeDelete ? "排除历史记录失败，请检查文件权限。" : "该活动历史记录已不存在，请刷新后重试。", "排除历史记录", MessageBoxButtons.OK, existedBeforeDelete ? MessageBoxIcon.Error : MessageBoxIcon.Information);
             }
         }
 
@@ -4412,6 +4449,7 @@ namespace BarTenderPrinter
         private bool RestoreTemplateSettings(string templateName, string templatePath)
         {
             if (!_templateSettings.TryGet(templateName, templatePath, out var settings)) return false;
+            _legacyDataSourcesPending.Clear();
             ApplyTemplateSettings(settings);
             AddLog($"已恢复模板设置: {templateName}", "INFO");
             return true;
@@ -4420,6 +4458,7 @@ namespace BarTenderPrinter
         private void ApplyTemplateSettings(TemplateSettings settings)
         {
             ValidationService.MigrateLocalDataSelection(settings);
+            _legacyDataSourcesPending.Clear();
             _isLoadingConfig = true;
             try
             {
@@ -4664,6 +4703,7 @@ namespace BarTenderPrinter
                         UseLocalDataValidation = useLocalDataValidation
                     });
                 }
+                _legacyDataSourcesPending = count > 0 ? _dataSources.Select(CloneDataSource).ToList() : new List<DataSourceItem>();
                 UpdateLocalDataValidationAvailability();
                 chkUseLocalData.Checked = _useLocalDataValidation;
                 if (_dataSources.Count == 0) _dataSources.Add(new DataSourceItem { Name = "IMEI", Field = "IMEI1", Enabled = true });

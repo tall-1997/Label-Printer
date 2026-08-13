@@ -167,12 +167,12 @@ namespace BarTenderPrinter
             {
                 var items = JsonSerializer.Deserialize<List<PackagingOrder>>(File.ReadAllText(_path)) ?? new List<PackagingOrder>();
                 _orders.Clear();
-                var migrated = false;
+                var migrated = items.Any(item => item == null);
                 foreach (var item in items.Where(item => item != null))
                 {
-                    item.Id = string.IsNullOrWhiteSpace(item.Id) ? Guid.NewGuid().ToString("N") : item.Id;
-                    item.SchemaVersion = Math.Max(item.SchemaVersion, 2);
-                    item.Templates ??= new List<OrderTemplate>();
+                    if (string.IsNullOrWhiteSpace(item.Id)) { item.Id = Guid.NewGuid().ToString("N"); migrated = true; }
+                    if (item.SchemaVersion < 2) { item.SchemaVersion = 2; migrated = true; }
+                    if (item.Templates == null) { item.Templates = new List<OrderTemplate>(); migrated = true; }
                     if (item.Templates.Count == 0 && !string.IsNullOrWhiteSpace(item.TemplatePath))
                     {
                         var template = new OrderTemplate
@@ -186,19 +186,29 @@ namespace BarTenderPrinter
                         item.Settings = new TemplateSettings();
                         migrated = true;
                     }
+                    if (item.Templates.Any(template => template == null)) migrated = true;
                     item.Templates = item.Templates.Where(template => template != null).ToList();
                     foreach (var template in item.Templates)
                     {
-                        template.Id = string.IsNullOrWhiteSpace(template.Id) ? Guid.NewGuid().ToString("N") : template.Id;
-                        template.SchemaVersion = Math.Max(template.SchemaVersion, 2);
-                        template.FieldSnapshot ??= new List<string>();
-                        template.Settings ??= new TemplateSettings();
+                        if (string.IsNullOrWhiteSpace(template.Id)) { template.Id = Guid.NewGuid().ToString("N"); migrated = true; }
+                        if (template.SchemaVersion < 2) { template.SchemaVersion = 2; migrated = true; }
+                        if (template.FieldSnapshot == null) { template.FieldSnapshot = new List<string>(); migrated = true; }
+                        if (template.Settings == null) { template.Settings = new TemplateSettings(); migrated = true; }
+                        var previousSettingsVersion = template.Settings.SchemaVersion;
                         ValidationService.MigrateLocalDataSelection(template.Settings);
+                        if (template.Settings.SchemaVersion != previousSettingsVersion) migrated = true;
+                        if (!string.Equals(template.Settings.OrderId, item.Id, StringComparison.Ordinal) ||
+                            !string.Equals(template.Settings.TemplateId, template.Id, StringComparison.Ordinal) ||
+                            !string.Equals(template.Settings.Scope, "OrderTemplate", StringComparison.Ordinal)) migrated = true;
                         template.Settings.OrderId = item.Id;
                         template.Settings.TemplateId = template.Id;
                         template.Settings.Scope = "OrderTemplate";
                         if (!string.IsNullOrWhiteSpace(template.SourcePath))
                         {
+                            var previousSourcePath = template.SourcePath;
+                            var previousArchivedPath = template.ArchivedPath;
+                            var previousTemplateName = template.Settings.TemplateName;
+                            var previousTemplatePath = template.Settings.TemplatePath;
                             try { template.SourcePath = Path.GetFullPath(template.SourcePath); }
                             catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException)
                             {
@@ -208,6 +218,10 @@ namespace BarTenderPrinter
                             template.ArchivedPath = "";
                             template.Settings.TemplateName = Path.GetFileName(template.SourcePath);
                             template.Settings.TemplatePath = template.SourcePath;
+                            if (!string.Equals(previousSourcePath, template.SourcePath, StringComparison.Ordinal) ||
+                                !string.Equals(previousArchivedPath, template.ArchivedPath, StringComparison.Ordinal) ||
+                                !string.Equals(previousTemplateName, template.Settings.TemplateName, StringComparison.Ordinal) ||
+                                !string.Equals(previousTemplatePath, template.Settings.TemplatePath, StringComparison.Ordinal)) migrated = true;
                         }
                     }
                     _orders.Add(item);

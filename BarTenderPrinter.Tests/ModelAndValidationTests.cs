@@ -185,6 +185,88 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
+        public void ExcludedHistoryLeavesStoredRecordAndStopsDuplicateChecks()
+        {
+            var dir = CreateTempDirectory();
+            var archive = Path.Combine(dir, "history-records");
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), Path.Combine(dir, "records.db"), archive);
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "PASS", "Printer", 1));
+            var recordId = history.Records.Single().RecordId;
+
+            Assert.True(history.Delete(recordId, "admin", "test exclusion"));
+
+            Assert.Single(history.Records);
+            Assert.True(history.Records[0].IsExcluded);
+            Assert.Null(history.GetById(recordId));
+            Assert.Empty(history.Search("Template", "C:\\a.btw", "template-1", "", false));
+            Assert.False(history.ContainsAnyValue("Template", "C:\\a.btw", "template-1", "X"));
+            Assert.Equal(0, history.Count("Template", "C:\\a.btw", "template-1"));
+            Assert.Single(Directory.GetFiles(archive, $"*{recordId}.json", SearchOption.AllDirectories));
+        }
+
+        [Fact]
+        public void ClearHistoryUsesOneExclusionBatchAndSurvivesReload()
+        {
+            var dir = CreateTempDirectory();
+            var csv = Path.Combine(dir, "records.csv");
+            var jsonl = Path.Combine(dir, "records.jsonl");
+            var db = Path.Combine(dir, "records.db");
+            var archive = Path.Combine(dir, "history-records");
+            var history = new HistoryManager(csv, jsonl, db, archive);
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "A" }, "PASS", "Printer", 1));
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "B" }, "PASS", "Printer", 1));
+
+            Assert.True(history.Clear("Template", "C:\\a.btw", "template-1", "admin", "clear control"));
+
+            Assert.Equal(2, history.Records.Count);
+            Assert.Single(history.Records.Select(record => record.ExclusionBatchId).Distinct());
+            var reloaded = new HistoryManager(csv, jsonl, db, archive);
+            reloaded.Load();
+            Assert.Equal(2, reloaded.Records.Count);
+            Assert.All(reloaded.Records, record => Assert.True(record.IsExcluded));
+            Assert.Empty(reloaded.Search("Template", "C:\\a.btw", "template-1", "", false));
+        }
+
+        [Fact]
+        public void EmptyMigratedDatabaseDoesNotReloadLegacyCsv()
+        {
+            var dir = CreateTempDirectory();
+            var csv = Path.Combine(dir, "records.csv");
+            var jsonl = Path.Combine(dir, "records.jsonl");
+            var db = Path.Combine(dir, "records.db");
+            File.WriteAllText(csv, "imei,print_time,status\nLEGACY,now,PASS\n");
+            var history = new HistoryManager(csv, jsonl, db, Path.Combine(dir, "history-records"));
+            history.Load();
+            Assert.Single(history.Records);
+            Assert.True(history.Clear());
+
+            var reloaded = new HistoryManager(csv, jsonl, db, Path.Combine(dir, "history-records"));
+            reloaded.Load();
+
+            Assert.Empty(reloaded.Search("", "", "", "", false));
+            Assert.Single(reloaded.Records);
+            Assert.True(reloaded.Records[0].IsExcluded);
+        }
+
+        [Fact]
+        public void TemplateDataSourceMergePreservesMatchesAndEnablesNewFields()
+        {
+            var merged = MainForm.MergeTemplateDataSources(
+                new[] { "BOX", "IMEI", "LOT" },
+                new[]
+                {
+                    new DataSourceItem { Field = "imei", Name = "Old IMEI", Enabled = false, AutoStep = -1 },
+                    new DataSourceItem { Field = "BOX", Name = "Box" }
+                });
+
+            Assert.Equal(3, merged.Count);
+            Assert.Equal(new[] { "imei", "BOX", "LOT" }, merged.Select(source => source.Field));
+            Assert.False(merged.Single(source => source.Field.Equals("imei", System.StringComparison.OrdinalIgnoreCase)).Enabled);
+            Assert.Equal(-1, merged.Single(source => source.Field.Equals("imei", System.StringComparison.OrdinalIgnoreCase)).AutoStep);
+            Assert.True(merged.Single(source => source.Field == "LOT").Enabled);
+        }
+
+        [Fact]
         public void ExpectedLengthPrefersIndividualLength()
         {
             var source = new DataSourceItem { ExpectedLength = 12 };

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 
 namespace BarTenderPrinter
@@ -20,13 +21,13 @@ namespace BarTenderPrinter
         public static readonly string ApplicationStateFile = Path.Combine(DataDirectory, "application-state.json");
         public static readonly string ValidationDataDirectory = Path.Combine(DataDirectory, "validation-data");
         public static readonly string PreviewDirectory = Path.Combine(DataDirectory, "previews");
+        public static readonly string HistoryRecordsDirectory = Path.Combine(AppContext.BaseDirectory, "history-records");
 
         public static void Initialize()
         {
             Directory.CreateDirectory(DataDirectory);
             Directory.CreateDirectory(ValidationDataDirectory);
             Directory.CreateDirectory(PreviewDirectory);
-
             var legacyDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".bartender-printer");
@@ -45,8 +46,9 @@ namespace BarTenderPrinter
                 if (!File.Exists(targetPath) && File.Exists(sourcePath))
                     File.Copy(sourcePath, targetPath);
             }
-            catch
+            catch (Exception ex)
             {
+                Trace.WriteLine($"迁移旧版文件失败: {fileName}; {ex.Message}");
             }
         }
     }
