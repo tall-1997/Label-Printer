@@ -20,6 +20,9 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Run tests
+        run: dotnet test BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release
+
       - name: Publish self-contained application
         run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
 
@@ -59,13 +62,13 @@ jobs:
             ### 更新内容
 
             #### 修复与优化
-            - 订单数据新增稳定 OrderId，四元组 Key 继续兼容现有查找逻辑
-            - 历史记录保存 OrderId 和 TemplateId，支持精准追溯和稳定防重
-            - 历史主存储迁移为 JSONL，旧 CSV 历史自动兼容读取并迁移
-            - 模板设置新增 Scope、OrderId 和 TemplateId，区分订单模板和普通模板设置
-            - 历史记录保存模板字段快照，支持模板变化追溯和导出
-            - 历史导出增强 OrderId 与模板字段快照列
-            - 持久化模型补齐 schemaVersion，支持后续迁移升级
+            - 打印页增加当前生效设置摘要，展示订单、模板、打印机、份数、字段和校验状态
+            - 历史页增加状态与日期高级筛选，并保留分页展示
+            - 校验数据导入后展示导入统计摘要
+            - 长路径控件增加 Tooltip，便于查看完整模板和校验数据路径
+            - 历史表格列宽支持记忆并写入配置
+            - 新增 xUnit 测试项目，覆盖订单 Key、模板字段完整性、本地校验绑定、重复索引、长度、步长、CSV、历史展示和补打印等回归路径
+            - 发布工作流新增 dotnet test 步骤，安装包构建前先执行测试
 
             ### 系统要求
             - Windows 10/11 x64

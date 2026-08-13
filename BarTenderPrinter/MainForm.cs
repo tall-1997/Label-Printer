@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.51";
+        private readonly string _version = "v5.7.52";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -95,6 +95,11 @@ namespace BarTenderPrinter
         private Button _btnPrevHistoryPage;
         private Button _btnNextHistoryPage;
         private Label _lblHistoryPage;
+        private Label _lblEffectiveSummary;
+        private ComboBox _cmbHistoryStatus;
+        private TextBox _txtHistoryDate;
+        private readonly ToolTip _toolTips = new ToolTip();
+        private readonly Dictionary<string, int> _historyColumnWidths = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private int _historyPageIndex;
         private string _pendingReprintReason = "";
         private const int HistoryPageSize = 200;
@@ -126,6 +131,7 @@ namespace BarTenderPrinter
             SizeChanged += (s, e) => RebuildPrintPageLayout();
             dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
             dgvHistory.CellMouseDown += DgvHistory_CellMouseDown;
+            dgvHistory.ColumnWidthChanged += (s, e) => { if (e.Column != null) { _historyColumnWidths[e.Column.Name] = e.Column.Width; SaveConfig(); } };
             var historyMenu = new ContextMenuStrip();
             historyMenu.Items.Add("删除此条记录", null, DeleteSelectedHistoryRecord_Click);
             historyMenu.Opening += HistoryMenu_Opening;
@@ -141,14 +147,21 @@ namespace BarTenderPrinter
             _btnPrevHistoryPage = new Button { Text = "上一页", Location = new Point(780, 1), Size = new Size(60, 24) };
             _btnNextHistoryPage = new Button { Text = "下一页", Location = new Point(845, 1), Size = new Size(60, 24) };
             _lblHistoryPage = new Label { Text = "第 1 页", Location = new Point(910, 5), Size = new Size(80, 18) };
+            _cmbHistoryStatus = new ComboBox { Location = new Point(985, 2), Size = new Size(90, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            _cmbHistoryStatus.Items.AddRange(new object[] { "全部状态", "PASS", "FAIL", "REPRINT_PASS", "REPRINT_FAIL" });
+            _cmbHistoryStatus.SelectedIndex = 0;
+            _txtHistoryDate = new TextBox { Location = new Point(1080, 2), Size = new Size(90, 25), PlaceholderText = "yyyy-MM-dd" };
             _btnPrevHistoryPage.Click += (s, e) => { if (_historyPageIndex > 0) { _historyPageIndex--; LoadHistory(); } };
             _btnNextHistoryPage.Click += (s, e) => { _historyPageIndex++; LoadHistory(); };
-            historyPanel.Controls.AddRange(new Control[] { lblOperator, _txtOperator, _btnPrevHistoryPage, _btnNextHistoryPage, _lblHistoryPage });
+            _cmbHistoryStatus.SelectedIndexChanged += (s, e) => { _historyPageIndex = 0; LoadHistory(); };
+            _txtHistoryDate.TextChanged += (s, e) => { _historyPageIndex = 0; _historySearchTimer.Stop(); _historySearchTimer.Start(); };
+            historyPanel.Controls.AddRange(new Control[] { lblOperator, _txtOperator, _btnPrevHistoryPage, _btnNextHistoryPage, _lblHistoryPage, _cmbHistoryStatus, _txtHistoryDate });
             MiuiTheme.StyleLabel(lblOperator);
             MiuiTheme.StyleLabel(_lblHistoryPage, true);
             MiuiTheme.StyleTextBox(_txtOperator);
             MiuiTheme.StyleButton(_btnPrevHistoryPage);
             MiuiTheme.StyleButton(_btnNextHistoryPage);
+            MiuiTheme.StyleTextBox(_txtHistoryDate);
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -215,8 +228,11 @@ namespace BarTenderPrinter
             _cmbPrintColor.SelectedIndexChanged += (s, e) => { if (!_loadingPrintOrderFilters) RefreshPrintOrderSelector(PrintOrderFilterLevel.Color, false); };
             _cmbPrintOrderNumber.SelectedIndexChanged += (s, e) => ApplyPrintOrderSelection();
             _printOrderPanel.Controls.Add(printOrderLabel);
+            _lblEffectiveSummary = new Label { Text = "当前生效设置：未选择订单", Location = new Point(0, 44), Size = new Size(_printOrderPanel.Width, 18), AutoEllipsis = true };
+            _printOrderPanel.Controls.Add(_lblEffectiveSummary);
             Controls.Add(_printOrderPanel);
             MiuiTheme.StyleLabel(printOrderLabel);
+            MiuiTheme.StyleLabel(_lblEffectiveSummary, true);
 
             _orderPagePanel = new Panel
             {
@@ -294,6 +310,7 @@ namespace BarTenderPrinter
             SetPrintOrderLabelBounds("机型：", _cmbPrintModel);
             SetPrintOrderLabelBounds("颜色：", _cmbPrintColor);
             SetPrintOrderLabelBounds("订单号：", _cmbPrintOrderNumber);
+            if (_lblEffectiveSummary != null) _lblEffectiveSummary.Size = new Size(width, 18);
 
             cmbTemplate.Location = new Point(left, _printOrderPanel.Bottom + 8);
             cmbTemplate.Size = new Size(width, 25);
@@ -461,6 +478,15 @@ namespace BarTenderPrinter
         {
             foreach (var combo in new[] { _cmbOrderCustomer, _cmbOrderModel, _cmbOrderColor, _cmbOrderNumber })
                 if (combo != null) combo.SelectedIndex = -1;
+            UpdateEffectiveSummary();
+        }
+
+        private void UpdateEffectiveSummary()
+        {
+            if (_lblEffectiveSummary == null) return;
+            var enabledCount = _dataSources?.Count(source => source.Enabled) ?? 0;
+            var validation = $"本地:{(_useLocalDataValidation ? "开" : "关")} 重复:{(_duplicateValidationEnabled ? "开" : "关")} 长度:{(_lengthValidationEnabled ? "开" : "关")}";
+            _lblEffectiveSummary.Text = $"当前生效设置：订单={_activeOrder?.DisplayName ?? "未选择"} | 模板={Path.GetFileName(_selectedTemplatePath)} | 打印机={cmbPrinter.SelectedItem} | 份数={numCopies.Value} | 字段={enabledCount} | {validation}";
         }
 
         private ComboBox AddOrderCombo(string labelText, int x, int y)
@@ -606,6 +632,7 @@ namespace BarTenderPrinter
                 var match = cmbTemplate.Items.Cast<TemplateItem>().FirstOrDefault(item => string.Equals(item.FullPath, template.SourcePath, StringComparison.OrdinalIgnoreCase));
                 if (match != null) cmbTemplate.SelectedItem = match;
                 lblSelectedTemplate.Text = template.DisplayName;
+                _toolTips.SetToolTip(lblSelectedTemplate, template.SourcePath);
                 _activeOrderTemplate = template;
             }
             finally
@@ -615,6 +642,7 @@ namespace BarTenderPrinter
             }
             ApplyTemplateSettings(template.Settings ?? new TemplateSettings());
             SyncPrintOrderSelection(order);
+            UpdateEffectiveSummary();
             LoadHistory();
             RefreshStats();
             AddLog($"已选择订单: {order.DisplayName}", "INFO");
@@ -1270,7 +1298,9 @@ namespace BarTenderPrinter
                 _chkOrderInputValidation.Enabled = true;
                 _chkOrderInputValidation.Checked = true;
                 _lblOrderLocalData.Text = $"校验数据：{path}（{imported.Values.Count} 条，{imported.ColumnName} -> {targetTemplate.Settings.LocalDataTargetField}）";
+                _toolTips.SetToolTip(_lblOrderLocalData, _lblOrderLocalData.Text);
             }
+            MessageBox.Show(this, $"校验数据导入完成\n总行数：{imported.TotalRows}\n去重后：{imported.Values.Count}\n重复数：{imported.DuplicateRows}\n空值数：{imported.EmptyRows}", "校验数据", MessageBoxButtons.OK, MessageBoxIcon.Information);
             MarkOrderEditorDirty();
         }
 
@@ -1356,7 +1386,7 @@ namespace BarTenderPrinter
             var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var line in File.ReadLines(path))
             { var value = line.Trim(); if (!string.IsNullOrEmpty(value)) values.Add(value); }
-            return new LocalDataImportResult(values, "文本");
+            return new LocalDataImportResult(values, "文本", values.Count, 0, 0);
         }
 
         private LocalDataImportResult ReadCsvValidationData(string path)
@@ -1513,13 +1543,24 @@ namespace BarTenderPrinter
         private sealed class LocalDataImportResult
         {
             public LocalDataImportResult(HashSet<string> values, string columnName)
+                : this(values, columnName, values?.Count ?? 0, 0, 0)
+            {
+            }
+
+            public LocalDataImportResult(HashSet<string> values, string columnName, int totalRows, int duplicateRows, int emptyRows)
             {
                 Values = values;
                 ColumnName = columnName;
+                TotalRows = totalRows;
+                DuplicateRows = duplicateRows;
+                EmptyRows = emptyRows;
             }
 
             public HashSet<string> Values { get; }
             public string ColumnName { get; }
+            public int TotalRows { get; }
+            public int DuplicateRows { get; }
+            public int EmptyRows { get; }
         }
 
         private void SelectOrderTemplateDraft(OrderTemplate template)
@@ -1531,6 +1572,7 @@ namespace BarTenderPrinter
             _loadingOrderEditor = true;
             _selectedOrderTemplateDraft = template;
             _txtOrderTemplate.Text = _selectedOrderTemplateDraft?.SourcePath ?? "";
+            _toolTips.SetToolTip(_txtOrderTemplate, _txtOrderTemplate.Text);
             var settings = _selectedOrderTemplateDraft?.Settings;
             if (settings != null)
             {
@@ -1550,6 +1592,7 @@ namespace BarTenderPrinter
                 _lblOrderLocalData.Text = string.IsNullOrWhiteSpace(settings.LocalDataPath)
                     ? "校验数据：未配置"
                     : $"校验数据：{settings.LocalDataPath}（{localDataCount} 条）";
+                _toolTips.SetToolTip(_lblOrderLocalData, settings.LocalDataPath ?? "");
             }
             LoadOrderSettingsIntoGrid(_selectedOrderTemplateDraft?.Settings);
             _loadingOrderEditor = wasLoadingEditor;
@@ -3045,6 +3088,7 @@ namespace BarTenderPrinter
             _useLocalDataValidation = data.Count > 0;
             chkUseLocalData.Checked = _useLocalDataValidation;
             UpdateLocalDataLabel($"已加载: {data.Count} 条 [{columnName}->{_localDataTargetField}] ({Path.GetFileName(path)})");
+            MessageBox.Show(this, $"校验数据导入完成\n总行数：{data.Count}\n去重后：{data.Count}\n重复数：0\n空值数：0", "校验数据", MessageBoxButtons.OK, MessageBoxIcon.Information);
             AddLog($"加载 {sourceType}: {data.Count} 条, 列: {columnName}", "SUCCESS");
             SaveCurrentConfigurationState();
         }
@@ -3777,7 +3821,14 @@ namespace BarTenderPrinter
 
         private List<PrintRecord> GetCurrentHistoryRecords()
         {
-            return _history.Search(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, GetCurrentTemplateId(), txtSearch?.Text ?? "", chkExactSearch.Checked, HistoryPageSize, true, _historyPageIndex * HistoryPageSize);
+            var records = _history.Search(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, GetCurrentTemplateId(), txtSearch?.Text ?? "", chkExactSearch.Checked, 0, true);
+            var status = _cmbHistoryStatus?.SelectedItem?.ToString() ?? "全部状态";
+            if (!string.Equals(status, "全部状态", StringComparison.OrdinalIgnoreCase))
+                records = records.Where(record => string.Equals(record.Status, status, StringComparison.OrdinalIgnoreCase)).ToList();
+            var date = _txtHistoryDate?.Text?.Trim() ?? "";
+            if (!string.IsNullOrWhiteSpace(date))
+                records = records.Where(record => (record.PrintTime ?? "").StartsWith(date, StringComparison.OrdinalIgnoreCase)).ToList();
+            return records.Skip(_historyPageIndex * HistoryPageSize).Take(HistoryPageSize).ToList();
         }
 
         private void LoadHistory()
@@ -3786,6 +3837,8 @@ namespace BarTenderPrinter
             var dt = HistoryPresenter.BuildTable(GetCurrentHistoryRecords());
             dgvHistory.DataSource = dt;
             dgvHistory.Columns["记录ID"].Visible = false;
+            foreach (DataGridViewColumn column in dgvHistory.Columns)
+                if (_historyColumnWidths.TryGetValue(column.Name, out var width) && width > 20) column.Width = width;
 
             // Apply color formatting to status column
             foreach (DataGridViewRow row in dgvHistory.Rows)
@@ -4012,6 +4065,7 @@ namespace BarTenderPrinter
                     cmbPrinter.SelectedIndex = 0;
                 UpdateLocalDataLabel(_localData.Count > 0 ? $"已恢复: {_localData.Count} 条 {(_localDataTargetField.Length > 0 ? "->" + _localDataTargetField : "")}" : "");
                 RebuildInputFields();
+                UpdateEffectiveSummary();
             }
             finally
             {
@@ -4064,6 +4118,7 @@ namespace BarTenderPrinter
                     ["GlobalExpectedLength"] = _globalExpectedLength.ToString(),
                     ["GlobalLengthRevision"] = _globalLengthRevision.ToString(),
                     ["LengthRevisionCounter"] = _lengthRevisionCounter.ToString(),
+                    ["HistoryColumnWidths"] = string.Join(";", _historyColumnWidths.Select(item => $"{item.Key}:{item.Value}")),
                     ["DSCount"] = _dataSources.Count.ToString()
                 });
                 for (int i = 0; i < _dataSources.Count; i++)
@@ -4106,6 +4161,18 @@ namespace BarTenderPrinter
             return (value ?? "").Replace("\r", " ").Replace("\n", " ");
         }
 
+        private void LoadHistoryColumnWidths(string value)
+        {
+            _historyColumnWidths.Clear();
+            foreach (var part in (value ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var index = part.LastIndexOf(':');
+                if (index <= 0) continue;
+                if (int.TryParse(part.Substring(index + 1), out var width))
+                    _historyColumnWidths[part.Substring(0, index)] = width;
+            }
+        }
+
         private void SaveCurrentConfigurationState()
         {
             if (_isInitializing || _isLoadingConfig) return;
@@ -4140,6 +4207,7 @@ namespace BarTenderPrinter
                 int.TryParse(IniReadValue("General", "GlobalExpectedLength", path), out _globalExpectedLength);
                 long.TryParse(IniReadValue("General", "GlobalLengthRevision", path), out _globalLengthRevision);
                 long.TryParse(IniReadValue("General", "LengthRevisionCounter", path), out _lengthRevisionCounter);
+                LoadHistoryColumnWidths(IniReadValue("General", "HistoryColumnWidths", path));
                 _lengthRevisionCounter = Math.Max(_lengthRevisionCounter, _globalLengthRevision);
                 chkLengthValidation.Checked = _lengthValidationEnabled;
                 btnGlobalLength.Enabled = _lengthValidationEnabled;
