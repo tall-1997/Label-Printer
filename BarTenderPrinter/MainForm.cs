@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.60";
+        private readonly string _version = "v5.7.61";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -3564,12 +3564,12 @@ namespace BarTenderPrinter
                     {
                         if (result.Success)
                         {
-                            SetStatus("打印完成");
-                            AddLog("打印完成", "SUCCESS");
+                            SetStatus("打印作业已提交");
+                            AddLog("打印作业已提交", "SUCCESS");
                             if (!_printWorkflow.RecordPrintResult(_history, templateName, templatePath, GetCurrentTemplateId(), fieldValues, "PASS", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? "", _activeOrder?.OrderId ?? "", _activeOrderTemplate?.FieldSnapshot ?? new List<string>()))
                             {
-                                SetStatus("打印完成，历史保存失败");
-                                AddLog("打印已完成，但历史记录保存失败；本次数据不会进入重复校验索引。", "ERROR");
+                                SetStatus("打印作业已提交，历史保存失败");
+                                AddLog("打印作业已提交，但历史记录保存失败；本次数据不会进入重复校验索引。", "ERROR");
                                 var shouldAdvance = ConfirmPrintedWithoutHistoryAdvance();
                                 if (shouldAdvance)
                                 {
@@ -3925,11 +3925,11 @@ namespace BarTenderPrinter
                             GetOperatorName(), "", record.TemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
                         if (result.Success && historySaved) RestoreAutoIncrementInputsToPendingValues();
                         if (!historySaved)
-                            AddLog(result.Success ? "补打印已完成，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
+                            AddLog(result.Success ? "补打印作业已提交，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
                         else if (result.Success)
                         {
                             AuditLogger.Append(GetOperatorName(), "Reprint", $"record={record.RecordId}");
-                            AddLog("历史记录补打印完成", "SUCCESS");
+                            AddLog("补打印作业已提交", "SUCCESS");
                         }
                         else
                             AddLog($"历史记录补打印失败: {result.ErrorMessage}", "ERROR");
@@ -3939,7 +3939,7 @@ namespace BarTenderPrinter
                         SetPrintEnvironmentEnabled(true);
                         LoadHistory();
                         RefreshStats();
-                        SetStatus(result.Success ? (historySaved ? "补打印完成" : "补打印完成，历史保存失败") : (historySaved ? "补打印失败" : "补打印失败，历史保存失败"));
+                        SetStatus(result.Success ? (historySaved ? "补打印作业已提交" : "补打印作业已提交，历史保存失败") : (historySaved ? "补打印失败" : "补打印失败，历史保存失败"));
                     }
                 });
             });

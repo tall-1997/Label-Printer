@@ -21,8 +21,6 @@ namespace BarTenderPrinter
         private bool _disposed;
         private DateTime _lastOperationTime = DateTime.MinValue;
         private const int MinOperationIntervalMs = 2000;
-        private const int MaxRetries = 3;
-        private const int RetryDelayMs = 3000;
 
         public bool IsConnected => _connected;
         public bool IsOfflineMode => _offlineMode;
@@ -289,32 +287,15 @@ namespace BarTenderPrinter
             if (!_connected || _btApp == null)
                 return new PrintResult(false, "BarTender 未连接", $"template={templatePath};printer={printer};copies={copies};connected={_connected}");
 
-            for (int retry = 0; retry < MaxRetries; retry++)
+            _operationLock.Wait();
+            try
             {
-                if (retry > 0)
-                {
-                    LoggerService.Info($"打印重试 {retry}/{MaxRetries - 1}，等待 {RetryDelayMs}ms...");
-                    Thread.Sleep(RetryDelayMs);
-                }
-
-                _operationLock.Wait();
-                try
-                {
-                    EnsureOperationInterval();
-                    return PrintInternal(templatePath, fieldValues, printer, copies);
-                }
-                catch (Exception ex) when (IsComBusyError(ex))
-                {
-                    LoggerService.Warn($"BarTender 忙碌，将在 {RetryDelayMs}ms 后重试: {ex.Message}");
-                    continue;
-                }
-                finally
-                {
-                    _operationLock.Release();
-                }
+                return PrintInternal(templatePath, fieldValues, printer, copies);
             }
-
-            return new PrintResult(false, "打印失败：BarTender 持续忙碌，请稍后重试", $"template={templatePath};printer={printer};copies={copies};retries={MaxRetries}");
+            finally
+            {
+                _operationLock.Release();
+            }
         }
 
         private PrintResult PrintInternal(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
@@ -356,16 +337,15 @@ namespace BarTenderPrinter
                     return new PrintResult(false, $"设置份数失败: {ex.Message}", $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
                 }
 
-                object printResult = btFormat.PrintOut(false, true);
+                object printResult = btFormat.PrintOut(false, false);
                 if (printResult is bool boolResult && !boolResult)
                 {
                     CloseFormat(btFormat);
                     return new PrintResult(false, "BarTender 打印返回失败", $"template={templatePath};printer={printer};copies={copies};result=false");
                 }
-                LoggerService.Info("PrintOut 完成");
+                LoggerService.Info("打印作业已提交");
 
                 CloseFormat(btFormat);
-                LoggerService.Info("打印完成");
                 return new PrintResult(true, "");
             }
             catch (Exception ex)
@@ -409,18 +389,6 @@ namespace BarTenderPrinter
                 Thread.Sleep(delay);
             }
             _lastOperationTime = DateTime.Now;
-        }
-
-        private static bool IsComBusyError(Exception ex)
-        {
-            var message = ex.Message?.ToLower() ?? "";
-            return message.Contains("正在打印") ||
-                   message.Contains("当前正在") ||
-                   message.Contains("busy") ||
-                   message.Contains("0x80010105") ||
-                   message.Contains("rpc_e_serverfault") ||
-                   message.Contains("0x80010001") ||
-                   message.Contains("rpc_e_call_rejected");
         }
 
         private void CloseFormat(dynamic btFormat)
