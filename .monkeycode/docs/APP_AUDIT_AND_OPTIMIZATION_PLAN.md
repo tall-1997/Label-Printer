@@ -596,3 +596,12 @@
 
 - 已为 `PrintRecord` 增加无参构造函数，修复 `System.Text.Json` 读取 JSONL 历史记录失败的问题。
 - `v5.7.53` 标签已触发测试失败，按发布规则保留失败标签并使用 `v5.7.54` 重新发布。
+
+### v5.7.55 SQLite 历史主存储与审计增强
+
+- 历史层已升级 SQLite 主存储，包含 `PrintRecords`、`FieldValues`、`TemplateSnapshots`、`Orders` 表。
+- 已为 `OrderId`、`TemplateId`、`PrintTime`、`Status`、`FieldValue` 建索引。
+- 历史写入改为 SQLite 事务，同时保留 JSONL 兼容备份。
+- JSONL/CSV 历史继续兼容读取，并自动迁移到 SQLite。
+- 删除历史和补打印操作写入哈希链审计日志。
+- 测试增加 SQLite 主存储、JSONL 坏行和 CSV 迁移覆盖。

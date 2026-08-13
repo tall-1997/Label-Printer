@@ -12,6 +12,7 @@ namespace BarTenderPrinter
         public static readonly string ConfigFile = Path.Combine(DataDirectory, "config.ini");
         public static readonly string RecordsFile = Path.Combine(DataDirectory, "print_records.csv");
         public static readonly string RecordsJsonlFile = Path.Combine(DataDirectory, "print_records.jsonl");
+        public static readonly string RecordsSqliteFile = Path.Combine(DataDirectory, "print_records.db");
         public static readonly string LogFile = Path.Combine(DataDirectory, "bartender-printer.log");
         public static readonly string TemplateSettingsFile = Path.Combine(DataDirectory, "template_settings.json");
         public static readonly string OrdersFile = Path.Combine(DataDirectory, "orders.json");

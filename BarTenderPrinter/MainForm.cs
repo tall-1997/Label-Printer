@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.54";
+        private readonly string _version = "v5.7.55";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -3770,7 +3770,10 @@ namespace BarTenderPrinter
                         if (!historySaved)
                             AddLog(result.Success ? "补打印已完成，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
                         else if (result.Success)
+                        {
+                            AuditLogger.Append(GetOperatorName(), "Reprint", $"record={record.RecordId};reason={_pendingReprintReason}");
                             AddLog("历史记录补打印完成", "SUCCESS");
+                        }
                         else
                             AddLog($"历史记录补打印失败: {result.ErrorMessage}", "ERROR");
                     }
@@ -3958,6 +3961,7 @@ namespace BarTenderPrinter
 
             if (_history.Delete(recordId))
             {
+                AuditLogger.Append(GetOperatorName(), "DeleteHistory", recordId);
                 AddLog("已删除单条历史记录", "INFO");
                 LoadHistory();
                 RefreshStats();

@@ -52,8 +52,9 @@ namespace BarTenderPrinter.Tests
             var dir = CreateTempDirectory();
             var csv = Path.Combine(dir, "records.csv");
             var jsonl = Path.Combine(dir, "records.jsonl");
+            var db = Path.Combine(dir, "records.db");
             File.WriteAllText(jsonl, "{bad json}\n" + System.Text.Json.JsonSerializer.Serialize(new PrintRecord("Template", "C:\\a.btw", "tid", new Dictionary<string, string> { ["A"] = "1" }, "now", "PASS", "P", 1)));
-            var history = new HistoryManager(csv, jsonl);
+            var history = new HistoryManager(csv, jsonl, db);
             history.Load();
             Assert.Single(history.Records);
             Assert.True(File.Exists(jsonl + ".bad"));
@@ -65,11 +66,23 @@ namespace BarTenderPrinter.Tests
             var dir = CreateTempDirectory();
             var csv = Path.Combine(dir, "records.csv");
             var jsonl = Path.Combine(dir, "records.jsonl");
+            var db = Path.Combine(dir, "records.db");
             File.WriteAllText(jsonl, "");
             File.WriteAllText(csv, "record_id,template_name,template_path,field_values,print_time,status,printer,copies\n1,T,C:\\a.btw,eyJBIjoiMSJ9,now,PASS,P,1\n");
-            var history = new HistoryManager(csv, jsonl);
+            var history = new HistoryManager(csv, jsonl, db);
             history.Load();
             Assert.Single(history.Records);
+            Assert.True(File.Exists(db));
+        }
+
+        [Fact]
+        public void HistoryManagerWritesSqlitePrimaryStore()
+        {
+            var dir = CreateTempDirectory();
+            var db = Path.Combine(dir, "records.db");
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db);
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "PASS", "Printer", 1));
+            Assert.True(File.Exists(db));
         }
 
         [Fact]

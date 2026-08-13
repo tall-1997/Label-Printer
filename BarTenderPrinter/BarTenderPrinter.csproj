@@ -6,7 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>BarTenderPrinter</RootNamespace>
     <AssemblyName>BarTenderPrinter</AssemblyName>
-    <Version>5.7.54</Version>
+    <Version>5.7.55</Version>
     <ApplicationIcon>icon.ico</ApplicationIcon>
 
     <!-- Self-contained installed application -->
@@ -18,5 +18,9 @@
     <PublishTrimmed>false</PublishTrimmed>
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
+  </ItemGroup>
 
 </Project>

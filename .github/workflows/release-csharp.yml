@@ -62,14 +62,13 @@ jobs:
             ### 更新内容
 
             #### 修复与优化
-            - JSONL 历史加载支持坏行隔离，损坏记录写入 .bad 文件并继续加载
-            - JSONL 为空时自动回退 CSV 历史并迁移，降低历史隐藏风险
-            - 历史记录追加写入 RecordChecksum，加载时校验记录完整性
-            - 历史筛选分页下推到 HistoryManager，减少 UI 层全量筛选
+            - 历史层升级 SQLite 主存储，创建 PrintRecords、FieldValues、TemplateSnapshots、Orders 表和索引
+            - 历史写入使用 SQLite 事务，同时保留 JSONL 兼容备份
+            - JSONL/CSV 历史继续兼容读取，并自动迁移到 SQLite
+            - 历史筛选分页下推到 HistoryManager，支持状态、日期、打印机和订单过滤
+            - 删除历史和补打印写入哈希链审计日志，增强审计可追溯性
+            - 测试增加 SQLite 主存储、JSONL 坏行和 CSV 迁移覆盖
             - HistoryManager、OrderManager、TemplateSettingsManager 支持自定义路径，测试使用临时目录隔离
-            - 增加 JSONL 损坏行、CSV 迁移和历史测试隔离用例
-            - 补打印前检测历史模板版本与当前模板版本差异，并要求确认
-            - 修复 PrintRecord JSONL 反序列化缺少无参构造函数的问题
 
             ### 系统要求
             - Windows 10/11 x64
