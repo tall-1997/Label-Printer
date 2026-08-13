@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.61";
+        private readonly string _version = "v5.7.62";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -104,6 +104,8 @@ namespace BarTenderPrinter
         private readonly Dictionary<string, int> _historyColumnWidths = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private readonly UserSession _session = new UserSession();
         private readonly AccountManager _accountManager = new AccountManager();
+        private readonly Dictionary<string, int> _pendingPrintValues = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private int _pendingPrintJobCount;
         private int _historyPageIndex;
         private const int HistoryPageSize = 200;
 
@@ -3079,26 +3081,6 @@ namespace BarTenderPrinter
             return long.TryParse(value.Substring(i), out number);
         }
 
-        private void SetInputsReadOnly(bool ro)
-        {
-            foreach (var tb in _inputTextBoxes)
-                if (tb != null) { tb.ReadOnly = ro; tb.BackColor = ro ? SystemColors.Control : MiuiTheme.InputBackground; }
-            foreach (var button in _lockButtons)
-                if (button != null) button.Enabled = true;
-        }
-
-        private void RestoreInputReadOnlyStates(bool[] readOnlyStates)
-        {
-            for (int i = 0; i < readOnlyStates.Length && i < _inputTextBoxes.Length; i++)
-            {
-                var readOnly = readOnlyStates[i];
-                _inputTextBoxes[i].ReadOnly = readOnly;
-                _inputTextBoxes[i].BackColor = readOnly ? SystemColors.Control : MiuiTheme.InputBackground;
-                if (i < _lockButtons.Length && _lockButtons[i] != null)
-                    _lockButtons[i].Enabled = true;
-            }
-        }
-
         #endregion
 
         #region Local Data Validation
@@ -3541,72 +3523,94 @@ namespace BarTenderPrinter
             var templateName = Path.GetFileName(templatePath);
             var templateVersion = GetTemplateVersion(_activeOrderTemplate);
             var operatorName = GetOperatorName();
-            var readOnlyStates = _inputTextBoxes.Select(input => input?.ReadOnly ?? false).ToArray();
-            SetStatus("打印中..."); SetInputsReadOnly(true); SetPrintEnvironmentEnabled(false);
-            AddLog($"打印: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
+            var templateId = GetCurrentTemplateId();
+            var orderName = _activeOrder?.DisplayName ?? "";
+            var orderId = _activeOrder?.OrderId ?? "";
+            var templateFields = _activeOrderTemplate?.FieldSnapshot?.ToList() ?? new List<string>();
+            AddPendingPrintValues(templateId, enabled, fieldValues);
+            _pendingPrintJobCount++;
+            AdvanceSuccessfulPrintState(enabled);
+            SetStatus($"打印队列: {_pendingPrintJobCount}");
+            AddLog($"打印作业已入队: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
+            _ = ProcessQueuedPrintAsync(templateName, templatePath, templateId, fieldValues, printer, copies,
+                operatorName, templateVersion, orderName, orderId, templateFields,
+                enabled.Where(ShouldTrackPendingValue).Select(source => source.Field).ToList());
+        }
 
-            Task.Run(() =>
+        private async Task ProcessQueuedPrintAsync(string templateName, string templatePath, string templateId,
+            Dictionary<string, string> fieldValues, string printer, int copies, string operatorName,
+            string templateVersion, string orderName, string orderId, List<string> templateFields,
+            List<string> pendingFields)
+        {
+            PrintResult result;
+            try
             {
-                PrintResult result;
-                try
+                result = await _btService.PrintAsync(templatePath, fieldValues, printer, copies);
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error("打印失败", ex);
+                result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
+            }
+            PostToUi(() =>
+            {
+                RemovePendingPrintValues(templateId, pendingFields, fieldValues);
+                _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
+                if (result.Success)
                 {
-                    result = _btService.Print(templatePath, fieldValues, printer, copies);
-                }
-                catch (Exception ex)
-                {
-                    LoggerService.Error("打印失败", ex);
-                    result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
-                }
-                PostToUi(() =>
-                {
-                    var refreshHistoryAndStats = true;
-                    try
+                    AddLog("打印作业已提交", "SUCCESS");
+                    if (!_printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
+                        "PASS", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
+                        orderName, orderId, templateFields))
                     {
-                        if (result.Success)
-                        {
-                            SetStatus("打印作业已提交");
-                            AddLog("打印作业已提交", "SUCCESS");
-                            if (!_printWorkflow.RecordPrintResult(_history, templateName, templatePath, GetCurrentTemplateId(), fieldValues, "PASS", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? "", _activeOrder?.OrderId ?? "", _activeOrderTemplate?.FieldSnapshot ?? new List<string>()))
-                            {
-                                SetStatus("打印作业已提交，历史保存失败");
-                                AddLog("打印作业已提交，但历史记录保存失败；本次数据不会进入重复校验索引。", "ERROR");
-                                var shouldAdvance = ConfirmPrintedWithoutHistoryAdvance();
-                                if (shouldAdvance)
-                                {
-                                    AdvanceSuccessfulPrintState(enabled);
-                                    AddLog("操作员确认实物已出纸，已推进待打印序列。", "WARNING");
-                                }
-                                else
-                                {
-                                    RestoreInputReadOnlyStates(readOnlyStates);
-                                    AddLog("操作员选择保留当前输入状态，等待人工处理。", "WARNING");
-                                }
-                                refreshHistoryAndStats = false;
-                                return;
-                            }
-
-                            AdvanceSuccessfulPrintState(enabled);
-                        }
-                        else
-                        {
-                            SetStatus("打印失败");
-                            AddLog($"打印失败: {result.ErrorMessage}", "ERROR");
-                            if (!_printWorkflow.RecordPrintResult(_history, templateName, templatePath, GetCurrentTemplateId(), fieldValues, "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails, _activeOrder?.DisplayName ?? "", _activeOrder?.OrderId ?? "", _activeOrderTemplate?.FieldSnapshot ?? new List<string>()))
-                                AddLog("失败打印历史记录保存失败。", "ERROR");
-                            RestoreInputReadOnlyStates(readOnlyStates);
-                        }
+                        AddLog("打印作业已提交，但历史记录保存失败；输入状态已经推进。", "ERROR");
                     }
-                    finally
-                    {
-                        SetPrintEnvironmentEnabled(true);
-                        if (refreshHistoryAndStats)
-                        {
-                            LoadHistory(); RefreshStats();
-                            if (!result.Success) SetStatus("打印失败");
-                        }
-                    }
-                });
+                }
+                else
+                {
+                    AddLog($"打印提交失败: {result.ErrorMessage}", "ERROR");
+                    if (!_printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
+                        "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
+                        orderName, orderId, templateFields))
+                        AddLog("失败打印历史记录保存失败。", "ERROR");
+                }
+                LoadHistory();
+                RefreshStats();
+                SetStatus(_pendingPrintJobCount > 0 ? $"打印队列: {_pendingPrintJobCount}" : result.Success ? "就绪" : "打印提交失败");
             });
+        }
+
+        private string GetPendingPrintValueKey(string templateId, string value)
+        {
+            return $"{templateId ?? ""}\u001f{value?.Trim() ?? ""}";
+        }
+
+        private static bool ShouldTrackPendingValue(DataSourceItem source)
+        {
+            return source != null && (!source.IsLocked && !source.AutoIncrementLocked || source.AutoIncrement || source.AutoIncrementLocked);
+        }
+
+        private void AddPendingPrintValues(string templateId, List<DataSourceItem> enabled, Dictionary<string, string> fieldValues)
+        {
+            foreach (var source in enabled.Where(ShouldTrackPendingValue))
+            {
+                if (!fieldValues.TryGetValue(source.Field, out var value) || string.IsNullOrWhiteSpace(value)) continue;
+                var key = GetPendingPrintValueKey(templateId, value);
+                _pendingPrintValues.TryGetValue(key, out var count);
+                _pendingPrintValues[key] = count + 1;
+            }
+        }
+
+        private void RemovePendingPrintValues(string templateId, List<string> pendingFields, Dictionary<string, string> fieldValues)
+        {
+            foreach (var field in pendingFields)
+            {
+                if (!fieldValues.TryGetValue(field, out var value) || string.IsNullOrWhiteSpace(value)) continue;
+                var key = GetPendingPrintValueKey(templateId, value);
+                if (!_pendingPrintValues.TryGetValue(key, out var count)) continue;
+                if (count <= 1) _pendingPrintValues.Remove(key);
+                else _pendingPrintValues[key] = count - 1;
+            }
         }
 
         private bool ValidateInputValues(List<DataSourceItem> enabled, Dictionary<string, string> fieldValues, bool checkDuplicates = true, TemplateSettings settings = null)
@@ -3645,7 +3649,9 @@ namespace BarTenderPrinter
                 var shouldCheckHistory = isEditable || enabled[i].AutoIncrement || enabled[i].AutoIncrementLocked;
                 var templatePath = settings?.TemplatePath ?? _selectedTemplatePath;
                 var templateName = settings?.TemplateName ?? Path.GetFileName(templatePath);
-                if (seen.ContainsKey(value) || shouldCheckHistory && _history.ContainsAnyValue(templateName, templatePath, settings == null ? GetCurrentTemplateId() : GetTemplateIdForPath(templatePath), value))
+                var templateId = settings == null ? GetCurrentTemplateId() : GetTemplateIdForPath(templatePath);
+                if (seen.ContainsKey(value) || shouldCheckHistory && _pendingPrintValues.ContainsKey(GetPendingPrintValueKey(templateId, value)) ||
+                    shouldCheckHistory && _history.ContainsAnyValue(templateName, templatePath, templateId, value))
                 {
                     MessageBox.Show(this, $"重复数据：{value}\n请重新输入 {enabled[i].Name}。", "数据校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     if (settings == null && isEditable && i < _inputTextBoxes.Length)
@@ -3680,17 +3686,6 @@ namespace BarTenderPrinter
             ClearNonAutoIncrementInputs(enabled);
             SaveConfig();
             SaveCurrentTemplateSettings();
-        }
-
-        private bool ConfirmPrintedWithoutHistoryAdvance()
-        {
-            var choice = MessageBox.Show(this,
-                "BarTender 已返回打印成功，但历史记录保存失败。\n\n如果标签已经出纸，选择“是”推进增降序和锁定状态；如果需要保留当前输入等待人工处理，选择“否”。",
-                "历史保存失败",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning,
-                MessageBoxDefaultButton.Button2);
-            return choice == DialogResult.Yes;
         }
 
         #endregion

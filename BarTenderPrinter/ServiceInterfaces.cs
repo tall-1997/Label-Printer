@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace BarTenderPrinter
 {
@@ -11,6 +12,7 @@ namespace BarTenderPrinter
         List<string> GetTemplateDataSources(string templatePath);
         void RunDiagnostics(string templatePath);
         PrintResult Print(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies);
+        Task<PrintResult> PrintAsync(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies);
         string[] GetAvailableTemplates(string directory);
         string[] GetPrinters();
         void Disconnect();

@@ -1,6 +1,6 @@
 # BarTenderPrinter 使用说明与操作步骤
 
-适用版本：`v5.7.61`
+适用版本：`v5.7.62`
 
 本文面向现场操作员、班组长、工艺/模板维护人员和系统管理员，说明 BarTenderPrinter 的安装、登录、订单管理、模板配置、数据源设置、打印、补打印、历史追溯和日常维护流程。
 
@@ -29,11 +29,11 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 
 从 GitHub Release 下载最新安装包：
 
-`BarTenderPrinter-Setup-v5.7.61-win-x64.exe`
+`BarTenderPrinter-Setup-v5.7.62-win-x64.exe`
 
 发布地址：
 
-`https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.61`
+`https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.62`
 
 ## 3. 首次启动
 
@@ -355,7 +355,7 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 
 ### 9.4 静默打印
 
-字段和校验数据通过检查后，软件会隐藏 BarTender 打印状态窗口，将作业直接提交到打印队列并立即恢复输入。打印前请在打印页确认订单、模板、打印机、份数和当前生效设置。
+字段和校验数据通过检查后，软件会将作业加入本地 FIFO 队列，立即推进增降序、清空普通输入并聚焦下一次扫码。后台 BarTender STA 线程按入队顺序隐藏窗口提交作业，遇到 Busy 状态会短间隔重试。打印前请在打印页确认订单、模板、打印机、份数和当前生效设置。
 
 ## 10. 补打印
 

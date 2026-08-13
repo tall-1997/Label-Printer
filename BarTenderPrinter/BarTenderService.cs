@@ -21,6 +21,8 @@ namespace BarTenderPrinter
         private bool _disposed;
         private DateTime _lastOperationTime = DateTime.MinValue;
         private const int MinOperationIntervalMs = 2000;
+        private const int MaxPrintAttempts = 3;
+        private const int BusyRetryDelayMs = 250;
 
         public bool IsConnected => _connected;
         public bool IsOfflineMode => _offlineMode;
@@ -50,6 +52,30 @@ namespace BarTenderPrinter
                 catch (Exception ex) { tcs.SetException(ex); }
             });
             return tcs.Task.GetAwaiter().GetResult();
+        }
+
+        private Task<T> InvokeStaAsync<T>(Func<T> action)
+        {
+            if (Thread.CurrentThread.ManagedThreadId == _staThreadId)
+            {
+                try { return Task.FromResult(action()); }
+                catch (Exception ex) { return Task.FromException<T>(ex); }
+            }
+            if (_disposed) return Task.FromException<T>(new ObjectDisposedException(nameof(BarTenderService)));
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                _staQueue.Add(() =>
+                {
+                    try { tcs.SetResult(action()); }
+                    catch (Exception ex) { tcs.SetException(ex); }
+                });
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+            return tcs.Task;
         }
 
         private void InvokeSta(Action action)
@@ -279,7 +305,13 @@ namespace BarTenderPrinter
 
         public PrintResult Print(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
         {
-            return InvokeSta(() => PrintCore(templatePath, fieldValues, printer, copies));
+            return PrintAsync(templatePath, fieldValues, printer, copies).GetAwaiter().GetResult();
+        }
+
+        public Task<PrintResult> PrintAsync(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
+        {
+            var values = new Dictionary<string, string>(fieldValues ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
+            return InvokeStaAsync(() => PrintCore(templatePath, values, printer, copies));
         }
 
         private PrintResult PrintCore(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
@@ -287,15 +319,29 @@ namespace BarTenderPrinter
             if (!_connected || _btApp == null)
                 return new PrintResult(false, "BarTender 未连接", $"template={templatePath};printer={printer};copies={copies};connected={_connected}");
 
-            _operationLock.Wait();
-            try
+            for (var attempt = 1; attempt <= MaxPrintAttempts; attempt++)
             {
-                return PrintInternal(templatePath, fieldValues, printer, copies);
+                _operationLock.Wait();
+                try
+                {
+                    return PrintInternal(templatePath, fieldValues, printer, copies);
+                }
+                catch (Exception ex) when (IsComBusyError(ex) && attempt < MaxPrintAttempts)
+                {
+                    LoggerService.Warn($"BarTender 忙碌，{BusyRetryDelayMs}ms 后重试 ({attempt}/{MaxPrintAttempts}): {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    LoggerService.Error($"打印失败: {ex.Message}");
+                    return new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};attempt={attempt};message={ex.Message}");
+                }
+                finally
+                {
+                    _operationLock.Release();
+                }
+                Thread.Sleep(BusyRetryDelayMs);
             }
-            finally
-            {
-                _operationLock.Release();
-            }
+            return new PrintResult(false, "BarTender 持续忙碌，打印作业提交失败", $"template={templatePath};printer={printer};copies={copies};attempts={MaxPrintAttempts}");
         }
 
         private PrintResult PrintInternal(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
@@ -315,7 +361,11 @@ namespace BarTenderPrinter
                         btFormat.SetNamedSubStringValue(kv.Key, kv.Value);
                         LoggerService.Info($"数据源: {kv.Key}={kv.Value}");
                     }
-                    catch { missing.Add(kv.Key); }
+                    catch (Exception ex)
+                    {
+                        if (IsComBusyError(ex)) throw;
+                        missing.Add(kv.Key);
+                    }
                 }
                 if (missing.Count > 0)
                 {
@@ -327,6 +377,7 @@ namespace BarTenderPrinter
                 catch (Exception ex)
                 {
                     CloseFormat(btFormat);
+                    if (IsComBusyError(ex)) throw;
                     return new PrintResult(false, $"设置打印机失败: {ex.Message}", $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
                 }
 
@@ -334,6 +385,7 @@ namespace BarTenderPrinter
                 catch (Exception ex)
                 {
                     CloseFormat(btFormat);
+                    if (IsComBusyError(ex)) throw;
                     return new PrintResult(false, $"设置份数失败: {ex.Message}", $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
                 }
 
@@ -352,8 +404,21 @@ namespace BarTenderPrinter
             {
                 LoggerService.Error($"打印失败: {ex.Message}");
                 CloseFormat(btFormat);
+                if (IsComBusyError(ex)) throw;
                 return new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
             }
+        }
+
+        private static bool IsComBusyError(Exception ex)
+        {
+            var message = ex?.Message?.ToLowerInvariant() ?? "";
+            return message.Contains("正在打印") ||
+                   message.Contains("当前正在") ||
+                   message.Contains("busy") ||
+                   message.Contains("0x80010105") ||
+                   message.Contains("rpc_e_serverfault") ||
+                   message.Contains("0x80010001") ||
+                   message.Contains("rpc_e_call_rejected");
         }
 
         private static List<string> GetNamedSubStringNames(dynamic btFormat)
