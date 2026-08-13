@@ -1,6 +1,6 @@
 # BarTenderPrinter 使用说明与操作步骤
 
-适用版本：`v5.7.62`
+适用版本：`v5.7.63`
 
 本文面向现场操作员、班组长、工艺/模板维护人员和系统管理员，说明 BarTenderPrinter 的安装、登录、订单管理、模板配置、数据源设置、打印、补打印、历史追溯和日常维护流程。
 
@@ -29,11 +29,11 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 
 从 GitHub Release 下载最新安装包：
 
-`BarTenderPrinter-Setup-v5.7.62-win-x64.exe`
+`BarTenderPrinter-Setup-v5.7.63-win-x64.exe`
 
 发布地址：
 
-`https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.62`
+`https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.63`
 
 ## 3. 首次启动
 
@@ -356,6 +356,15 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 ### 9.4 静默打印
 
 字段和校验数据通过检查后，软件会将作业加入本地 FIFO 队列，立即推进增降序、清空普通输入并聚焦下一次扫码。后台 BarTender STA 线程按入队顺序隐藏窗口提交作业，遇到 Busy 状态会短间隔重试。打印前请在打印页确认订单、模板、打印机、份数和当前生效设置。
+
+### 9.5 标签预览
+
+1. 在打印页面标题栏开启 `开启预览`。
+2. 软件在主界面右侧打开停靠预览窗。
+3. 当前模板存在成功打印记录时，预览窗展示最近一次 `PASS` 或 `REPRINT_PASS` 的字段效果。
+4. 当前模板缺少成功打印记录时，预览窗展示原模板效果。
+5. 新打印作业成功提交后，预览窗自动刷新为该作业的标签效果。
+6. 关闭预览窗或进入订单管理页面会关闭预览功能。
 
 ## 10. 补打印
 

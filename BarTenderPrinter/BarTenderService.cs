@@ -314,6 +314,47 @@ namespace BarTenderPrinter
             return InvokeStaAsync(() => PrintCore(templatePath, values, printer, copies));
         }
 
+        public Task<string> ExportPreviewAsync(string templatePath, Dictionary<string, string> fieldValues)
+        {
+            var values = new Dictionary<string, string>(fieldValues ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
+            return InvokeStaAsync(() => ExportPreviewCore(templatePath, values));
+        }
+
+        private string ExportPreviewCore(string templatePath, Dictionary<string, string> fieldValues)
+        {
+            if (!_connected || _btApp == null || string.IsNullOrWhiteSpace(templatePath) || !File.Exists(templatePath)) return "";
+            _operationLock.Wait();
+            dynamic btFormat = null;
+            try
+            {
+                btFormat = _btApp.Formats.Open(templatePath, false, "");
+                foreach (var item in fieldValues)
+                {
+                    try { btFormat.SetNamedSubStringValue(item.Key, item.Value); }
+                    catch (Exception ex)
+                    {
+                        LoggerService.Warn($"预览字段设置失败: {item.Key}; {ex.Message}");
+                    }
+                }
+                Directory.CreateDirectory(AppPaths.PreviewDirectory);
+                var outputPath = Path.Combine(AppPaths.PreviewDirectory, "current-preview.png");
+                btFormat.ExportImageToFile(outputPath, "PNG", 150, 150, 24, 1, 1);
+                CloseFormat(btFormat);
+                btFormat = null;
+                return File.Exists(outputPath) ? outputPath : "";
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error($"生成标签预览失败: {ex.Message}");
+                CloseFormat(btFormat);
+                return "";
+            }
+            finally
+            {
+                _operationLock.Release();
+            }
+        }
+
         private PrintResult PrintCore(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
         {
             if (!_connected || _btApp == null)

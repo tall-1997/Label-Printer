@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.62";
+        private readonly string _version = "v5.7.63";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -105,6 +105,10 @@ namespace BarTenderPrinter
         private readonly UserSession _session = new UserSession();
         private readonly AccountManager _accountManager = new AccountManager();
         private readonly Dictionary<string, int> _pendingPrintValues = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private CheckBox _chkPreview;
+        private PreviewForm _previewForm;
+        private int _previewRequestVersion;
+        private bool _closingPreviewForm;
         private int _pendingPrintJobCount;
         private int _historyPageIndex;
         private const int HistoryPageSize = 200;
@@ -114,6 +118,7 @@ namespace BarTenderPrinter
             _startupTemplatePath = NormalizeStartupTemplatePath(startupTemplatePath);
             InitializeComponent();
             InstallP2Controls();
+            InstallPreviewControl();
             SilentLogin();
             InstallOrderSidebar();
             _configFile = AppPaths.ConfigFile;
@@ -128,13 +133,15 @@ namespace BarTenderPrinter
                 { e.Cancel = true; return; }
                 if (!ConfirmOrderEditorChanges()) { e.Cancel = true; return; }
                 SaveCurrentTemplateSettings();
+                ClosePreviewForm();
                 _historySearchTimer.Dispose();
                 _btService.Dispose();
             };
             inputPanel.SizeChanged += InputPanel_SizeChanged;
             inputPanel.Scroll += (s, e) => ClampInputPanelScroll();
             inputPanel.MouseWheel += (s, e) => BeginInvoke((Action)ClampInputPanelScroll);
-            SizeChanged += (s, e) => RebuildPrintPageLayout();
+            SizeChanged += (s, e) => { RebuildPrintPageLayout(); DockPreviewForm(); };
+            LocationChanged += (s, e) => DockPreviewForm();
             dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
             dgvHistory.CellMouseDown += DgvHistory_CellMouseDown;
             dgvHistory.ColumnWidthChanged += (s, e) => { if (e.Column != null) { _historyColumnWidths[e.Column.Name] = e.Column.Width; SaveConfig(); } };
@@ -144,6 +151,119 @@ namespace BarTenderPrinter
             dgvHistory.ContextMenuStrip = historyMenu;
             cmbPrinter.SelectedIndexChanged += (s, e) => SaveCurrentConfigurationState();
             _historySearchTimer.Tick += (s, e) => { _historySearchTimer.Stop(); LoadHistory(); };
+        }
+
+        private void InstallPreviewControl()
+        {
+            _chkPreview = new CheckBox
+            {
+                Text = "开启预览",
+                AutoSize = true,
+                Dock = DockStyle.Right,
+                Padding = new Padding(8, 5, 8, 0),
+                ForeColor = MiuiTheme.TextPrimary
+            };
+            _chkPreview.CheckedChanged += Preview_CheckedChanged;
+            titlePanel.Controls.Add(_chkPreview);
+            titlePanel.Controls.SetChildIndex(_chkPreview, 0);
+        }
+
+        private void Preview_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_chkPreview.Checked)
+            {
+                EnsurePreviewForm();
+                _ = RefreshPreviewAsync();
+            }
+            else
+            {
+                ClosePreviewForm();
+            }
+        }
+
+        private void EnsurePreviewForm()
+        {
+            if (_previewForm != null && !_previewForm.IsDisposed) return;
+            _previewForm = new PreviewForm();
+            _previewForm.PreviewClosed += (sender, args) =>
+            {
+                _previewForm = null;
+                if (_closingPreviewForm || _chkPreview == null) return;
+                _chkPreview.Checked = false;
+            };
+            _previewForm.Show(this);
+            DockPreviewForm();
+        }
+
+        private void ClosePreviewForm()
+        {
+            _previewRequestVersion++;
+            if (_previewForm == null || _previewForm.IsDisposed) return;
+            _closingPreviewForm = true;
+            try { _previewForm.Close(); }
+            finally
+            {
+                _previewForm = null;
+                _closingPreviewForm = false;
+            }
+        }
+
+        private void DockPreviewForm()
+        {
+            if (_previewForm == null || _previewForm.IsDisposed || !_previewForm.Visible) return;
+            const int gap = 8;
+            const int width = 420;
+            var workingArea = Screen.FromControl(this).WorkingArea;
+            var left = Right + gap;
+            if (left + width > workingArea.Right) left = Math.Max(workingArea.Left, Left - width - gap);
+            var top = Math.Max(workingArea.Top, Top);
+            var height = Math.Min(Height, workingArea.Bottom - top);
+            _previewForm.Bounds = new Rectangle(left, top, width, Math.Max(_previewForm.MinimumSize.Height, height));
+        }
+
+        private async Task RefreshPreviewAsync(Dictionary<string, string> successfulValues = null)
+        {
+            if (_chkPreview?.Checked != true || string.IsNullOrWhiteSpace(_selectedTemplatePath)) return;
+            EnsurePreviewForm();
+            var requestVersion = ++_previewRequestVersion;
+            var templatePath = _selectedTemplatePath;
+            var templateName = Path.GetFileName(templatePath);
+            var templateId = GetCurrentTemplateId();
+            var values = successfulValues;
+            var source = "上一次成功打印";
+            if (values == null)
+            {
+                var record = _history.GetLatestSuccessful(templateName, templatePath, templateId);
+                values = record == null
+                    ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, string>(record.FieldValues ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
+                if (record == null) source = "原模板预览";
+            }
+            _previewForm?.ShowLoading(source);
+            string imagePath;
+            try
+            {
+                imagePath = await _btService.ExportPreviewAsync(templatePath, values);
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error("生成预览失败", ex);
+                imagePath = "";
+            }
+            if (requestVersion != _previewRequestVersion || _chkPreview?.Checked != true ||
+                !string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
+                return;
+            if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+            {
+                _previewForm?.ShowError("标签预览生成失败");
+                return;
+            }
+            try { _previewForm?.ShowPreview(imagePath, source); }
+            catch (Exception ex)
+            {
+                LoggerService.Error("加载预览图片失败", ex);
+                _previewForm?.ShowError("标签预览加载失败");
+            }
         }
 
         private void InstallP2Controls()
@@ -442,12 +562,18 @@ namespace BarTenderPrinter
             _orderPagePanel.Visible = false;
             _printOrderPanel.Visible = true;
             _printOrderPanel.BringToFront();
+            if (_chkPreview != null) _chkPreview.Visible = true;
             MiuiTheme.StyleButton(_btnPrintPage, true);
             MiuiTheme.StyleButton(_btnOrderPage);
         }
 
         private void ShowOrderManagementPage()
         {
+            if (_chkPreview != null)
+            {
+                _chkPreview.Checked = false;
+                _chkPreview.Visible = false;
+            }
             _printOrderPanel.Visible = false;
             _orderPagePanel.Visible = true;
             _orderPagePanel.BringToFront();
@@ -2439,6 +2565,7 @@ namespace BarTenderPrinter
             LoadHistory();
             RefreshStats();
             if (!restored) LoadTemplateDataSources(_selectedTemplatePath);
+            if (_chkPreview?.Checked == true) _ = RefreshPreviewAsync();
         }
 
         private void RestorePreviousTemplateSelection()
@@ -3565,6 +3692,8 @@ namespace BarTenderPrinter
                     {
                         AddLog("打印作业已提交，但历史记录保存失败；输入状态已经推进。", "ERROR");
                     }
+                    if (_chkPreview?.Checked == true && string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
+                        _ = RefreshPreviewAsync(new Dictionary<string, string>(fieldValues, StringComparer.OrdinalIgnoreCase));
                 }
                 else
                 {
@@ -3925,6 +4054,8 @@ namespace BarTenderPrinter
                         {
                             AuditLogger.Append(GetOperatorName(), "Reprint", $"record={record.RecordId}");
                             AddLog("补打印作业已提交", "SUCCESS");
+                            if (_chkPreview?.Checked == true && string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
+                                _ = RefreshPreviewAsync(new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase));
                         }
                         else
                             AddLog($"历史记录补打印失败: {result.ErrorMessage}", "ERROR");

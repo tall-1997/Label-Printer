@@ -18,11 +18,13 @@ namespace BarTenderPrinter
         public static readonly string OrdersFile = Path.Combine(DataDirectory, "orders.json");
         public static readonly string AccountsFile = Path.Combine(DataDirectory, "accounts.json");
         public static readonly string ValidationDataDirectory = Path.Combine(DataDirectory, "validation-data");
+        public static readonly string PreviewDirectory = Path.Combine(DataDirectory, "previews");
 
         public static void Initialize()
         {
             Directory.CreateDirectory(DataDirectory);
             Directory.CreateDirectory(ValidationDataDirectory);
+            Directory.CreateDirectory(PreviewDirectory);
 
             var legacyDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),

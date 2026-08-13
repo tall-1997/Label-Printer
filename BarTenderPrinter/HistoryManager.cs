@@ -390,6 +390,12 @@ namespace BarTenderPrinter
             return Search(templateName, templatePath, "", keyword, exact, 0, false);
         }
 
+        public PrintRecord GetLatestSuccessful(string templateName, string templatePath, string templateId)
+        {
+            return Records.AsEnumerable().Reverse().FirstOrDefault(record =>
+                IsTemplateMatch(record, templateName, templatePath, templateId) && IsSuccessfulStatus(record.Status));
+        }
+
         public List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit = 0, bool newestFirst = false, int offset = 0)
         {
             return Search(templateName, templatePath, templateId, keyword, exact, limit, newestFirst, offset, "", "", "", "");

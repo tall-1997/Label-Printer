@@ -47,6 +47,46 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
+        public void LatestSuccessfulPreviewRecordSkipsFailures()
+        {
+            var dir = CreateTempDirectory();
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), Path.Combine(dir, "records.db"));
+            history.Records.Clear();
+            history.Records.Add(new PrintRecord("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "PASS-1" }, "1", "PASS", "P", 1));
+            history.Records.Add(new PrintRecord("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "FAIL-2" }, "2", "FAIL", "P", 1));
+            history.Records.Add(new PrintRecord("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "PASS-3" }, "3", "REPRINT_PASS", "P", 1));
+
+            var record = history.GetLatestSuccessful("Template", "C:\\a.btw", "template-1");
+
+            Assert.Equal("PASS-3", record.FieldValues["IMEI"]);
+        }
+
+        [Fact]
+        public void LatestSuccessfulPreviewRecordStaysWithinTemplate()
+        {
+            var dir = CreateTempDirectory();
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), Path.Combine(dir, "records.db"));
+            history.Records.Clear();
+            history.Records.Add(new PrintRecord("Template A", "C:\\a.btw", "template-a", new Dictionary<string, string> { ["IMEI"] = "A" }, "1", "PASS", "P", 1));
+            history.Records.Add(new PrintRecord("Template B", "C:\\b.btw", "template-b", new Dictionary<string, string> { ["IMEI"] = "B" }, "2", "PASS", "P", 1));
+
+            var record = history.GetLatestSuccessful("Template A", "C:\\a.btw", "template-a");
+
+            Assert.Equal("A", record.FieldValues["IMEI"]);
+        }
+
+        [Fact]
+        public void LatestSuccessfulPreviewRecordReturnsNullWithoutSuccess()
+        {
+            var dir = CreateTempDirectory();
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), Path.Combine(dir, "records.db"));
+            history.Records.Clear();
+            history.Records.Add(new PrintRecord("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "FAIL" }, "1", "FAIL", "P", 1));
+
+            Assert.Null(history.GetLatestSuccessful("Template", "C:\\a.btw", "template-1"));
+        }
+
+        [Fact]
         public void HistoryManagerSkipsBadJsonlRows()
         {
             var dir = CreateTempDirectory();
