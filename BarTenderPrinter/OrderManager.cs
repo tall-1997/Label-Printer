@@ -62,13 +62,24 @@ namespace BarTenderPrinter
     public class OrderManager
     {
         private readonly List<PackagingOrder> _orders = new List<PackagingOrder>();
-        private readonly string _path = AppPaths.OrdersFile;
+        private readonly string _path;
 
         public IReadOnlyList<PackagingOrder> Orders => _orders;
 
         public OrderManager()
+            : this(AppPaths.OrdersFile, true)
         {
-            AppPaths.Initialize();
+        }
+
+        public OrderManager(string path)
+            : this(path, false)
+        {
+        }
+
+        private OrderManager(string path, bool initializePaths)
+        {
+            if (initializePaths) AppPaths.Initialize();
+            _path = path;
             Load();
         }
 

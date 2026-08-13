@@ -25,6 +25,7 @@ namespace BarTenderPrinter
         bool Delete(string recordId);
         PrintRecord GetById(string recordId);
         List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit = 0, bool newestFirst = false, int offset = 0);
+        List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit, bool newestFirst, int offset, string status, string datePrefix, string printer, string orderQuery);
         int Count(string templateName, string templatePath, string templateId);
         int TodayCount(string templateName, string templatePath, string templateId);
         bool ContainsAnyValue(string templateName, string templatePath, string templateId, string value);

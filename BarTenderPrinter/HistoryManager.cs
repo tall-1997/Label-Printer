@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -27,6 +28,7 @@ namespace BarTenderPrinter
         public string DiagnosticDetails { get; set; }
         public string OrderName { get; set; }
         public List<string> TemplateFields { get; set; }
+        public string RecordChecksum { get; set; }
 
         public PrintRecord(string imei, string printTime, string status)
         {
@@ -47,6 +49,7 @@ namespace BarTenderPrinter
             DiagnosticDetails = "";
             OrderName = "";
             TemplateFields = new List<string>();
+            RecordChecksum = "";
         }
 
         public PrintRecord(string templateName, string templatePath, Dictionary<string, string> fieldValues,
@@ -69,6 +72,7 @@ namespace BarTenderPrinter
             DiagnosticDetails = "";
             OrderName = "";
             TemplateFields = new List<string>();
+            RecordChecksum = "";
         }
 
         public PrintRecord(string templateName, string templatePath, string templateId, Dictionary<string, string> fieldValues,
@@ -91,10 +95,20 @@ namespace BarTenderPrinter
         public List<PrintRecord> Records { get; private set; }
 
         public HistoryManager()
+            : this(AppPaths.RecordsFile, AppPaths.RecordsJsonlFile, true)
         {
-            AppPaths.Initialize();
-            _recordsFile = AppPaths.RecordsFile;
-            _recordsJsonlFile = AppPaths.RecordsJsonlFile;
+        }
+
+        public HistoryManager(string recordsFile, string recordsJsonlFile = null)
+            : this(recordsFile, recordsJsonlFile, false)
+        {
+        }
+
+        private HistoryManager(string recordsFile, string recordsJsonlFile, bool initializePaths)
+        {
+            if (initializePaths) AppPaths.Initialize();
+            _recordsFile = recordsFile;
+            _recordsJsonlFile = string.IsNullOrWhiteSpace(recordsJsonlFile) ? Path.ChangeExtension(recordsFile, ".jsonl") : recordsJsonlFile;
             Records = new List<PrintRecord>();
         }
 
@@ -105,7 +119,8 @@ namespace BarTenderPrinter
             if (File.Exists(_recordsJsonlFile))
             {
                 LoadJsonl();
-                return;
+                if (Records.Count > 0 || !File.Exists(_recordsFile)) return;
+                LoggerService.Warn("JSONL 历史为空，回退读取 CSV 历史。");
             }
             if (!File.Exists(_recordsFile)) return;
             try
@@ -176,16 +191,33 @@ namespace BarTenderPrinter
         {
             try
             {
+                var badLines = new List<string>();
                 foreach (var line in File.ReadLines(_recordsJsonlFile, Encoding.UTF8))
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
-                    var record = JsonSerializer.Deserialize<PrintRecord>(line);
-                    if (record == null) continue;
-                    record.FieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    record.TemplateFields ??= new List<string>();
-                    Records.Add(record);
-                    IndexRecord(record);
+                    try
+                    {
+                        var record = JsonSerializer.Deserialize<PrintRecord>(line);
+                        if (record == null) continue;
+                        record.FieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        record.TemplateFields ??= new List<string>();
+                        if (!IsChecksumValid(record))
+                        {
+                            badLines.Add(line);
+                            LoggerService.Warn($"跳过校验失败的历史记录: {record.RecordId}");
+                            continue;
+                        }
+                        Records.Add(record);
+                        IndexRecord(record);
+                    }
+                    catch (Exception ex)
+                    {
+                        badLines.Add(line);
+                        LoggerService.Warn($"跳过损坏 JSONL 历史行: {ex.Message}");
+                    }
                 }
+                if (badLines.Count > 0)
+                    AtomicFileWriter.WriteAllLines(_recordsJsonlFile + ".bad", badLines, Encoding.UTF8);
                 _usesCurrentFormat = true;
             }
             catch (Exception ex)
@@ -199,6 +231,8 @@ namespace BarTenderPrinter
             var tempFile = _recordsFile + ".tmp";
             try
             {
+                foreach (var record in Records)
+                    if (string.IsNullOrWhiteSpace(record.RecordChecksum)) StampChecksum(record);
                 var lines = Records.Select(record => JsonSerializer.Serialize(record));
                 AtomicFileWriter.WriteAllLines(_recordsJsonlFile, lines, Encoding.UTF8);
                 _usesCurrentFormat = true;
@@ -218,6 +252,7 @@ namespace BarTenderPrinter
         public bool Add(string imei, string status)
         {
             var record = new PrintRecord(imei, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), status);
+            StampChecksum(record);
             Records.Add(record);
             IndexRecord(record);
             if (!Append(record)) { Records.Remove(record); RebuildIndexes(); return false; }
@@ -244,6 +279,7 @@ namespace BarTenderPrinter
                 OrderId = orderId ?? "",
                 TemplateFields = templateFields ?? new List<string>()
             };
+            StampChecksum(record);
             Records.Add(record);
             IndexRecord(record);
             if (!Append(record)) { Records.Remove(record); RebuildIndexes(); return false; }
@@ -322,6 +358,11 @@ namespace BarTenderPrinter
 
         public List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit = 0, bool newestFirst = false, int offset = 0)
         {
+            return Search(templateName, templatePath, templateId, keyword, exact, limit, newestFirst, offset, "", "", "", "");
+        }
+
+        public List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit, bool newestFirst, int offset, string status, string datePrefix, string printer, string orderQuery)
+        {
             var query = (keyword ?? "").Trim();
             var source = newestFirst ? Records.AsEnumerable().Reverse() : Records.AsEnumerable();
             var matches = new List<PrintRecord>();
@@ -329,6 +370,10 @@ namespace BarTenderPrinter
             foreach (var record in source)
             {
                 if (!IsTemplateMatch(record, templateName, templatePath, templateId)) continue;
+                if (!string.IsNullOrWhiteSpace(status) && !string.Equals(record.Status, status, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrWhiteSpace(datePrefix) && !(record.PrintTime ?? "").StartsWith(datePrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrWhiteSpace(printer) && !string.Equals(record.Printer, printer, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrWhiteSpace(orderQuery) && (record.OrderName ?? "").IndexOf(orderQuery, StringComparison.OrdinalIgnoreCase) < 0 && !string.Equals(record.OrderId, orderQuery, StringComparison.OrdinalIgnoreCase)) continue;
                 if (string.IsNullOrEmpty(query))
                 {
                     if (skipped++ < offset) continue;
@@ -504,5 +549,29 @@ namespace BarTenderPrinter
         }
 
         private static string Csv(string value) => CsvUtils.Escape(value);
+
+        private static void StampChecksum(PrintRecord record)
+        {
+            record.RecordChecksum = ComputeChecksum(record);
+        }
+
+        private static bool IsChecksumValid(PrintRecord record)
+        {
+            if (record == null || string.IsNullOrWhiteSpace(record.RecordChecksum)) return true;
+            return string.Equals(record.RecordChecksum, ComputeChecksum(record), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string ComputeChecksum(PrintRecord record)
+        {
+            var payload = string.Join("|", new[]
+            {
+                record.RecordId, record.TemplateName, record.TemplatePath, record.TemplateId, record.OrderId,
+                SerializeFields(record.FieldValues), record.PrintTime, record.Status, record.Printer, record.Copies.ToString(),
+                record.OperatorName, record.ReprintReason, record.TemplateVersion, record.DiagnosticDetails, record.OrderName,
+                string.Join(";", record.TemplateFields ?? new List<string>())
+            });
+            using (var sha = SHA256.Create())
+                return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(payload)));
+        }
     }
 }

@@ -581,3 +581,13 @@
 - UI-9：历史表格列宽写入配置并恢复。
 - UI-10：新增 `DialogService` 统一对话框边界，持续收敛提示样式。
 - T-1 至 T-12：新增 `BarTenderPrinter.Tests` xUnit 测试项目，并接入发布工作流 `dotnet test`。
+
+### v5.7.53 历史可靠性与测试隔离增强
+
+- 已实现 JSONL 坏行容错，损坏行写入 `.bad` 文件并继续加载。
+- 已实现 JSONL 空文件回退 CSV 历史并迁移保存。
+- 已为历史记录增加 `RecordChecksum`，追加写入时保存记录级校验和。
+- 已将状态、日期和分页参数下推到 `HistoryManager.Search()`。
+- 已为 `HistoryManager`、`OrderManager`、`TemplateSettingsManager` 增加自定义路径构造，测试可使用临时目录。
+- 已新增 JSONL 损坏行、CSV 迁移和测试隔离用例。
+- 已增加补打印模板版本差异确认。

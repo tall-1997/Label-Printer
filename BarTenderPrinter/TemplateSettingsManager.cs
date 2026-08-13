@@ -33,12 +33,23 @@ namespace BarTenderPrinter
 
     public class TemplateSettingsManager
     {
-        private readonly string _path = AppPaths.TemplateSettingsFile;
+        private readonly string _path;
         private readonly Dictionary<string, TemplateSettings> _settings = new Dictionary<string, TemplateSettings>(StringComparer.OrdinalIgnoreCase);
 
         public TemplateSettingsManager()
+            : this(AppPaths.TemplateSettingsFile, true)
         {
-            AppPaths.Initialize();
+        }
+
+        public TemplateSettingsManager(string path)
+            : this(path, false)
+        {
+        }
+
+        private TemplateSettingsManager(string path, bool initializePaths)
+        {
+            if (initializePaths) AppPaths.Initialize();
+            _path = path;
             Load();
         }
 

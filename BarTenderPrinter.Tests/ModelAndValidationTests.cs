@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using BarTenderPrinter;
 using Xunit;
@@ -38,10 +39,37 @@ namespace BarTenderPrinter.Tests
         [Fact]
         public void FailedHistoryRecordDoesNotEnterDuplicateIndex()
         {
-            var history = new HistoryManager();
+            var dir = CreateTempDirectory();
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"));
             history.Records.Clear();
             history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "FAIL", "Printer", 1);
             Assert.False(history.ContainsAnyValue("Template", "C:\\a.btw", "template-1", "X"));
+        }
+
+        [Fact]
+        public void HistoryManagerSkipsBadJsonlRows()
+        {
+            var dir = CreateTempDirectory();
+            var csv = Path.Combine(dir, "records.csv");
+            var jsonl = Path.Combine(dir, "records.jsonl");
+            File.WriteAllText(jsonl, "{bad json}\n" + System.Text.Json.JsonSerializer.Serialize(new PrintRecord("Template", "C:\\a.btw", "tid", new Dictionary<string, string> { ["A"] = "1" }, "now", "PASS", "P", 1)));
+            var history = new HistoryManager(csv, jsonl);
+            history.Load();
+            Assert.Single(history.Records);
+            Assert.True(File.Exists(jsonl + ".bad"));
+        }
+
+        [Fact]
+        public void HistoryManagerFallsBackToCsvWhenJsonlIsEmpty()
+        {
+            var dir = CreateTempDirectory();
+            var csv = Path.Combine(dir, "records.csv");
+            var jsonl = Path.Combine(dir, "records.jsonl");
+            File.WriteAllText(jsonl, "");
+            File.WriteAllText(csv, "record_id,template_name,template_path,field_values,print_time,status,printer,copies\n1,T,C:\\a.btw,eyJBIjoiMSJ9,now,PASS,P,1\n");
+            var history = new HistoryManager(csv, jsonl);
+            history.Load();
+            Assert.Single(history.Records);
         }
 
         [Fact]
@@ -107,6 +135,13 @@ namespace BarTenderPrinter.Tests
                 ReprintReason = "Damaged label"
             };
             Assert.Equal("Damaged label", record.ReprintReason);
+        }
+
+        private static string CreateTempDirectory()
+        {
+            var path = Path.Combine(Path.GetTempPath(), "btp-tests-" + System.Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(path);
+            return path;
         }
     }
 }

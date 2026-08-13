@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.52";
+        private readonly string _version = "v5.7.53";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -3738,6 +3738,11 @@ namespace BarTenderPrinter
             { MessageBox.Show(this, $"本次补打印机当前不可用：{printer}"); return; }
             var values = new Dictionary<string, string>(record.FieldValues, StringComparer.OrdinalIgnoreCase);
             if (!TryGetHistoryTemplateSettings(record, out var settings, out var warning)) return;
+            var currentVersion = GetTemplateVersionForPath(record.TemplatePath);
+            if (!string.IsNullOrWhiteSpace(record.TemplateVersion) && !string.IsNullOrWhiteSpace(currentVersion) &&
+                !string.Equals(record.TemplateVersion, currentVersion, StringComparison.OrdinalIgnoreCase) &&
+                MessageBox.Show(this, "历史记录的模板版本与当前模板文件版本不一致，继续补打印可能导致版面或字段不一致。\n\n是否继续？", "模板版本差异", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                return;
             var configuredSources = settings?.DataSources ?? new List<DataSourceItem>();
             var enabled = configuredSources.Where(source => source.Enabled).ToList();
             if (enabled.Count == 0)
@@ -3805,6 +3810,13 @@ namespace BarTenderPrinter
             return false;
         }
 
+        private string GetTemplateVersionForPath(string templatePath)
+        {
+            var template = _orders.Orders.SelectMany(order => order.Templates ?? new List<OrderTemplate>())
+                .FirstOrDefault(item => string.Equals(item.SourcePath, templatePath, StringComparison.OrdinalIgnoreCase));
+            return GetTemplateVersion(template);
+        }
+
         private void SetPrintEnvironmentEnabled(bool enabled)
         {
             btnPrint.Enabled = enabled;
@@ -3821,14 +3833,11 @@ namespace BarTenderPrinter
 
         private List<PrintRecord> GetCurrentHistoryRecords()
         {
-            var records = _history.Search(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, GetCurrentTemplateId(), txtSearch?.Text ?? "", chkExactSearch.Checked, 0, true);
             var status = _cmbHistoryStatus?.SelectedItem?.ToString() ?? "全部状态";
-            if (!string.Equals(status, "全部状态", StringComparison.OrdinalIgnoreCase))
-                records = records.Where(record => string.Equals(record.Status, status, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (string.Equals(status, "全部状态", StringComparison.OrdinalIgnoreCase)) status = "";
             var date = _txtHistoryDate?.Text?.Trim() ?? "";
-            if (!string.IsNullOrWhiteSpace(date))
-                records = records.Where(record => (record.PrintTime ?? "").StartsWith(date, StringComparison.OrdinalIgnoreCase)).ToList();
-            return records.Skip(_historyPageIndex * HistoryPageSize).Take(HistoryPageSize).ToList();
+            return _history.Search(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, GetCurrentTemplateId(), txtSearch?.Text ?? "", chkExactSearch.Checked,
+                HistoryPageSize, true, _historyPageIndex * HistoryPageSize, status, date, "", "");
         }
 
         private void LoadHistory()
