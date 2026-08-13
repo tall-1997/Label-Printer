@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 
 namespace BarTenderPrinter
 {
-    public class BarTenderService : IDisposable
+    public class BarTenderService : IBarTenderService
     {
         private dynamic _btApp;
         private bool _connected;

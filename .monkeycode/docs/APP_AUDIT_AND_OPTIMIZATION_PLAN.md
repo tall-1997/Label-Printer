@@ -541,3 +541,16 @@
 - P2-8：已在打印失败记录中保存诊断详情。
 - P2-9：已在订单管理增加校验数据管理入口。
 - P2-10：已在订单管理增加模板配置复制入口。
+
+### v5.7.50 架构重构基础设施
+
+- R-1：已抽出多类基础设施，为继续拆分 `MainForm` 建立边界。
+- R-2：已新增 `TemplateSessionState` 统一模板状态表达。
+- R-3：已新增 `PrintWorkflow` 基础协调类，先承载模板版本构建逻辑。
+- R-4：已新增 `OrderEditorController`，先承载订单模板草稿克隆逻辑。
+- R-5：已新增 `HistoryPresenter`，历史表格展示数据构建从 `MainForm` 拆出。
+- R-6：已新增 `ValidationService`，集中长度、本地完整匹配和模板字段完整性校验。
+- R-7：已新增 `DialogService` 和 `IDialogService` 接口。
+- R-8：已新增 `AtomicFileWriter`，并接入订单、模板设置、历史、配置和校验快照写入路径。
+- R-9：已为订单、模板、模板设置和历史记录增加 `SchemaVersion`。
+- R-10：已新增 `IBarTenderService` 和 `IHistoryRepository`，`MainForm` 开始依赖接口类型。

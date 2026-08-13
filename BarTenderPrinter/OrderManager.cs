@@ -9,6 +9,7 @@ namespace BarTenderPrinter
 {
     public class PackagingOrder
     {
+        public int SchemaVersion { get; set; } = 2;
         public string Customer { get; set; } = "";
         public string ProductModel { get; set; } = "";
         public string Color { get; set; } = "";
@@ -36,6 +37,7 @@ namespace BarTenderPrinter
 
     public class OrderTemplate
     {
+        public int SchemaVersion { get; set; } = 2;
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
         public string SourcePath { get; set; } = "";
         public string ArchivedPath { get; set; } = "";
@@ -198,11 +200,8 @@ namespace BarTenderPrinter
 
         private void Save(IEnumerable<PackagingOrder> orders = null)
         {
-            var tempPath = _path + ".tmp";
             var json = JsonSerializer.Serialize(orders ?? _orders, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(tempPath, json);
-            if (File.Exists(_path)) File.Copy(_path, _path + ".bak", true);
-            File.Move(tempPath, _path, true);
+            AtomicFileWriter.WriteAllText(_path, json);
         }
 
         private static void UpdateSourceSnapshot(OrderTemplate template)

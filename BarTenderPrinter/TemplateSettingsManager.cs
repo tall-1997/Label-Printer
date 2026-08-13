@@ -8,6 +8,7 @@ namespace BarTenderPrinter
 {
     public class TemplateSettings
     {
+        public int SchemaVersion { get; set; } = 2;
         public string TemplateName { get; set; } = "";
         public string TemplatePath { get; set; } = "";
         public string Printer { get; set; } = "";
@@ -47,11 +48,8 @@ namespace BarTenderPrinter
             var key = GetKey(settings.TemplateName, settings.TemplatePath);
             var snapshot = _settings.Values.Where(item => !string.Equals(GetKey(item.TemplateName, item.TemplatePath), key, StringComparison.OrdinalIgnoreCase)).ToList();
             snapshot.Add(settings);
-            var tempPath = _path + ".tmp";
             var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(tempPath, json);
-            if (File.Exists(_path)) File.Copy(_path, _path + ".bak", true);
-            File.Move(tempPath, _path, true);
+            AtomicFileWriter.WriteAllText(_path, json);
             _settings[key] = settings;
         }
 

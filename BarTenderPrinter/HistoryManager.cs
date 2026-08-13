@@ -9,6 +9,7 @@ namespace BarTenderPrinter
 {
     public class PrintRecord
     {
+        public int SchemaVersion { get; set; } = 2;
         public string RecordId { get; set; }
         public string Imei { get; set; }
         public string TemplateName { get; set; }
@@ -72,7 +73,7 @@ namespace BarTenderPrinter
         }
     }
 
-    public class HistoryManager
+    public class HistoryManager : IHistoryRepository
     {
         private readonly string _recordsFile;
         private readonly Dictionary<string, HashSet<string>> _templateValueIndexes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
@@ -173,10 +174,7 @@ namespace BarTenderPrinter
                         Csv(r.OperatorName), Csv(r.ReprintReason), Csv(r.TemplateVersion), Csv(r.DiagnosticDetails), Csv(r.OrderName)
                     }));
                 }
-                File.WriteAllText(tempFile, sb.ToString(), Encoding.UTF8);
-                if (File.Exists(_recordsFile))
-                    File.Copy(_recordsFile, _recordsFile + ".bak", true);
-                File.Move(tempFile, _recordsFile, true);
+                AtomicFileWriter.WriteAllText(_recordsFile, sb.ToString(), Encoding.UTF8);
                 _usesCurrentFormat = true;
                 return true;
             }
@@ -349,7 +347,7 @@ namespace BarTenderPrinter
                 if (string.IsNullOrEmpty(values)) values = r.Imei;
                 sb.AppendLine(string.Join(",", new[] { Csv(r.TemplateName), Csv(r.TemplatePath), Csv(r.TemplateId), Csv(r.OrderName), Csv(values), Csv(r.PrintTime), Csv(r.Status), Csv(r.Printer), r.Copies.ToString(), Csv(r.OperatorName), Csv(r.ReprintReason), Csv(r.TemplateVersion), Csv(r.DiagnosticDetails) }));
             }
-            File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
+                AtomicFileWriter.WriteAllText(path, sb.ToString(), Encoding.UTF8);
         }
 
         public int TodayCount()

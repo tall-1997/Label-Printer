@@ -14,14 +14,17 @@ namespace BarTenderPrinter
 {
     public partial class MainForm : Form
     {
-        private readonly BarTenderService _btService = new BarTenderService();
-        private readonly HistoryManager _history = new HistoryManager();
+        private readonly IBarTenderService _btService = new BarTenderService();
+        private readonly IHistoryRepository _history = new HistoryManager();
         private readonly TemplateSettingsManager _templateSettings = new TemplateSettingsManager();
         private readonly OrderManager _orders = new OrderManager();
+        private readonly PrintWorkflow _printWorkflow = new PrintWorkflow();
+        private readonly OrderEditorController _orderEditor = new OrderEditorController();
+        private readonly IDialogService _dialogs = new DialogService();
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.49";
+        private readonly string _version = "v5.7.50";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -701,25 +704,11 @@ namespace BarTenderPrinter
             var templateFields = GetTemplateFieldsForValidation(templatePath, title);
             if (templateFields == null) return false;
 
-            var configured = (configuredSources ?? new List<DataSourceItem>()).ToList();
-            var enabled = configured.Where(source => source.Enabled).ToList();
-            var configuredFields = new HashSet<string>(configured.Select(source => source.Field).Where(field => !string.IsNullOrWhiteSpace(field)), StringComparer.OrdinalIgnoreCase);
-            var enabledFields = new HashSet<string>(enabled.Select(source => source.Field).Where(field => !string.IsNullOrWhiteSpace(field)), StringComparer.OrdinalIgnoreCase);
-            fieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var valueFields = new HashSet<string>(fieldValues.Keys, StringComparer.OrdinalIgnoreCase);
-
-            var missingConfig = templateFields.Where(field => !configuredFields.Contains(field)).ToList();
-            var disabledFields = templateFields.Where(field => configuredFields.Contains(field) && !enabledFields.Contains(field)).ToList();
-            var missingValues = templateFields.Where(field => !valueFields.Contains(field) || !fieldValues.TryGetValue(field, out var value) || string.IsNullOrWhiteSpace(value)).ToList();
-            var extraEnabled = enabledFields.Where(field => !templateFields.Contains(field, StringComparer.OrdinalIgnoreCase)).ToList();
-
-            if (missingConfig.Count == 0 && disabledFields.Count == 0 && missingValues.Count == 0 && extraEnabled.Count == 0) return true;
+            var issues = ValidationService.FindTemplateFieldIssues(templateFields, configuredSources, fieldValues);
+            if (issues.Count == 0) return true;
 
             var sb = new StringBuilder();
-            if (missingConfig.Count > 0) sb.AppendLine($"模板字段未配置: {string.Join(", ", missingConfig)}");
-            if (disabledFields.Count > 0) sb.AppendLine($"模板字段已配置但未启用: {string.Join(", ", disabledFields)}");
-            if (missingValues.Count > 0) sb.AppendLine($"模板字段缺少打印值: {string.Join(", ", missingValues)}");
-            if (extraEnabled.Count > 0) sb.AppendLine($"配置中存在模板没有的字段: {string.Join(", ", extraEnabled)}");
+            foreach (var issue in issues) sb.AppendLine(issue);
             MessageBox.Show(this, sb.ToString().Trim(), title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             AddLog($"模板字段完整性校验失败: {sb.ToString().Replace(Environment.NewLine, " ")}", "WARNING");
             return false;
@@ -825,7 +814,7 @@ namespace BarTenderPrinter
                 _txtOrderColor.Text = order.Color;
                 _txtOrderNumber.Text = order.OrderNumber;
                 _txtOrderNumber.ReadOnly = true;
-                foreach (var template in order.Templates ?? new List<OrderTemplate>()) _orderTemplateDrafts.Add(CloneOrderTemplate(template));
+                _orderTemplateDrafts.AddRange(_orderEditor.CloneTemplates(order.Templates));
             }
 
             var templateLabel = new Label { Text = "模板配置（点击卡片切换，每个模板独立保存设置）", Location = new Point(10, 105), Size = new Size(contentWidth, 20), Font = new Font(Font, FontStyle.Bold) };
@@ -1102,6 +1091,7 @@ namespace BarTenderPrinter
             settings ??= new TemplateSettings();
             return new TemplateSettings
             {
+                SchemaVersion = settings.SchemaVersion,
                 TemplateName = settings.TemplateName,
                 TemplatePath = settings.TemplatePath,
                 Printer = settings.Printer,
@@ -1314,7 +1304,7 @@ namespace BarTenderPrinter
             var hashInput = $"{orderScope}|{templateId}|{templatePath}";
             var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(hashInput))).Substring(0, 24);
             var targetPath = Path.Combine(AppPaths.ValidationDataDirectory, $"{hash}.txt");
-            File.WriteAllLines(targetPath, values.OrderBy(value => value, NaturalStringComparer.Instance), Encoding.UTF8);
+            AtomicFileWriter.WriteAllLines(targetPath, values.OrderBy(value => value, NaturalStringComparer.Instance), Encoding.UTF8);
             return targetPath;
         }
 
@@ -3157,10 +3147,7 @@ namespace BarTenderPrinter
 
         private int GetExpectedLength(DataSourceItem source)
         {
-            if (!_lengthValidationEnabled) return 0;
-            if (source.ExpectedLength > 0)
-                return source.ExpectedLength;
-            return _globalExpectedLength;
+            return ValidationService.GetExpectedLength(source, _lengthValidationEnabled, _globalExpectedLength);
         }
 
         private string GetDuplicateValidationMessage(DataSourceItem source, string value, HashSet<string> acceptedValues)
@@ -3209,14 +3196,7 @@ namespace BarTenderPrinter
             localData ??= _localData;
             if (localData.Count == 0) return true;
             targetField ??= _localDataTargetField;
-            var notInLocal = new List<string>();
-            foreach (var kv in fieldValues)
-            {
-                if (!string.IsNullOrWhiteSpace(targetField) && !string.Equals(kv.Key, targetField, StringComparison.OrdinalIgnoreCase)) continue;
-                if (string.IsNullOrEmpty(kv.Value)) continue;
-                if (!localData.Contains(kv.Value))
-                    notInLocal.Add($"{kv.Key}={kv.Value}");
-            }
+            var notInLocal = ValidationService.FindLocalDataMismatches(fieldValues, localData, targetField);
             if (notInLocal.Count > 0)
             {
                 var msg = $"以下数据未完整匹配本地校验数据：\n{string.Join("\n", notInLocal)}";
@@ -3256,11 +3236,9 @@ namespace BarTenderPrinter
             return string.IsNullOrWhiteSpace(value) ? Environment.UserName ?? "" : value;
         }
 
-        private static string GetTemplateVersion(OrderTemplate template)
+        private string GetTemplateVersion(OrderTemplate template)
         {
-            if (template == null) return "";
-            var hash = string.IsNullOrWhiteSpace(template.SourceSha256) ? "nohash" : template.SourceSha256.Substring(0, Math.Min(12, template.SourceSha256.Length));
-            return $"ticks={template.SourceLastWriteTimeUtcTicks};len={template.SourceLength};sha={hash}";
+            return _printWorkflow.BuildTemplateVersion(template);
         }
 
         private bool ShowPrintPreviewConfirm(string templateName, string templatePath, Dictionary<string, string> fieldValues, string printer, int copies, string operatorName, string templateVersion)
@@ -3784,14 +3762,7 @@ namespace BarTenderPrinter
         private void LoadHistory()
         {
             dgvHistory.DataSource = null;
-            var dt = new DataTable(); dt.Columns.Add("记录ID"); dt.Columns.Add("数据"); dt.Columns.Add("打印时间"); dt.Columns.Add("状态"); dt.Columns.Add("打印机"); dt.Columns.Add("份数");
-            foreach (var r in GetCurrentHistoryRecords())
-            {
-                var values = r.FieldValues != null && r.FieldValues.Count > 0
-                    ? string.Join(" | ", r.FieldValues.Select(item => $"{item.Key}={item.Value}"))
-                    : r.Imei;
-                dt.Rows.Add(r.RecordId, values, r.PrintTime, r.Status, r.Printer, r.Copies);
-            }
+            var dt = HistoryPresenter.BuildTable(GetCurrentHistoryRecords());
             dgvHistory.DataSource = dt;
             dgvHistory.Columns["记录ID"].Visible = false;
 
@@ -4091,8 +4062,7 @@ namespace BarTenderPrinter
                         ["LengthEdited"] = _dataSources[i].LengthEdited.ToString()
                     });
                 }
-                File.WriteAllText(tempFile, sb.ToString(), Encoding.Unicode);
-                File.Move(tempFile, _configFile, true);
+                AtomicFileWriter.WriteAllText(_configFile, sb.ToString(), Encoding.Unicode);
             }
             catch (Exception ex)
             {
