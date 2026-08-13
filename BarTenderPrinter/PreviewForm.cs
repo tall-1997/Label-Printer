@@ -73,6 +73,7 @@ namespace BarTenderPrinter
 
         public void ShowError(string message)
         {
+            ReplaceImage(null);
             _statusLabel.Text = message;
             _statusLabel.ForeColor = MiuiTheme.Error;
         }

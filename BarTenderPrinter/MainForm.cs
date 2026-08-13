@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.63";
+        private readonly string _version = "v5.7.64";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -157,12 +157,15 @@ namespace BarTenderPrinter
         {
             _chkPreview = new CheckBox
             {
-                Text = "开启预览",
+                Text = _btService.IsPreviewAvailable ? "开启预览" : "预览不可用",
                 AutoSize = true,
                 Dock = DockStyle.Right,
                 Padding = new Padding(8, 5, 8, 0),
-                ForeColor = MiuiTheme.TextPrimary
+                ForeColor = _btService.IsPreviewAvailable ? MiuiTheme.TextPrimary : MiuiTheme.TextSecondary,
+                Enabled = _btService.IsPreviewAvailable
             };
+            if (!_btService.IsPreviewAvailable)
+                _toolTips.SetToolTip(_chkPreview, _btService.PreviewUnavailableReason);
             _chkPreview.CheckedChanged += Preview_CheckedChanged;
             titlePanel.Controls.Add(_chkPreview);
             titlePanel.Controls.SetChildIndex(_chkPreview, 0);
@@ -225,6 +228,11 @@ namespace BarTenderPrinter
         {
             if (_chkPreview?.Checked != true || string.IsNullOrWhiteSpace(_selectedTemplatePath)) return;
             EnsurePreviewForm();
+            if (_pendingPrintJobCount > 0)
+            {
+                _previewForm?.ShowLoading("打印队列处理中，稍后刷新");
+                return;
+            }
             var requestVersion = ++_previewRequestVersion;
             var templatePath = _selectedTemplatePath;
             var templateName = Path.GetFileName(templatePath);
@@ -3692,8 +3700,6 @@ namespace BarTenderPrinter
                     {
                         AddLog("打印作业已提交，但历史记录保存失败；输入状态已经推进。", "ERROR");
                     }
-                    if (_chkPreview?.Checked == true && string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
-                        _ = RefreshPreviewAsync(new Dictionary<string, string>(fieldValues, StringComparer.OrdinalIgnoreCase));
                 }
                 else
                 {
@@ -3702,6 +3708,13 @@ namespace BarTenderPrinter
                         "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
                         orderName, orderId, templateFields))
                         AddLog("失败打印历史记录保存失败。", "ERROR");
+                }
+                if (_pendingPrintJobCount == 0 && _chkPreview?.Checked == true)
+                {
+                    var previewValues = result.Success && string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)
+                        ? new Dictionary<string, string>(fieldValues, StringComparer.OrdinalIgnoreCase)
+                        : null;
+                    _ = RefreshPreviewAsync(previewValues);
                 }
                 LoadHistory();
                 RefreshStats();

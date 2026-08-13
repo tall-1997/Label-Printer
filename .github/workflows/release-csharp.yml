@@ -62,17 +62,18 @@ jobs:
             ### 更新内容
 
             #### 修复与优化
-            - 打印页面标题栏增加开启预览控件
-            - 主界面右侧增加跟随移动和缩放的停靠预览窗
-            - 使用应用内置 BarTender SDK 导出标签 PNG 预览
+            - 运行时加载目标机器安装的 BarTender 2022 R2 官方 .NET SDK
+            - 使用 `LabelFormatDocument.ExportImageToFile` 静默导出标签 PNG 预览
+            - SDK 缺失、版本或架构不匹配时禁用预览并显示原因
             - 优先展示当前模板最近一次 PASS 或 REPRINT_PASS 的字段效果
             - 当前模板缺少成功记录时展示原模板预览
-            - 普通打印和补打印成功提交后自动刷新预览
+            - 打印队列处理期间延后预览，避免干扰 FIFO 连续打印
+            - 预览失败时清除旧图片，避免显示过期标签内容
 
             ### 系统要求
             - Windows 10/11 x64
             - .NET 8.0 运行时（已内置，无需额外安装）
-            - BarTender 2022 R2 Enterprise 或更高版本
+            - BarTender 2022 R2 Automation 或 Enterprise x64
 
             ### 安装说明
             1. 下载 `BarTenderPrinter-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe`

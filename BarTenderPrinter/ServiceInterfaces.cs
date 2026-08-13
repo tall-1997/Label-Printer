@@ -8,6 +8,8 @@ namespace BarTenderPrinter
     {
         bool IsConnected { get; }
         bool IsOfflineMode { get; }
+        bool IsPreviewAvailable { get; }
+        string PreviewUnavailableReason { get; }
         bool Connect();
         List<string> GetTemplateDataSources(string templatePath);
         void RunDiagnostics(string templatePath);

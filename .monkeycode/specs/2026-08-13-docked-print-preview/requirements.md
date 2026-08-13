@@ -39,6 +39,8 @@
 
 #### Acceptance Criteria
 
-1. WHEN 系统生成预览图, 系统 SHALL 使用应用内置 BarTender SDK 调用。
+1. WHEN 系统生成预览图, 系统 SHALL 使用目标 BarTender 安装附带的官方 `Seagull.BarTender.Print` .NET SDK。
 2. WHILE 打印队列处理作业, 系统 SHALL 保持 BarTender COM 调用在专用 STA 线程串行执行。
 3. WHEN 预览导出失败, 系统 SHALL 保留打印流程并在预览窗显示错误状态。
+4. WHEN 系统生成预览图, 系统 SHALL 保持 BarTender 窗口隐藏且不得访问剪贴板或提交打印作业。
+5. BEFORE 系统启用预览入口, 系统 SHALL 在安装目标 BarTender 版本的 Windows 机器上完成静默导出和打印隔离验证。
