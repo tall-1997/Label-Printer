@@ -29,18 +29,13 @@ namespace BarTenderPrinter
             var fields = (templateFields ?? new List<string>()).ToList();
             var configured = (configuredSources ?? new List<DataSourceItem>()).ToList();
             fieldValues ??= new Dictionary<string, string>(System.StringComparer.OrdinalIgnoreCase);
-            var configuredFields = new HashSet<string>(configured.Select(source => source.Field).Where(field => !string.IsNullOrWhiteSpace(field)), System.StringComparer.OrdinalIgnoreCase);
             var enabledFields = new HashSet<string>(configured.Where(source => source.Enabled).Select(source => source.Field).Where(field => !string.IsNullOrWhiteSpace(field)), System.StringComparer.OrdinalIgnoreCase);
             var valueFields = new HashSet<string>(fieldValues.Keys, System.StringComparer.OrdinalIgnoreCase);
             var issues = new List<string>();
-            var missingConfig = fields.Where(field => !configuredFields.Contains(field)).ToList();
-            var disabledFields = fields.Where(field => configuredFields.Contains(field) && !enabledFields.Contains(field)).ToList();
-            var missingValues = fields.Where(field => !valueFields.Contains(field) || !fieldValues.TryGetValue(field, out var value) || string.IsNullOrWhiteSpace(value)).ToList();
-            var extraEnabled = enabledFields.Where(field => !fields.Contains(field, System.StringComparer.OrdinalIgnoreCase)).ToList();
-            if (missingConfig.Count > 0) issues.Add($"模板字段未配置: {string.Join(", ", missingConfig)}");
-            if (disabledFields.Count > 0) issues.Add($"模板字段已配置但未启用: {string.Join(", ", disabledFields)}");
+            var missingConfig = enabledFields.Where(field => !fields.Contains(field, System.StringComparer.OrdinalIgnoreCase)).ToList();
+            var missingValues = enabledFields.Where(field => !valueFields.Contains(field) || !fieldValues.TryGetValue(field, out var value) || string.IsNullOrWhiteSpace(value)).ToList();
+            if (missingConfig.Count > 0) issues.Add($"启用数据源不存在于模板: {string.Join(", ", missingConfig)}");
             if (missingValues.Count > 0) issues.Add($"模板字段缺少打印值: {string.Join(", ", missingValues)}");
-            if (extraEnabled.Count > 0) issues.Add($"配置中存在模板没有的字段: {string.Join(", ", extraEnabled)}");
             return issues;
         }
     }

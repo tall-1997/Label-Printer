@@ -24,7 +24,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.56";
+        private readonly string _version = "v5.7.57";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -95,6 +95,7 @@ namespace BarTenderPrinter
         private ComboBox _cmbRole;
         private Button _btnPrevHistoryPage;
         private Button _btnNextHistoryPage;
+        private Button _btnLogin;
         private Label _lblHistoryPage;
         private Label _lblEffectiveSummary;
         private ComboBox _cmbHistoryStatus;
@@ -102,6 +103,7 @@ namespace BarTenderPrinter
         private readonly ToolTip _toolTips = new ToolTip();
         private readonly Dictionary<string, int> _historyColumnWidths = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private readonly UserSession _session = new UserSession();
+        private readonly AccountManager _accountManager = new AccountManager();
         private int _historyPageIndex;
         private string _pendingReprintReason = "";
         private const int HistoryPageSize = 200;
@@ -111,6 +113,7 @@ namespace BarTenderPrinter
             _startupTemplatePath = NormalizeStartupTemplatePath(startupTemplatePath);
             InitializeComponent();
             InstallP2Controls();
+            SilentLogin();
             InstallOrderSidebar();
             _configFile = AppPaths.ConfigFile;
             Text = $"BarTender 标签打印工具 {_version}";
@@ -157,10 +160,12 @@ namespace BarTenderPrinter
             _cmbRole.SelectedIndex = 0;
             _cmbRole.SelectedIndexChanged += (s, e) => UpdateSession();
             _txtOperator.TextChanged += (s, e) => UpdateSession();
-            _btnPrevHistoryPage = new Button { Text = "上一页", Location = new Point(870, 1), Size = new Size(60, 24) };
-            _btnNextHistoryPage = new Button { Text = "下一页", Location = new Point(935, 1), Size = new Size(60, 24) };
-            _lblHistoryPage = new Label { Text = "第 1 页", Location = new Point(1000, 5), Size = new Size(80, 18) };
-            _cmbHistoryStatus = new ComboBox { Location = new Point(1085, 2), Size = new Size(90, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            _btnLogin = new Button { Text = "登录", Location = new Point(870, 1), Size = new Size(50, 24) };
+            _btnLogin.Click += (s, e) => ShowLoginDialog();
+            _btnPrevHistoryPage = new Button { Text = "上一页", Location = new Point(925, 1), Size = new Size(60, 24) };
+            _btnNextHistoryPage = new Button { Text = "下一页", Location = new Point(990, 1), Size = new Size(60, 24) };
+            _lblHistoryPage = new Label { Text = "第 1 页", Location = new Point(1055, 5), Size = new Size(80, 18) };
+            _cmbHistoryStatus = new ComboBox { Location = new Point(1140, 2), Size = new Size(90, 25), DropDownStyle = ComboBoxStyle.DropDownList };
             _cmbHistoryStatus.Items.AddRange(new object[] { "全部状态", "PASS", "FAIL", "REPRINT_PASS", "REPRINT_FAIL" });
             _cmbHistoryStatus.SelectedIndex = 0;
             _txtHistoryDate = new TextBox { Location = new Point(1180, 2), Size = new Size(90, 25), PlaceholderText = "yyyy-MM-dd" };
@@ -168,14 +173,62 @@ namespace BarTenderPrinter
             _btnNextHistoryPage.Click += (s, e) => { _historyPageIndex++; LoadHistory(); };
             _cmbHistoryStatus.SelectedIndexChanged += (s, e) => { _historyPageIndex = 0; LoadHistory(); };
             _txtHistoryDate.TextChanged += (s, e) => { _historyPageIndex = 0; _historySearchTimer.Stop(); _historySearchTimer.Start(); };
-            historyToolbar.Controls.AddRange(new Control[] { lblOperator, _txtOperator, _cmbRole, _btnPrevHistoryPage, _btnNextHistoryPage, _lblHistoryPage, _cmbHistoryStatus, _txtHistoryDate });
+            historyToolbar.Controls.AddRange(new Control[] { lblOperator, _txtOperator, _cmbRole, _btnLogin, _btnPrevHistoryPage, _btnNextHistoryPage, _lblHistoryPage, _cmbHistoryStatus, _txtHistoryDate });
             MiuiTheme.StyleLabel(lblOperator);
             MiuiTheme.StyleLabel(_lblHistoryPage, true);
             MiuiTheme.StyleTextBox(_txtOperator);
             MiuiTheme.StyleButton(_btnPrevHistoryPage);
             MiuiTheme.StyleButton(_btnNextHistoryPage);
+            MiuiTheme.StyleButton(_btnLogin);
             MiuiTheme.StyleTextBox(_txtHistoryDate);
             UpdateSession();
+        }
+
+        private void SilentLogin()
+        {
+            ApplyAccount(_accountManager.DefaultAccount);
+        }
+
+        private void ApplyAccount(UserAccount account)
+        {
+            if (account == null) return;
+            _txtOperator.Text = account.UserName;
+            _cmbRole.SelectedItem = account.Role;
+            UpdateSession();
+            AuditLogger.Append(GetOperatorName(), "Login", $"role={account.Role}");
+        }
+
+        private void ShowLoginDialog()
+        {
+            using (var form = new Form())
+            {
+                form.Text = "账户登录";
+                form.Size = new Size(340, 190);
+                form.FormBorderStyle = FormBorderStyle.FixedDialog;
+                form.StartPosition = FormStartPosition.CenterParent;
+                form.MaximizeBox = false;
+                form.MinimizeBox = false;
+                var lblUser = new Label { Text = "账号：", Location = new Point(14, 18), Size = new Size(60, 22) };
+                var txtUser = new TextBox { Location = new Point(80, 15), Size = new Size(220, 25), Text = "superadmin" };
+                var lblPassword = new Label { Text = "密码：", Location = new Point(14, 55), Size = new Size(60, 22) };
+                var txtPassword = new TextBox { Location = new Point(80, 52), Size = new Size(220, 25), UseSystemPasswordChar = true, Text = "admin" };
+                var ok = new Button { Text = "登录", Location = new Point(145, 105), Size = new Size(70, 28), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(230, 105), Size = new Size(70, 28), DialogResult = DialogResult.Cancel };
+                ok.Click += (s, e) =>
+                {
+                    if (!_accountManager.TryLogin(txtUser.Text.Trim(), txtPassword.Text, out var account))
+                    {
+                        _dialogs.ShowWarning(form, "账号或密码错误。", "登录失败");
+                        form.DialogResult = DialogResult.None;
+                        return;
+                    }
+                    ApplyAccount(account);
+                };
+                form.Controls.AddRange(new Control[] { lblUser, txtUser, lblPassword, txtPassword, ok, cancel });
+                form.AcceptButton = ok;
+                form.CancelButton = cancel;
+                form.ShowDialog(this);
+            }
         }
 
         private void UpdateSession()
@@ -195,7 +248,7 @@ namespace BarTenderPrinter
         private void InstallOrderSidebar()
         {
             const int collapsedWidth = 44;
-            const int orderSelectorHeight = 40;
+            const int orderSelectorHeight = 58;
             var printControls = Controls.Cast<Control>()
                 .Where(control => control != titlePanel && control != groupBoxLog && control != statusStrip)
                 .ToDictionary(control => control, control => control.Bounds);
@@ -237,7 +290,7 @@ namespace BarTenderPrinter
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 BackColor = BackColor
             };
-            _printOrderPanel.Height = 62;
+            _printOrderPanel.Height = 78;
             var printOrderLabel = new Label { Text = "当前订单：", Location = new Point(0, 8), Size = new Size(72, 20) };
             _cmbPrintCustomer = AddPrintOrderCombo("客户", 75, 4, 150);
             _cmbPrintModel = AddPrintOrderCombo("机型", 235, 4, 150);
@@ -248,7 +301,7 @@ namespace BarTenderPrinter
             _cmbPrintColor.SelectedIndexChanged += (s, e) => { if (!_loadingPrintOrderFilters) RefreshPrintOrderSelector(PrintOrderFilterLevel.Color, false); };
             _cmbPrintOrderNumber.SelectedIndexChanged += (s, e) => ApplyPrintOrderSelection();
             _printOrderPanel.Controls.Add(printOrderLabel);
-            _lblEffectiveSummary = new Label { Text = "当前生效设置：未选择订单", Location = new Point(0, 44), Size = new Size(_printOrderPanel.Width, 18), AutoEllipsis = true };
+            _lblEffectiveSummary = new Label { Text = "当前生效设置：未选择订单", Location = new Point(0, 58), Size = new Size(_printOrderPanel.Width, 18), AutoEllipsis = true };
             _printOrderPanel.Controls.Add(_lblEffectiveSummary);
             Controls.Add(_printOrderPanel);
             MiuiTheme.StyleLabel(printOrderLabel);
@@ -840,7 +893,7 @@ namespace BarTenderPrinter
         {
             _loadingOrderEditor = true;
             _orderContentPanel.Controls.Clear();
-            _orderContentPanel.AutoScrollMinSize = new Size(740, 775);
+            _orderContentPanel.AutoScrollMinSize = new Size(740, 845);
             _orderContentPanel.BackColor = MiuiTheme.Background;
             _orderTemplateDrafts.Clear();
             _selectedOrderTemplateDraft = null;
@@ -854,8 +907,8 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(addOrderTop, order == null);
 
             _txtOrderCustomer = AddOrderPageComboBox("客户", 10, 50, fieldWidth, _orders.Orders.Select(item => item.Customer));
-            _txtOrderModel = AddOrderPageComboBox("机型", 10 + (fieldWidth + fieldGap), 50, fieldWidth, _orders.Orders.Select(item => item.ProductModel));
-            _txtOrderColor = AddOrderPageComboBox("颜色", 10 + (fieldWidth + fieldGap) * 2, 50, fieldWidth, _orders.Orders.Select(item => item.Color));
+            _txtOrderModel = AddOrderPageComboBox("机型", 10 + (fieldWidth + fieldGap), 50, fieldWidth, GetOrderEditorModels());
+            _txtOrderColor = AddOrderPageComboBox("颜色", 10 + (fieldWidth + fieldGap) * 2, 50, fieldWidth, GetOrderEditorColors());
             _txtOrderNumber = AddOrderPageTextBox("订单号", 10 + (fieldWidth + fieldGap) * 3, 50, fieldWidth);
             if (order != null)
             {
@@ -904,14 +957,14 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(governTemplate);
 
             var printerLabelX = 10;
-            var printerLabel = new Label { Text = "打印机：", Location = new Point(printerLabelX, 329), Size = new Size(65, 18) };
+            var printerLabel = new Label { Text = "打印机：", Location = new Point(printerLabelX, 363), Size = new Size(65, 18) };
             var copiesX = templateActionX - 105;
-            _cmbOrderPrinter = new ComboBox { Location = new Point(printerLabelX + 65, 325), Size = new Size(Math.Max(120, copiesX - printerLabelX - 75), 25), DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            _cmbOrderPrinter = new ComboBox { Location = new Point(printerLabelX + 65, 359), Size = new Size(Math.Max(120, copiesX - printerLabelX - 75), 25), DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             foreach (var printer in cmbPrinter.Items) _cmbOrderPrinter.Items.Add(printer);
             if (cmbPrinter.SelectedItem != null && _cmbOrderPrinter.Items.Contains(cmbPrinter.SelectedItem)) _cmbOrderPrinter.SelectedItem = cmbPrinter.SelectedItem;
             else if (_cmbOrderPrinter.Items.Count > 0) _cmbOrderPrinter.SelectedIndex = 0;
-            var copiesLabel = new Label { Text = "份数：", Location = new Point(copiesX, 329), Size = new Size(50, 18), Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            _numOrderCopies = new NumericUpDown { Location = new Point(copiesX + 50, 325), Size = new Size(55, 25), Minimum = 1, Maximum = 99, Value = numCopies.Value, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            var copiesLabel = new Label { Text = "份数：", Location = new Point(copiesX, 363), Size = new Size(50, 18), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            _numOrderCopies = new NumericUpDown { Location = new Point(copiesX + 50, 359), Size = new Size(55, 25), Minimum = 1, Maximum = 99, Value = numCopies.Value, Anchor = AnchorStyles.Top | AnchorStyles.Right };
             _orderContentPanel.Controls.Add(printerLabel);
             _orderContentPanel.Controls.Add(_cmbOrderPrinter);
             _orderContentPanel.Controls.Add(copiesLabel);
@@ -919,16 +972,16 @@ namespace BarTenderPrinter
             MiuiTheme.StyleLabel(printerLabel);
             MiuiTheme.StyleLabel(copiesLabel);
 
-            _chkOrderInputValidation = new CheckBox { Text = "本地完整匹配", Location = new Point(10, 363), Size = new Size(120, 22), Enabled = false };
-            _chkOrderDuplicateValidation = new CheckBox { Text = "重复校验", Location = new Point(140, 363), Size = new Size(90, 22) };
-            _chkOrderLengthValidation = new CheckBox { Text = "长度校验", Location = new Point(240, 363), Size = new Size(90, 22) };
-            var globalLengthLabel = new Label { Text = "全局长度：", Location = new Point(340, 366), Size = new Size(75, 18) };
-            _numOrderGlobalLength = new NumericUpDown { Location = new Point(415, 361), Size = new Size(70, 25), Minimum = 0, Maximum = 512 };
-            var chooseValidationData = new Button { Text = "选择校验数据", Location = new Point(500, 359), Size = new Size(100, 28) };
+            _chkOrderInputValidation = new CheckBox { Text = "本地完整匹配", Location = new Point(10, 397), Size = new Size(120, 22), Enabled = false };
+            _chkOrderDuplicateValidation = new CheckBox { Text = "重复校验", Location = new Point(140, 397), Size = new Size(90, 22) };
+            _chkOrderLengthValidation = new CheckBox { Text = "长度校验", Location = new Point(240, 397), Size = new Size(90, 22) };
+            var globalLengthLabel = new Label { Text = "全局长度：", Location = new Point(340, 400), Size = new Size(75, 18) };
+            _numOrderGlobalLength = new NumericUpDown { Location = new Point(415, 395), Size = new Size(70, 25), Minimum = 0, Maximum = 512 };
+            var chooseValidationData = new Button { Text = "选择校验数据", Location = new Point(500, 393), Size = new Size(100, 28) };
             chooseValidationData.Click += (s, e) => SelectOrderValidationData();
-            var manageValidationData = new Button { Text = "管理校验", Location = new Point(605, 359), Size = new Size(80, 28) };
+            var manageValidationData = new Button { Text = "管理校验", Location = new Point(605, 393), Size = new Size(80, 28) };
             manageValidationData.Click += (s, e) => ManageOrderValidationData();
-            _lblOrderLocalData = new Label { Text = "校验数据：未配置", Location = new Point(695, 366), Size = new Size(Math.Max(180, contentWidth - 685), 18), AutoEllipsis = true };
+            _lblOrderLocalData = new Label { Text = "校验数据：未配置", Location = new Point(695, 400), Size = new Size(Math.Max(180, contentWidth - 685), 18), AutoEllipsis = true };
             _orderContentPanel.Controls.Add(_chkOrderInputValidation);
             _orderContentPanel.Controls.Add(_chkOrderDuplicateValidation);
             _orderContentPanel.Controls.Add(_chkOrderLengthValidation);
@@ -944,18 +997,22 @@ namespace BarTenderPrinter
             var dataSourceTitle = new Label
             {
                 Text = "数据源详细设置",
-                Location = new Point(10, 398), Size = new Size(contentWidth, 20),
+                Location = new Point(10, 432), Size = new Size(contentWidth, 20),
                 Font = new Font(Font, FontStyle.Bold)
             };
-            _chkOrderToggleAllSources = new CheckBox { Text = "全选数据源", Location = new Point(140, 397), Size = new Size(100, 22), Checked = true };
+            _chkOrderToggleAllSources = new CheckBox { Text = "全选数据源", Location = new Point(140, 431), Size = new Size(100, 22), Checked = true };
             _chkOrderToggleAllSources.CheckedChanged += (s, e) => { if (!_updatingOrderToggleAll) ToggleOrderDataSources(_chkOrderToggleAllSources.Checked); };
+            var invertSources = new Button { Text = "反选数据源", Location = new Point(245, 429), Size = new Size(90, 24) };
+            invertSources.Click += (s, e) => InvertOrderDataSources();
             _orderContentPanel.Controls.Add(dataSourceTitle);
             _orderContentPanel.Controls.Add(_chkOrderToggleAllSources);
+            _orderContentPanel.Controls.Add(invertSources);
             MiuiTheme.StyleLabel(dataSourceTitle);
+            MiuiTheme.StyleButton(invertSources);
 
             _orderDataSourcesGrid = new DataGridView
             {
-                Location = new Point(10, 422),
+                Location = new Point(10, 456),
                 Size = new Size(contentWidth, 285),
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 AllowUserToAddRows = false,
@@ -987,7 +1044,7 @@ namespace BarTenderPrinter
             _orderDataSourcesGrid.DataError += (s, e) => { e.ThrowException = false; };
             _orderContentPanel.Controls.Add(_orderDataSourcesGrid);
 
-            var save = new Button { Text = order == null ? "保存订单" : "保存设置", Location = new Point(10 + contentWidth - 95, 722), Size = new Size(95, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            var save = new Button { Text = order == null ? "保存订单" : "保存设置", Location = new Point(10 + contentWidth - 95, 756), Size = new Size(95, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             save.Click += (s, e) => SaveOrderFromPage();
             _orderContentPanel.Controls.Add(save);
             MiuiTheme.StyleButton(save, true);
@@ -996,6 +1053,10 @@ namespace BarTenderPrinter
             _lblOrderLocalData.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             foreach (var control in new Control[] { _txtOrderCustomer, _txtOrderModel, _txtOrderColor, _txtOrderNumber })
                 control.TextChanged += (s, e) => MarkOrderEditorDirty();
+            _txtOrderCustomer.TextChanged += (s, e) => RefreshOrderEditorCascade(OrderFilterLevel.Customer);
+            _txtOrderModel.TextChanged += (s, e) => RefreshOrderEditorCascade(OrderFilterLevel.Model);
+            _txtOrderColor.TextChanged += (s, e) => RefreshOrderEditorCascade(OrderFilterLevel.Color);
+            _txtOrderNumber.TextChanged += (s, e) => TryEnterOrderEditModeFromEditor();
             _cmbOrderPrinter.SelectedIndexChanged += (s, e) => MarkOrderEditorDirty();
             _numOrderCopies.ValueChanged += (s, e) => MarkOrderEditorDirty();
             _chkOrderInputValidation.CheckedChanged += (s, e) => { UpdateOrderValidationControls(); MarkOrderEditorDirty(); };
@@ -1032,6 +1093,70 @@ namespace BarTenderPrinter
             _orderContentPanel.Controls.Add(combo);
             MiuiTheme.StyleLabel(label);
             return combo;
+        }
+
+        private IEnumerable<string> GetOrderEditorModels()
+        {
+            var customer = _txtOrderCustomer?.Text?.Trim() ?? "";
+            return _orders.Orders.Where(order => string.IsNullOrWhiteSpace(customer) || string.Equals(order.Customer, customer, StringComparison.OrdinalIgnoreCase)).Select(order => order.ProductModel);
+        }
+
+        private IEnumerable<string> GetOrderEditorColors()
+        {
+            var customer = _txtOrderCustomer?.Text?.Trim() ?? "";
+            var model = _txtOrderModel?.Text?.Trim() ?? "";
+            return _orders.Orders.Where(order =>
+                (string.IsNullOrWhiteSpace(customer) || string.Equals(order.Customer, customer, StringComparison.OrdinalIgnoreCase)) &&
+                (string.IsNullOrWhiteSpace(model) || string.Equals(order.ProductModel, model, StringComparison.OrdinalIgnoreCase))).Select(order => order.Color);
+        }
+
+        private IEnumerable<string> GetOrderEditorNumbers()
+        {
+            var customer = _txtOrderCustomer?.Text?.Trim() ?? "";
+            var model = _txtOrderModel?.Text?.Trim() ?? "";
+            var color = _txtOrderColor?.Text?.Trim() ?? "";
+            return _orders.Orders.Where(order =>
+                (string.IsNullOrWhiteSpace(customer) || string.Equals(order.Customer, customer, StringComparison.OrdinalIgnoreCase)) &&
+                (string.IsNullOrWhiteSpace(model) || string.Equals(order.ProductModel, model, StringComparison.OrdinalIgnoreCase)) &&
+                (string.IsNullOrWhiteSpace(color) || string.Equals(order.Color, color, StringComparison.OrdinalIgnoreCase))).Select(order => order.OrderNumber);
+        }
+
+        private void RefreshOrderEditorCascade(OrderFilterLevel level)
+        {
+            if (_loadingOrderEditor) return;
+            if (level <= OrderFilterLevel.Customer) FillEditableCombo(_txtOrderModel, GetOrderEditorModels());
+            if (level <= OrderFilterLevel.Model) FillEditableCombo(_txtOrderColor, GetOrderEditorColors());
+            if (level <= OrderFilterLevel.Color) FillOrderNumberSuggestions();
+            TryEnterOrderEditModeFromEditor();
+        }
+
+        private void FillEditableCombo(ComboBox combo, IEnumerable<string> values)
+        {
+            if (combo == null) return;
+            var text = combo.Text;
+            combo.Items.Clear();
+            foreach (var value in values.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, NaturalStringComparer.Instance)) combo.Items.Add(value);
+            combo.Text = text;
+        }
+
+        private void FillOrderNumberSuggestions()
+        {
+            if (_txtOrderNumber == null) return;
+            var text = _txtOrderNumber.Text;
+            var source = new AutoCompleteStringCollection();
+            source.AddRange(GetOrderEditorNumbers().Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, NaturalStringComparer.Instance).ToArray());
+            _txtOrderNumber.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+            _txtOrderNumber.AutoCompleteSource = AutoCompleteSource.CustomSource;
+            _txtOrderNumber.AutoCompleteCustomSource = source;
+            _txtOrderNumber.Text = text;
+        }
+
+        private void TryEnterOrderEditModeFromEditor()
+        {
+            if (_loadingOrderEditor || _editingOrder != null) return;
+            var order = _orders.Find(_txtOrderCustomer?.Text?.Trim(), _txtOrderModel?.Text?.Trim(), _txtOrderColor?.Text?.Trim(), _txtOrderNumber?.Text?.Trim());
+            if (order == null) return;
+            BuildOrderEditor(order);
         }
 
         private void BrowseOrderTemplate()
@@ -1229,6 +1354,9 @@ namespace BarTenderPrinter
                 };
                 card.FlatAppearance.BorderColor = selected ? Color.FromArgb(55, 115, 205) : Color.FromArgb(205, 210, 220);
                 card.Click += (s, e) => SelectOrderTemplateDraft((OrderTemplate)((Button)s).Tag);
+                var menu = new ContextMenuStrip();
+                menu.Items.Add("删除此模板", null, (s, e) => { SelectOrderTemplateDraft((OrderTemplate)card.Tag); RemoveSelectedOrderTemplateDraft(); });
+                card.ContextMenuStrip = menu;
                 _orderTemplateCards.Controls.Add(card);
             }
         }
@@ -1265,6 +1393,8 @@ namespace BarTenderPrinter
             { MessageBox.Show(this, "请先选择一个模板卡片。", "校验数据", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
             var settings = _selectedOrderTemplateDraft.Settings;
             var count = GetTemplateLocalData(settings).Count;
+            if (count == 0 && string.IsNullOrWhiteSpace(settings.LocalDataPath) && string.IsNullOrWhiteSpace(settings.LocalDataStoragePath))
+            { MessageBox.Show(this, "当前模板未选择校验数据文件，请先点击“选择校验数据”。", "校验数据管理", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
             var message = $"路径: {settings.LocalDataPath}\n快照: {settings.LocalDataStoragePath}\n列: {settings.LocalDataColumnName}\n绑定字段: {settings.LocalDataTargetField}\n数据量: {count}\n\n选择“是”替换校验数据，选择“否”清除当前模板校验数据。";
             var choice = MessageBox.Show(this, message, "校验数据管理", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
             if (choice == DialogResult.Yes) { SelectOrderValidationData(); return; }
@@ -1715,6 +1845,21 @@ namespace BarTenderPrinter
             UpdateOrderToggleAllState();
         }
 
+        private void InvertOrderDataSources()
+        {
+            if (_orderDataSourcesGrid == null) return;
+            if (!ValidateOrderDataSourceGrid()) { UpdateOrderToggleAllState(); return; }
+            foreach (DataGridViewRow row in _orderDataSourcesGrid.Rows)
+            {
+                if (row.IsNewRow) continue;
+                row.Cells["Enabled"].Value = !ToBoolean(row.Cells["Enabled"].Value);
+            }
+            if (!SaveSelectedOrderTemplateDraft()) { UpdateOrderToggleAllState(); MarkOrderEditorDirty(); return; }
+            RefreshOrderTemplateCards();
+            MarkOrderEditorDirty();
+            UpdateOrderToggleAllState();
+        }
+
         private void UpdateOrderToggleAllState()
         {
             if (_chkOrderToggleAllSources == null || _orderDataSourcesGrid == null) return;
@@ -1805,7 +1950,7 @@ namespace BarTenderPrinter
                     AutoStep = row.Cells["AutoStep"].Value,
                     LockedValue = row.Cells["LockedValue"].Value?.ToString() ?? ""
                 };
-                row.Cells[stepIndex] = new DataGridViewTextBoxCell { Value = "", Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
+                row.Cells[stepIndex] = new DataGridViewTextBoxCell { Value = 0, Style = new DataGridViewCellStyle { BackColor = SystemColors.Control } };
                 row.Cells[stepIndex].ReadOnly = true;
                 row.Cells["LockedValue"].Value = "";
             }
@@ -1813,7 +1958,8 @@ namespace BarTenderPrinter
             {
                 var savedState = row.Tag as OrderRowLockState;
                 if (row.Cells["AutoStep"].ReadOnly)
-                    row.Cells[_orderDataSourcesGrid.Columns["AutoStep"].Index] = new DataGridViewTextBoxCell { Value = savedState?.AutoStep ?? 1 };
+                    row.Cells[_orderDataSourcesGrid.Columns["AutoStep"].Index] = new DataGridViewTextBoxCell { Value = savedState?.AutoStep is null || savedState.AutoStep.ToString() == "0" ? 1 : savedState.AutoStep, Style = new DataGridViewCellStyle { BackColor = SystemColors.Window } };
+                row.Cells["AutoStep"].ReadOnly = false;
                 if (savedState != null) row.Cells["LockedValue"].Value = savedState.LockedValue;
                 row.Tag = null;
             }
