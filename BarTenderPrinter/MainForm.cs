@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.69";
+        private readonly string _version = "v5.7.70";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -123,6 +123,11 @@ namespace BarTenderPrinter
         private Panel _totalStatsCard;
         private Button _btnToggleLog;
         private Button _btnAbout;
+        private int _historyToolbarWidth;
+
+        private int ScaleUi(int value) => (int)Math.Round(value * Math.Max(1F, DeviceDpi / 96F));
+        private int SidebarCollapsedWidth => ScaleUi(52);
+        private int SidebarExpandedWidth => ScaleUi(196);
 
         public MainForm(string startupTemplatePath = null)
         {
@@ -137,13 +142,24 @@ namespace BarTenderPrinter
             _applicationState = _applicationStateManager.Load();
             Text = $"BarTender Printer {_version}";
             MiuiTheme.ApplyTheme(this);
-            DpiChanged += (s, e) => BeginInvoke((Action)(() =>
+            DpiChanged += (s, e) =>
             {
-                ApplyModernIcons(e.DeviceDpiNew);
-                MiuiTheme.StyleTabControl(tabBottom, e.DeviceDpiNew);
-                LayoutStatsCards();
-                RebuildPrintPageLayout();
-            }));
+                if (IsDisposed || Disposing || !IsHandleCreated) return;
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (IsDisposed || Disposing) return;
+                        ApplyModernIcons(e.DeviceDpiNew);
+                        MiuiTheme.StyleTabControl(tabBottom, e.DeviceDpiNew);
+                        LayoutStatsCards();
+                        LayoutModernShell();
+                        RebuildPrintPageLayout();
+                    }));
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
+            };
             FormClosed += (s, e) => DisposeModernImages();
             Load += MainForm_Load;
             Shown += MainForm_Shown;
@@ -162,6 +178,10 @@ namespace BarTenderPrinter
             inputPanel.Scroll += (s, e) => ClampInputPanelScroll();
             inputPanel.MouseWheel += (s, e) => BeginInvoke((Action)ClampInputPanelScroll);
             SizeChanged += (s, e) => { RebuildPrintPageLayout(); DockPreviewForm(); };
+            historyPanel.SizeChanged += (s, e) =>
+            {
+                if (_historyToolbarWidth != historyPanel.ClientSize.Width) LayoutHistoryToolbar();
+            };
             LocationChanged += (s, e) => DockPreviewForm();
             dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
             dgvHistory.CellMouseDown += DgvHistory_CellMouseDown;
@@ -238,7 +258,7 @@ namespace BarTenderPrinter
             _btnSidebarToggle.FlatAppearance.BorderSize = 0;
             _btnSidebarToggle.FlatAppearance.MouseOverBackColor = MiuiTheme.SidebarHover;
             _btnPrintPage.ForeColor = Color.White;
-            _btnOrderPage.ForeColor = Color.White;
+            _btnOrderPage.ForeColor = MiuiTheme.TextPrimary;
             _btnOrderPage.BackColor = MiuiTheme.Sidebar;
             _btnOrderPage.FlatAppearance.BorderSize = 0;
             _btnOrderPage.FlatAppearance.MouseOverBackColor = MiuiTheme.SidebarHover;
@@ -255,6 +275,74 @@ namespace BarTenderPrinter
             lblTodayStatus.ForeColor = MiuiTheme.TextSecondary;
             lblTotalStatus.ForeColor = MiuiTheme.TextSecondary;
             lblVersion.ForeColor = MiuiTheme.Primary;
+            LayoutModernShell();
+        }
+
+        private void LayoutModernShell()
+        {
+            var commandHeight = Math.Max(ScaleUi(36), titlePanel.ClientSize.Height - ScaleUi(16));
+            foreach (var button in new[] { btnExportLog, _btnToggleLog, _btnAbout })
+            {
+                if (button == null) continue;
+                button.Height = commandHeight;
+                button.Width = Math.Max(ScaleUi(92), button.GetPreferredSize(new Size(0, commandHeight)).Width + ScaleUi(10));
+                button.Margin = new Padding(ScaleUi(4), 0, ScaleUi(4), 0);
+            }
+            if (_chkPreview != null) _chkPreview.Padding = new Padding(ScaleUi(10), ScaleUi(9), ScaleUi(10), 0);
+            LayoutSidebar();
+            LayoutHistoryToolbar();
+        }
+
+        private void LayoutSidebar()
+        {
+            if (_navPanel == null) return;
+            var sidebarWidth = _sidebarExpanded ? SidebarExpandedWidth : SidebarCollapsedWidth;
+            _navPanel.Width = sidebarWidth;
+            _navPanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
+            _btnSidebarToggle.Bounds = new Rectangle(ScaleUi(8), ScaleUi(12), ScaleUi(36), ScaleUi(36));
+            var navWidth = Math.Max(ScaleUi(140), SidebarExpandedWidth - ScaleUi(24));
+            _btnPrintPage.Bounds = new Rectangle(ScaleUi(12), ScaleUi(60), navWidth, ScaleUi(44));
+            _btnOrderPage.Bounds = new Rectangle(ScaleUi(12), ScaleUi(112), navWidth, ScaleUi(44));
+            if (_printOrderPanel != null) _printOrderPanel.Left = sidebarWidth + ScaleUi(12);
+            if (_orderPagePanel != null)
+            {
+                _orderPagePanel.Left = sidebarWidth;
+                _orderPagePanel.Width = Math.Max(ScaleUi(320), ClientSize.Width - sidebarWidth);
+            }
+        }
+
+        private void LayoutHistoryToolbar()
+        {
+            if (historyPanel?.Controls.OfType<FlowLayoutPanel>().FirstOrDefault() is not FlowLayoutPanel toolbar) return;
+            _historyToolbarWidth = historyPanel.ClientSize.Width;
+            toolbar.Padding = new Padding(ScaleUi(4));
+            foreach (Control control in toolbar.Controls)
+            {
+                control.Margin = new Padding(ScaleUi(3));
+                if (control is Button button)
+                {
+                    button.AutoSize = true;
+                    button.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                    button.MinimumSize = new Size(ScaleUi(58), ScaleUi(32));
+                }
+                else if (control is Label label)
+                {
+                    label.AutoSize = true;
+                    label.MinimumSize = new Size(0, ScaleUi(28));
+                    label.TextAlign = ContentAlignment.MiddleLeft;
+                }
+                else if (control is TextBox or ComboBox)
+                {
+                    control.Height = Math.Max(control.PreferredSize.Height, ScaleUi(28));
+                }
+            }
+            if (_txtOperator != null) _txtOperator.Width = ScaleUi(96);
+            if (_cmbRole != null) _cmbRole.Width = ScaleUi(104);
+            if (_cmbHistoryStatus != null) _cmbHistoryStatus.Width = ScaleUi(124);
+            if (_txtHistoryDate != null) _txtHistoryDate.Width = ScaleUi(112);
+            if (txtSearch != null) txtSearch.Width = ScaleUi(190);
+            var preferredHeight = toolbar.GetPreferredSize(new Size(Math.Max(ScaleUi(320), historyPanel.ClientSize.Width), 0)).Height;
+            historyPanel.Height = Math.Max(ScaleUi(76), preferredHeight + ScaleUi(4));
         }
 
         private int WorkspaceBottom => groupBoxLog.Visible ? groupBoxLog.Top : statusStrip.Top;
@@ -263,9 +351,9 @@ namespace BarTenderPrinter
         {
             groupBoxLog.Visible = !groupBoxLog.Visible;
             _btnToggleLog.Text = groupBoxLog.Visible ? "收起日志" : "展开日志";
+            LayoutModernShell();
             RebuildPrintPageLayout();
-            if (_navPanel != null) _navPanel.Height = Math.Max(120, WorkspaceBottom - titlePanel.Bottom);
-            if (_orderPagePanel != null) _orderPagePanel.Height = Math.Max(120, WorkspaceBottom - titlePanel.Bottom);
+            if (_orderPagePanel != null) _orderPagePanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
         }
 
         private void ShowAboutDialog()
@@ -343,7 +431,7 @@ namespace BarTenderPrinter
         private void ConfigureWorkspaceCards()
         {
             _printOrderPanel.BackColor = MiuiTheme.CardBackground;
-            _printOrderPanel.Padding = new Padding(12, 8, 12, 8);
+            _printOrderPanel.Padding = new Padding(ScaleUi(12), ScaleUi(8), ScaleUi(12), ScaleUi(8));
             inputPanel.BackColor = MiuiTheme.CardBackground;
             inputPanel.BorderStyle = BorderStyle.None;
             historyPanel.BackColor = MiuiTheme.CardBackground;
@@ -426,9 +514,15 @@ namespace BarTenderPrinter
             ReplaceImage(btnReprintHistory, SvgIconRenderer.Render(AppIcon.Reprint, MiuiTheme.Primary, ScaleIcon(15, scale)));
             ReplaceImage(_btnToggleLog, SvgIconRenderer.Render(AppIcon.Log, MiuiTheme.TextSecondary, ScaleIcon(16, scale)));
             ReplaceImage(_btnAbout, SvgIconRenderer.Render(AppIcon.Info, MiuiTheme.TextSecondary, ScaleIcon(16, scale)));
-            ReplaceImage(_btnSidebarToggle, SvgIconRenderer.Render(AppIcon.Menu, Color.White, ScaleIcon(18, scale)));
-            ReplaceImage(_btnPrintPage, SvgIconRenderer.Render(AppIcon.Print, Color.White, ScaleIcon(17, scale)));
-            ReplaceImage(_btnOrderPage, SvgIconRenderer.Render(AppIcon.Orders, Color.White, ScaleIcon(17, scale)));
+            ReplaceImage(_btnSidebarToggle, SvgIconRenderer.Render(AppIcon.Menu, MiuiTheme.TextPrimary, ScaleIcon(18, scale)));
+            ApplyNavigationIcons(_orderPagePanel?.Visible == true, scale);
+        }
+
+        private void ApplyNavigationIcons(bool orderPageActive, float scale = 0F)
+        {
+            if (scale <= 0F) scale = Math.Max(1F, DeviceDpi / 96F);
+            ReplaceImage(_btnPrintPage, SvgIconRenderer.Render(AppIcon.Print, orderPageActive ? MiuiTheme.TextPrimary : Color.White, ScaleIcon(17, scale)));
+            ReplaceImage(_btnOrderPage, SvgIconRenderer.Render(AppIcon.Orders, orderPageActive ? Color.White : MiuiTheme.TextPrimary, ScaleIcon(17, scale)));
         }
 
         private static int ScaleIcon(int logicalSize, float scale)
@@ -441,8 +535,12 @@ namespace BarTenderPrinter
             if (button == null) { image?.Dispose(); return; }
             var previous = button.Image;
             button.Image = image;
+            button.Padding = new Padding(image == null ? ScaleUiStatic(button, 8) : ScaleUiStatic(button, 8), 0, ScaleUiStatic(button, 8), 0);
             previous?.Dispose();
         }
+
+        private static int ScaleUiStatic(Control control, int value) =>
+            (int)Math.Round(value * Math.Max(1F, control.DeviceDpi / 96F));
 
         private static void ReplaceImage(PictureBox picture, Image image)
         {
@@ -606,7 +704,7 @@ namespace BarTenderPrinter
         {
             var existingHistoryControls = historyPanel.Controls.Cast<Control>().ToArray();
             historyPanel.Controls.Clear();
-            historyPanel.Height = 58;
+            historyPanel.Height = ScaleUi(76);
             var historyToolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = true, Padding = new Padding(2) };
             historyToolbar.Controls.AddRange(existingHistoryControls);
             historyPanel.Controls.Add(historyToolbar);
@@ -705,8 +803,8 @@ namespace BarTenderPrinter
 
         private void InstallOrderSidebar()
         {
-            const int collapsedWidth = 44;
-            const int orderSelectorHeight = 58;
+            var collapsedWidth = SidebarCollapsedWidth;
+            var orderSelectorHeight = ScaleUi(64);
             var printControls = Controls.Cast<Control>()
                 .Where(control => control != titlePanel && control != groupBoxLog && control != statusStrip)
                 .ToDictionary(control => control, control => control.Bounds);
@@ -727,11 +825,11 @@ namespace BarTenderPrinter
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left,
                 BackColor = MiuiTheme.Sidebar
             };
-            _btnSidebarToggle = new Button { Text = "", Location = new Point(7, 12), Size = new Size(30, 30) };
+            _btnSidebarToggle = new Button { Text = "" };
             _btnSidebarToggle.Click += (s, e) => SetSidebarExpanded(!_sidebarExpanded);
             _btnSidebarToggle.Paint += SidebarToggle_Paint;
-            _btnPrintPage = new Button { Text = "打印页面", Location = new Point(12, 54), Size = new Size(120, 34), Visible = false };
-            _btnOrderPage = new Button { Text = "订单管理", Location = new Point(12, 96), Size = new Size(120, 34), Visible = false };
+            _btnPrintPage = new Button { Text = "打印页面", Visible = false };
+            _btnOrderPage = new Button { Text = "订单管理", Visible = false };
             _btnPrintPage.Click += (s, e) => { ShowPrintPage(); SetSidebarExpanded(false); };
             _btnOrderPage.Click += (s, e) => { ShowOrderManagementPage(); SetSidebarExpanded(false); };
             _navPanel.Controls.AddRange(new Control[] { _btnSidebarToggle, _btnPrintPage, _btnOrderPage });
@@ -740,26 +838,39 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(_btnSidebarToggle);
             MiuiTheme.StyleNavigationButton(_btnPrintPage, true);
             MiuiTheme.StyleNavigationButton(_btnOrderPage, false);
+            ApplyNavigationIcons(false);
+            LayoutSidebar();
 
             _printOrderPanel = new Panel
             {
-                Location = new Point(collapsedWidth + 10, titlePanel.Bottom + 4),
-                Size = new Size(ClientSize.Width - collapsedWidth - 20, 34),
+                Location = new Point(collapsedWidth + ScaleUi(10), titlePanel.Bottom + ScaleUi(4)),
+                Size = new Size(ClientSize.Width - collapsedWidth - ScaleUi(20), ScaleUi(34)),
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 BackColor = BackColor
             };
-            _printOrderPanel.Height = 78;
-            var printOrderLabel = new Label { Text = "当前订单：", Location = new Point(0, 8), Size = new Size(72, 20) };
+            _printOrderPanel.Height = ScaleUi(78);
+            var printOrderLabel = new Label
+            {
+                Text = "当前订单：",
+                Location = new Point(0, ScaleUi(8)),
+                Size = new Size(ScaleUi(72), ScaleUi(20))
+            };
             _cmbPrintCustomer = AddPrintOrderCombo("客户", 75, 4, 150);
             _cmbPrintModel = AddPrintOrderCombo("机型", 235, 4, 150);
             _cmbPrintColor = AddPrintOrderCombo("颜色", 395, 4, 150);
-            _cmbPrintOrderNumber = AddPrintOrderCombo("订单号", 555, 4, Math.Max(150, _printOrderPanel.Width - 555));
+            _cmbPrintOrderNumber = AddPrintOrderCombo("订单号", 555, 4, 150);
             _cmbPrintCustomer.SelectedIndexChanged += (s, e) => { if (!_loadingPrintOrderFilters) RefreshPrintOrderSelector(PrintOrderFilterLevel.Customer, false); };
             _cmbPrintModel.SelectedIndexChanged += (s, e) => { if (!_loadingPrintOrderFilters) RefreshPrintOrderSelector(PrintOrderFilterLevel.Model, false); };
             _cmbPrintColor.SelectedIndexChanged += (s, e) => { if (!_loadingPrintOrderFilters) RefreshPrintOrderSelector(PrintOrderFilterLevel.Color, false); };
             _cmbPrintOrderNumber.SelectedIndexChanged += (s, e) => ApplyPrintOrderSelection();
             _printOrderPanel.Controls.Add(printOrderLabel);
-            _lblEffectiveSummary = new Label { Text = "当前生效设置：未选择订单", Location = new Point(0, 58), Size = new Size(_printOrderPanel.Width, 18), AutoEllipsis = true };
+            _lblEffectiveSummary = new Label
+            {
+                Text = "当前生效设置：未选择订单",
+                Location = new Point(0, ScaleUi(58)),
+                Size = new Size(_printOrderPanel.Width, ScaleUi(18)),
+                AutoEllipsis = true
+            };
             _printOrderPanel.Controls.Add(_lblEffectiveSummary);
             Controls.Add(_printOrderPanel);
             MiuiTheme.StyleLabel(printOrderLabel);
@@ -777,12 +888,17 @@ namespace BarTenderPrinter
             {
                 Text = "包装 MES 订单",
                 Dock = DockStyle.Left,
-                Width = 250,
-                Padding = new Padding(12)
+                Width = ScaleUi(250),
+                Padding = new Padding(ScaleUi(12))
             };
-            _orderContentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), AutoScroll = true };
+            _orderContentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(ScaleUi(12)), AutoScroll = true };
             var y = 28;
-            _btnAddOrder = new Button { Text = "添加订单", Location = new Point(12, y), Size = new Size(200, 30) };
+            _btnAddOrder = new Button
+            {
+                Text = "添加订单",
+                Location = new Point(ScaleUi(12), ScaleUi(y)),
+                Size = new Size(ScaleUi(200), ScaleUi(30))
+            };
             _btnAddOrder.Click += (s, e) => ShowAddOrderPage();
             y += 46;
 
@@ -815,8 +931,18 @@ namespace BarTenderPrinter
 
         private ComboBox AddPrintOrderCombo(string labelText, int x, int y, int width)
         {
-            var label = new Label { Text = labelText + "：", Location = new Point(x, y), Size = new Size(width, 18) };
-            var combo = new ComboBox { Location = new Point(x, y + 22), Size = new Size(width, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            var label = new Label
+            {
+                Text = labelText + "：",
+                Location = new Point(ScaleUi(x), ScaleUi(y)),
+                Size = new Size(ScaleUi(width), ScaleUi(18))
+            };
+            var combo = new ComboBox
+            {
+                Location = new Point(ScaleUi(x), ScaleUi(y + 22)),
+                Size = new Size(ScaleUi(width), ScaleUi(25)),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
             _printOrderPanel.Controls.Add(label);
             _printOrderPanel.Controls.Add(combo);
             MiuiTheme.StyleLabel(label);
@@ -831,20 +957,34 @@ namespace BarTenderPrinter
             var left = _printOrderPanel.Left;
             var width = Math.Max(S(500), ClientSize.Width - left - S(10));
             _printOrderPanel.Width = width;
+            var orderCaption = _printOrderPanel.Controls.OfType<Label>().FirstOrDefault(item => item.Text == "当前订单：");
+            if (orderCaption != null) orderCaption.Bounds = new Rectangle(S(12), S(8), width - S(24), S(22));
             var comboHeight = Math.Max(_cmbPrintCustomer.PreferredHeight, S(25));
-            var comboWidth = Math.Max(S(120), (width - S(95)) / 4);
-            _cmbPrintCustomer.Size = new Size(comboWidth, comboHeight);
-            _cmbPrintModel.Left = _cmbPrintCustomer.Right + S(10);
-            _cmbPrintModel.Size = new Size(comboWidth, comboHeight);
-            _cmbPrintColor.Left = _cmbPrintModel.Right + S(10);
-            _cmbPrintColor.Size = new Size(comboWidth, comboHeight);
-            _cmbPrintOrderNumber.Left = _cmbPrintColor.Right + S(10);
-            _cmbPrintOrderNumber.Size = new Size(Math.Max(S(120), width - _cmbPrintOrderNumber.Left), comboHeight);
+            var comboGap = S(10);
+            var combos = new[] { _cmbPrintCustomer, _cmbPrintModel, _cmbPrintColor, _cmbPrintOrderNumber };
+            var columns = width >= S(760) ? 4 : 2;
+            var comboWidth = Math.Max(S(150), (width - S(24) - comboGap * (columns - 1)) / columns);
+            var firstComboTop = S(54);
+            for (var index = 0; index < combos.Length; index++)
+            {
+                var row = index / columns;
+                var column = index % columns;
+                combos[index].Bounds = new Rectangle(
+                    S(12) + column * (comboWidth + comboGap),
+                    firstComboTop + row * (comboHeight + S(34)),
+                    comboWidth,
+                    comboHeight);
+            }
             SetPrintOrderLabelBounds("客户：", _cmbPrintCustomer);
             SetPrintOrderLabelBounds("机型：", _cmbPrintModel);
             SetPrintOrderLabelBounds("颜色：", _cmbPrintColor);
             SetPrintOrderLabelBounds("订单号：", _cmbPrintOrderNumber);
-            if (_lblEffectiveSummary != null) _lblEffectiveSummary.Size = new Size(width, S(18));
+            if (_lblEffectiveSummary != null)
+            {
+                var comboBottom = combos.Max(combo => combo.Bottom);
+                _lblEffectiveSummary.Bounds = new Rectangle(S(12), comboBottom + S(10), width - S(24), S(22));
+                _printOrderPanel.Height = _lblEffectiveSummary.Bottom + S(10);
+            }
 
             cmbTemplate.Location = new Point(left, _printOrderPanel.Bottom + S(8));
             cmbTemplate.Size = new Size(width, Math.Max(cmbTemplate.PreferredHeight, S(25)));
@@ -871,15 +1011,18 @@ namespace BarTenderPrinter
             var label = _printOrderPanel.Controls.OfType<Label>().FirstOrDefault(item => item.Text == text);
             if (label == null) return;
             label.Left = combo.Left;
+            label.Top = combo.Top - ScaleUi(24);
             label.Width = combo.Width;
+            label.Height = ScaleUi(20);
         }
 
         private void SetSidebarExpanded(bool expanded)
         {
             _sidebarExpanded = expanded;
-            _navPanel.Width = expanded ? 150 : 44;
             _btnPrintPage.Visible = expanded;
             _btnOrderPage.Visible = expanded;
+            LayoutSidebar();
+            RebuildPrintPageLayout();
             _navPanel.BringToFront();
         }
 
@@ -887,7 +1030,7 @@ namespace BarTenderPrinter
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             if (_btnSidebarToggle.Image == null)
-                ReplaceImage(_btnSidebarToggle, SvgIconRenderer.Render(AppIcon.Menu, Color.White, ScaleIcon(18, Math.Max(1F, DeviceDpi / 96F))));
+                ReplaceImage(_btnSidebarToggle, SvgIconRenderer.Render(AppIcon.Menu, MiuiTheme.TextPrimary, ScaleIcon(18, Math.Max(1F, DeviceDpi / 96F))));
         }
 
         private void ShowPrintPage()
@@ -901,6 +1044,7 @@ namespace BarTenderPrinter
             if (_chkPreview != null) _chkPreview.Visible = true;
             MiuiTheme.StyleNavigationButton(_btnPrintPage, true);
             MiuiTheme.StyleNavigationButton(_btnOrderPage, false);
+            ApplyNavigationIcons(false);
         }
 
         private void ShowOrderManagementPage()
@@ -915,6 +1059,7 @@ namespace BarTenderPrinter
             _orderPagePanel.BringToFront();
             MiuiTheme.StyleNavigationButton(_btnOrderPage, true);
             MiuiTheme.StyleNavigationButton(_btnPrintPage, false);
+            ApplyNavigationIcons(true);
             if (_activeOrder != null)
             {
                 if (_orderDataSourcesGrid == null || (_editingOrder != null &&
@@ -1027,8 +1172,18 @@ namespace BarTenderPrinter
 
         private ComboBox AddOrderCombo(string labelText, int x, int y)
         {
-            var label = new Label { Text = labelText + "：", Location = new Point(x, y - 2), Size = new Size(200, 18) };
-            var combo = new ComboBox { Location = new Point(x, y + 22), Size = new Size(200, 25), DropDownStyle = ComboBoxStyle.DropDownList };
+            var label = new Label
+            {
+                Text = labelText + "：",
+                Location = new Point(ScaleUi(x), ScaleUi(y - 2)),
+                Size = new Size(ScaleUi(200), ScaleUi(18))
+            };
+            var combo = new ComboBox
+            {
+                Location = new Point(ScaleUi(x), ScaleUi(y + 22)),
+                Size = new Size(ScaleUi(200), ScaleUi(25)),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
             _orderPanel.Controls.Add(label);
             _orderPanel.Controls.Add(combo);
             MiuiTheme.StyleLabel(label);

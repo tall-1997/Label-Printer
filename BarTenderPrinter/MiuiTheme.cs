@@ -30,8 +30,8 @@ namespace BarTenderPrinter
         public static readonly Color Accent = Color.FromArgb(99, 102, 241);
         public static readonly Color Background = Color.FromArgb(244, 247, 251);
         public static readonly Color CardBackground = Color.White;
-        public static readonly Color Sidebar = Color.FromArgb(19, 31, 55);
-        public static readonly Color SidebarHover = Color.FromArgb(35, 52, 82);
+        public static readonly Color Sidebar = Color.FromArgb(248, 250, 252);
+        public static readonly Color SidebarHover = Color.FromArgb(235, 243, 255);
         public static readonly Color TextPrimary = Color.FromArgb(25, 35, 52);
         public static readonly Color TextSecondary = Color.FromArgb(100, 116, 139);
         public static readonly Color TextHint = Color.FromArgb(148, 163, 184);
@@ -89,17 +89,17 @@ namespace BarTenderPrinter
         public static void StyleNavigationButton(Button button, bool isActive)
         {
             button.BackColor = isActive ? Primary : Sidebar;
-            button.ForeColor = Color.White;
+            button.ForeColor = isActive ? Color.White : TextPrimary;
             button.FlatStyle = FlatStyle.Flat;
             button.FlatAppearance.BorderSize = 0;
             button.FlatAppearance.MouseOverBackColor = isActive ? PrimaryDark : SidebarHover;
-            button.FlatAppearance.MouseDownBackColor = PrimaryDark;
+            button.FlatAppearance.MouseDownBackColor = isActive ? PrimaryDark : PrimaryLight;
             button.Cursor = Cursors.Hand;
             button.Font = isActive ? ButtonBoldFont : ButtonFont;
             button.TextImageRelation = TextImageRelation.ImageBeforeText;
             button.ImageAlign = ContentAlignment.MiddleLeft;
-            button.TextAlign = ContentAlignment.MiddleCenter;
-            button.Padding = new Padding(8, 0, 8, 0);
+            button.TextAlign = ContentAlignment.MiddleLeft;
+            button.Padding = new Padding(12, 0, 10, 0);
             button.Resize -= RoundedControl_Resize;
             button.Resize += RoundedControl_Resize;
             ApplyRoundedRegion(button, 8);

@@ -153,7 +153,7 @@ namespace BarTenderPrinter
             this.lblConnection = new System.Windows.Forms.ToolStripStatusLabel { Text = "● 正在连接" };
             this.lblTodayStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "今日 0" };
             this.lblTotalStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "累计 0" };
-            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.69" };
+            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.70" };
             this.statusStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] { this.lblConnection, this.lblStatus, this.lblTodayStatus, this.lblTotalStatus, this.lblVersion });
             MiuiTheme.StyleStatusStrip(this.statusStrip);
 
@@ -184,8 +184,8 @@ namespace BarTenderPrinter
             this.Controls.Add(this.groupBoxLog);
             this.Controls.Add(this.statusStrip);
             this.Controls.Add(this.titlePanel);
-            this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 17F);
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F);
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.ClientSize = new System.Drawing.Size(1080, 900);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this.MinimumSize = new System.Drawing.Size(1080, 900);
