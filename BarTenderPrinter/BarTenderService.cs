@@ -169,20 +169,26 @@ namespace BarTenderPrinter
                 dynamic btFormat = null;
                 try
                 {
-                    btFormat = _btApp.Formats.Open(templatePath, false, "");
-                    var subStrings = btFormat.NamedSubStrings;
-                    var count = (int)subStrings.Count;
-                    for (int i = 1; i <= count; i++)
+                    btFormat = OpenFormat(templatePath);
+                    dynamic subStrings = null;
+                    try
                     {
-                        try
+                        subStrings = btFormat.NamedSubStrings;
+                        var count = (int)subStrings.Count;
+                        for (int i = 1; i <= count; i++)
                         {
-                            var sub = subStrings.Item(i);
-                            var name = (string)sub.Name;
-                            if (!string.IsNullOrEmpty(name))
-                                result.Add(name);
+                            dynamic sub = null;
+                            try
+                            {
+                                sub = subStrings.Item(i);
+                                var name = (string)sub.Name;
+                                if (!string.IsNullOrEmpty(name)) result.Add(name);
+                            }
+                            catch { }
+                            finally { ReleaseComObject(sub); }
                         }
-                        catch { }
                     }
+                    finally { ReleaseComObject(subStrings); }
                     CloseFormat(btFormat);
                 }
                 catch (Exception ex)
@@ -232,7 +238,7 @@ namespace BarTenderPrinter
             try
             {
                 LoggerService.Info("[诊断] 尝试打开模板...");
-                btFormat = _btApp.Formats.Open(templatePath, false, "");
+                btFormat = OpenFormat(templatePath);
                 LoggerService.Info("[诊断] 模板打开成功");
                 
                 // 4. 检查模板属性
@@ -249,21 +255,28 @@ namespace BarTenderPrinter
                 // 5. 检查数据源
                 try
                 {
-                    var subStrings = btFormat.NamedSubStrings;
-                    var count = (int)subStrings.Count;
-                    LoggerService.Info($"[诊断] 数据源数量: {count}");
-                    for (int i = 1; i <= Math.Min(count, 5); i++)
+                    dynamic subStrings = null;
+                    try
                     {
-                        try
+                        subStrings = btFormat.NamedSubStrings;
+                        var count = (int)subStrings.Count;
+                        LoggerService.Info($"[诊断] 数据源数量: {count}");
+                        for (int i = 1; i <= Math.Min(count, 5); i++)
                         {
-                            var sub = subStrings.Item(i);
-                            LoggerService.Info($"[诊断] 数据源 {i}: {sub.Name}");
-                        }
-                        catch (Exception ex)
-                        {
-                            LoggerService.Warn($"[诊断] 获取数据源 {i} 失败: {ex.Message}");
+                            dynamic sub = null;
+                            try
+                            {
+                                sub = subStrings.Item(i);
+                                LoggerService.Info($"[诊断] 数据源 {i}: {sub.Name}");
+                            }
+                            catch (Exception ex)
+                            {
+                                LoggerService.Warn($"[诊断] 获取数据源 {i} 失败: {ex.Message}");
+                            }
+                            finally { ReleaseComObject(sub); }
                         }
                     }
+                    finally { ReleaseComObject(subStrings); }
                 }
                 catch (Exception ex)
                 {
@@ -636,7 +649,7 @@ namespace BarTenderPrinter
             try
             {
                 LoggerService.Info($"打开模板: {templatePath}");
-                btFormat = _btApp.Formats.Open(templatePath, false, "");
+                btFormat = OpenFormat(templatePath);
                 LoggerService.Info("模板打开成功");
 
                 var missing = new List<string>();
@@ -667,13 +680,20 @@ namespace BarTenderPrinter
                     return new PrintResult(false, $"设置打印机失败: {ex.Message}", $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
                 }
 
-                try { btFormat.PrintSetup.IdenticalCopiesOfLabel = copies; LoggerService.Info($"份数: {copies}"); }
+                dynamic printSetup = null;
+                try
+                {
+                    printSetup = btFormat.PrintSetup;
+                    printSetup.IdenticalCopiesOfLabel = copies;
+                    LoggerService.Info($"份数: {copies}");
+                }
                 catch (Exception ex)
                 {
                     CloseFormat(btFormat);
                     if (IsComBusyError(ex)) throw;
                     return new PrintResult(false, $"设置份数失败: {ex.Message}", $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
                 }
+                finally { ReleaseComObject(printSetup); }
 
                 object printResult = btFormat.PrintOut(false, false);
                 if (printResult is bool boolResult && !boolResult)
@@ -710,23 +730,27 @@ namespace BarTenderPrinter
         private static List<string> GetNamedSubStringNames(dynamic btFormat)
         {
             var result = new List<string>();
+            dynamic subStrings = null;
             try
             {
-                var subStrings = btFormat.NamedSubStrings;
+                subStrings = btFormat.NamedSubStrings;
                 var count = (int)subStrings.Count;
                 for (int i = 1; i <= count; i++)
                 {
+                    dynamic sub = null;
                     try
                     {
-                        var sub = subStrings.Item(i);
+                        sub = subStrings.Item(i);
                         var name = (string)sub.Name;
                         if (!string.IsNullOrWhiteSpace(name) && !result.Contains(name, StringComparer.OrdinalIgnoreCase))
                             result.Add(name);
                     }
                     catch { }
+                    finally { ReleaseComObject(sub); }
                 }
             }
             catch { }
+            finally { ReleaseComObject(subStrings); }
             return result;
         }
 
@@ -742,10 +766,33 @@ namespace BarTenderPrinter
             _lastOperationTime = DateTime.Now;
         }
 
-        private void CloseFormat(dynamic btFormat)
+        private dynamic OpenFormat(string templatePath)
+        {
+            dynamic formats = null;
+            try
+            {
+                formats = _btApp.Formats;
+                return formats.Open(templatePath, false, "");
+            }
+            finally { ReleaseComObject(formats); }
+        }
+
+        private static void CloseFormat(dynamic btFormat)
         {
             if (btFormat == null) return;
             try { btFormat.Close(false); } catch { }
+            finally { ReleaseComObject(btFormat); }
+        }
+
+        private static void ReleaseComObject(object value)
+        {
+            if (value == null) return;
+            try
+            {
+                if (System.Runtime.InteropServices.Marshal.IsComObject(value))
+                    System.Runtime.InteropServices.Marshal.FinalReleaseComObject(value);
+            }
+            catch { }
         }
 
         public string[] GetAvailableTemplates(string directory)
@@ -778,7 +825,7 @@ namespace BarTenderPrinter
                 if (_btApp != null)
                 {
                     try { _btApp.Quit(0); } catch { }
-                    try { System.Runtime.InteropServices.Marshal.ReleaseComObject(_btApp); } catch { }
+                    ReleaseComObject(_btApp);
                     _btApp = null;
                 }
             }

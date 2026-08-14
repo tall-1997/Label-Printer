@@ -4,6 +4,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System;
 
 namespace BarTenderPrinter
 {
@@ -26,7 +27,9 @@ namespace BarTenderPrinter
             Load();
         }
 
-        public UserAccount DefaultAccount => _accounts.First(account => account.UserName == "superadmin");
+        public UserAccount DefaultAccount => _accounts.FirstOrDefault(account => account.UserName == "superadmin");
+        public Exception LoadError { get; private set; }
+        public string AccountFilePath => _path;
 
         public bool TryLogin(string userName, string password, out UserAccount account)
         {
@@ -41,15 +44,21 @@ namespace BarTenderPrinter
 
         private void Load()
         {
+            var fileExists = File.Exists(_path);
             try
             {
-                if (File.Exists(_path))
+                if (fileExists)
                     _accounts.AddRange(JsonSerializer.Deserialize<List<UserAccount>>(File.ReadAllText(_path)) ?? new List<UserAccount>());
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LoadError = ex;
+                LoggerService.Error("加载账户文件失败，原文件已保留", ex);
+                return;
+            }
             if (_accounts.All(account => !string.Equals(account.UserName, "superadmin", System.StringComparison.OrdinalIgnoreCase)))
                 _accounts.Add(new UserAccount { UserName = "superadmin", PasswordHash = HashPassword("admin"), Role = "Admin" });
-            Save();
+            if (!fileExists || _accounts.Count > 0) Save();
         }
 
         private void Save()

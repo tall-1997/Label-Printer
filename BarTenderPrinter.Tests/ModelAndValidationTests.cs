@@ -45,6 +45,52 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
+        public void UpdatingOrderKeepsStableIdentity()
+        {
+            var directory = CreateTempDirectory();
+            var manager = new OrderManager(Path.Combine(directory, "orders.json"));
+            var original = new PackagingOrder { Id = "stable-order", Customer = "A", ProductModel = "M1", Color = "Black", OrderNumber = "10" };
+            manager.Add(original);
+            var updated = new PackagingOrder { Id = original.Id, Customer = "A", ProductModel = "M2", Color = "White", OrderNumber = "20" };
+
+            manager.Add(updated, original.Key);
+
+            Assert.Single(manager.Orders);
+            Assert.Equal("stable-order", manager.Orders[0].OrderId);
+            Assert.Equal(updated.Key, manager.Orders[0].Key);
+        }
+
+        [Fact]
+        public void CorruptAccountFileIsPreserved()
+        {
+            var directory = CreateTempDirectory();
+            var path = Path.Combine(directory, "accounts.json");
+            const string corruptContent = "{invalid json";
+            File.WriteAllText(path, corruptContent);
+
+            var manager = new AccountManager(path);
+
+            Assert.NotNull(manager.LoadError);
+            Assert.Null(manager.DefaultAccount);
+            Assert.Equal(corruptContent, File.ReadAllText(path));
+        }
+
+        [Fact]
+        public void MissingAccountFileCreatesCompatibleAdministrator()
+        {
+            var directory = CreateTempDirectory();
+            var path = Path.Combine(directory, "accounts.json");
+
+            var manager = new AccountManager(path);
+
+            Assert.Null(manager.LoadError);
+            Assert.NotNull(manager.DefaultAccount);
+            Assert.True(manager.TryLogin("superadmin", "admin", out var account));
+            Assert.Equal("Admin", account.Role);
+            Assert.True(File.Exists(path));
+        }
+
+        [Fact]
         public void TemplateFieldCoverageReportsMissingValues()
         {
             var issues = ValidationService.FindTemplateFieldIssues(

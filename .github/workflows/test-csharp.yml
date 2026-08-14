@@ -2,6 +2,19 @@ name: Auto Test BarTender Printer
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'BarTenderPrinter/**'
+      - 'BarTenderPrinter.Tests/**'
+      - 'BarTenderPreviewHost/**'
+      - '.github/workflows/test-csharp.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'BarTenderPrinter/**'
+      - 'BarTenderPrinter.Tests/**'
+      - 'BarTenderPreviewHost/**'
+      - '.github/workflows/test-csharp.yml'
   release:
     types: [published]
 
@@ -16,6 +29,9 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      - name: Run unit tests
+        run: dotnet test BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release
 
       - name: Build
         run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish

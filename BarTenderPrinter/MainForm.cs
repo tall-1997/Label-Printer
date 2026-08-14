@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.74";
+        private readonly string _version = "v5.7.75";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -145,7 +145,6 @@ namespace BarTenderPrinter
             InitializeComponent();
             InstallP2Controls();
             InstallPreviewControl();
-            SilentLogin();
             InstallOrderSidebar();
             ConfigureModernShell();
             _configFile = AppPaths.ConfigFile;
@@ -177,6 +176,12 @@ namespace BarTenderPrinter
             Shown += MainForm_Shown;
             FormClosing += (s, e) =>
             {
+                if (_pendingPrintJobCount > 0)
+                {
+                    MessageBox.Show(this, "打印作业仍在处理中，请等待作业完成后退出。", "打印处理中", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    e.Cancel = true;
+                    return;
+                }
                 if (MessageBox.Show(this, "确定退出软件？", "退出确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                 { e.Cancel = true; return; }
                 if (!ConfirmOrderEditorChanges()) { e.Cancel = true; return; }
@@ -886,11 +891,6 @@ namespace BarTenderPrinter
             UpdateSession();
         }
 
-        private void SilentLogin()
-        {
-            ApplyAccount(_accountManager.DefaultAccount);
-        }
-
         private void ApplyAccount(UserAccount account)
         {
             if (account == null) return;
@@ -914,7 +914,7 @@ namespace BarTenderPrinter
                 var lblUser = new Label { Text = "账号：", Location = new Point(14, 18), Size = new Size(60, 22) };
                 var txtUser = new TextBox { Location = new Point(80, 15), Size = new Size(220, 25), Text = "superadmin" };
                 var lblPassword = new Label { Text = "密码：", Location = new Point(14, 55), Size = new Size(60, 22) };
-                var txtPassword = new TextBox { Location = new Point(80, 52), Size = new Size(220, 25), UseSystemPasswordChar = true, Text = "admin" };
+                var txtPassword = new TextBox { Location = new Point(80, 52), Size = new Size(220, 25), UseSystemPasswordChar = true };
                 var ok = new Button { Text = "登录", Location = new Point(145, 105), Size = new Size(70, 28), DialogResult = DialogResult.OK };
                 var cancel = new Button { Text = "取消", Location = new Point(230, 105), Size = new Size(70, 28), DialogResult = DialogResult.Cancel };
                 ok.Click += (s, e) =>
@@ -2548,14 +2548,7 @@ namespace BarTenderPrinter
                 var columnName = "单列";
                 if (cols > 1)
                 {
-                    selectedCol = -1;
-                    var evt = new System.Threading.ManualResetEvent(false);
-                    BeginInvoke((Action)(() =>
-                    {
-                        selectedCol = PromptForColumnSelection(headers, Path.GetFileName(path));
-                        evt.Set();
-                    }));
-                    evt.WaitOne();
+                    selectedCol = PromptForColumnSelectionFromWorker(headers, Path.GetFileName(path));
                     if (selectedCol < 0) return null;
                     startRow = 2;
                     columnName = headers[selectedCol];
@@ -2944,6 +2937,7 @@ namespace BarTenderPrinter
             { MessageBox.Show(this, $"已勾选锁定的数据源“{missingLockValue.Name}”必须填写输入值。", "订单设置", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             var savedOrder = new PackagingOrder
             {
+                Id = _editingOrder?.Id ?? Guid.NewGuid().ToString("N"),
                 Customer = input.Customer,
                 ProductModel = input.ProductModel,
                 Color = input.Color,
@@ -3098,6 +3092,10 @@ namespace BarTenderPrinter
                 _isInitializing = false;
 
                 RestoreApplicationStateControls();
+
+                if (_accountManager.LoadError != null)
+                    MessageBox.Show(this, $"账户文件无法读取，当前保持 Operator 权限。请由管理员恢复账户文件：\n{_accountManager.AccountFilePath}",
+                        "账户恢复", MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
                 AddLog("系统启动完成", "INFO");
             }
@@ -4182,15 +4180,7 @@ namespace BarTenderPrinter
                         var columnName = "单列";
                         if (cols > 1)
                         {
-                            var selectedCol = -1;
-                            var evt = new System.Threading.ManualResetEvent(false);
-                            BeginInvoke((Action)(() =>
-                            {
-                                selectedCol = PromptForColumnSelection(headers, Path.GetFileName(path));
-                                evt.Set();
-                            }));
-                            evt.WaitOne();
-                            colIdx = selectedCol;
+                            colIdx = PromptForColumnSelectionFromWorker(headers, Path.GetFileName(path));
                             if (colIdx < 0) { wb.Close(false); excel.Quit(); return; }
                             startRow = 2;
                             columnName = headers[colIdx];
@@ -4255,6 +4245,30 @@ namespace BarTenderPrinter
             MessageBox.Show(this, $"校验数据导入完成\n总行数：{data.Count}\n去重后：{data.Count}\n重复数：0\n空值数：0", "校验数据", MessageBoxButtons.OK, MessageBoxIcon.Information);
             AddLog($"加载 {sourceType}: {data.Count} 条, 列: {columnName}", "SUCCESS");
             SaveCurrentConfigurationState();
+        }
+
+        private int PromptForColumnSelectionFromWorker(List<string> columns, string fileName)
+        {
+            var selectedColumn = -1;
+            using (var completed = new System.Threading.ManualResetEventSlim(false))
+            {
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        try { selectedColumn = PromptForColumnSelection(columns, fileName); }
+                        finally { completed.Set(); }
+                    }));
+                }
+                catch (ObjectDisposedException) { return -1; }
+                catch (InvalidOperationException) { return -1; }
+                if (!completed.Wait(TimeSpan.FromMinutes(5)))
+                {
+                    LoggerService.Warn("等待 Excel 列选择超时，已取消导入。");
+                    return -1;
+                }
+            }
+            return selectedColumn;
         }
 
         private int PromptForColumnSelection(List<string> columns, string fileName)
@@ -4450,12 +4464,16 @@ namespace BarTenderPrinter
 
         private bool CanStartPrint()
         {
+            if (_pendingPrintJobCount > 0)
+            { MessageBox.Show(this, "上一打印作业仍在处理中，请等待完成。", "打印队列", MessageBoxButtons.OK, MessageBoxIcon.Information); return false; }
             if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath))
             { MessageBox.Show(this, "请先选择模板文件"); return false; }
             if (!_btService.IsConnected)
             { MessageBox.Show(this, "BarTender 未连接，请确认已安装 BarTender"); return false; }
             if (cmbPrinter.SelectedItem == null)
             { MessageBox.Show(this, "请选择打印机"); return false; }
+            if (_availablePrinters.Count > 0 && !_availablePrinters.Contains(cmbPrinter.SelectedItem.ToString()))
+            { MessageBox.Show(this, "当前打印机已不可用，请刷新打印机列表后重新选择。"); return false; }
             if (!_dataSources.Any(d => d.Enabled))
             { MessageBox.Show(this, "请配置数据源"); return false; }
             return true;
@@ -4474,6 +4492,8 @@ namespace BarTenderPrinter
 
         private void DoPrint()
         {
+            if (_pendingPrintJobCount > 0)
+            { MessageBox.Show(this, "上一打印作业仍在处理中，请等待完成。", "打印队列", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
             if (string.IsNullOrEmpty(_selectedTemplatePath) || !File.Exists(_selectedTemplatePath))
             { MessageBox.Show(this, "请先选择模板文件"); return; }
             if (!_btService.IsConnected)
@@ -4483,6 +4503,8 @@ namespace BarTenderPrinter
             }
             var printer = cmbPrinter.SelectedItem?.ToString();
             if (string.IsNullOrEmpty(printer)) { MessageBox.Show(this, "请选择打印机"); return; }
+            if (_availablePrinters.Count > 0 && !_availablePrinters.Contains(printer))
+            { MessageBox.Show(this, "当前打印机已不可用，请刷新打印机列表后重新选择。"); return; }
 
             var enabled = _dataSources.Where(d => d.Enabled).ToList();
             if (enabled.Count == 0) { MessageBox.Show(this, "请配置数据源"); return; }
@@ -4516,20 +4538,21 @@ namespace BarTenderPrinter
             var orderName = _activeOrder?.DisplayName ?? "";
             var orderId = _activeOrder?.OrderId ?? "";
             var templateFields = _activeOrderTemplate?.FieldSnapshot?.ToList() ?? new List<string>();
+            var sourceSnapshot = enabled.Select(CloneDataSource).ToList();
             AddPendingPrintValues(templateId, enabled, fieldValues);
             _pendingPrintJobCount++;
-            AdvanceSuccessfulPrintState(enabled);
+            SetPrintEnvironmentEnabled(false);
             SetStatus($"打印队列: {_pendingPrintJobCount}");
             AddLog($"打印作业已入队: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
             _ = ProcessQueuedPrintAsync(templateName, templatePath, templateId, fieldValues, printer, copies,
                 operatorName, templateVersion, orderName, orderId, templateFields,
-                enabled.Where(ShouldTrackPendingValue).Select(source => source.Field).ToList());
+                enabled.Where(ShouldTrackPendingValue).Select(source => source.Field).ToList(), sourceSnapshot);
         }
 
         private async Task ProcessQueuedPrintAsync(string templateName, string templatePath, string templateId,
             Dictionary<string, string> fieldValues, string printer, int copies, string operatorName,
             string templateVersion, string orderName, string orderId, List<string> templateFields,
-            List<string> pendingFields)
+            List<string> pendingFields, List<DataSourceItem> sourceSnapshot)
         {
             PrintResult result;
             try
@@ -4541,16 +4564,26 @@ namespace BarTenderPrinter
                 LoggerService.Error("打印失败", ex);
                 result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
             }
+            var historySaved = _printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
+                result.Success ? "PASS" : "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
+                orderName, orderId, templateFields);
             PostToUi(() =>
             {
                 RemovePendingPrintValues(templateId, pendingFields, fieldValues);
                 _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
                 if (result.Success)
                 {
+                    var currentSources = _dataSources.Where(source => source.Enabled).ToList();
+                    var contextMatches = string.Equals(orderId, _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
+                        string.Equals(templateId, GetCurrentTemplateId(), StringComparison.Ordinal) &&
+                        string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase) &&
+                        currentSources.Select(source => source.Field).SequenceEqual(sourceSnapshot.Select(source => source.Field), StringComparer.OrdinalIgnoreCase);
+                    if (contextMatches)
+                        AdvanceSuccessfulPrintState(currentSources, fieldValues);
+                    else
+                        AddLog("打印作业已提交，当前页面上下文已变化，跳过输入状态推进。", "WARNING");
                     AddLog("打印作业已提交", "SUCCESS");
-                    if (!_printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
-                        "PASS", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
-                        orderName, orderId, templateFields))
+                    if (!historySaved)
                     {
                         AddLog("打印作业已提交，但历史记录保存失败；输入状态已经推进。", "ERROR");
                     }
@@ -4558,11 +4591,10 @@ namespace BarTenderPrinter
                 else
                 {
                     AddLog($"打印提交失败: {result.ErrorMessage}", "ERROR");
-                    if (!_printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
-                        "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
-                        orderName, orderId, templateFields))
+                    if (!historySaved)
                         AddLog("失败打印历史记录保存失败。", "ERROR");
                 }
+                SetPrintEnvironmentEnabled(true);
                 if (_pendingPrintJobCount == 0 && _chkPreview?.Checked == true)
                 {
                     var previewValues = result.Success && string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)
@@ -4664,18 +4696,22 @@ namespace BarTenderPrinter
             return true;
         }
 
-        private void AdvanceSuccessfulPrintState(List<DataSourceItem> enabled)
+        private void AdvanceSuccessfulPrintState(List<DataSourceItem> enabled, Dictionary<string, string> fieldValues)
         {
             for (int i = 0; i < enabled.Count && i < _inputTextBoxes.Length; i++)
             {
+                fieldValues.TryGetValue(enabled[i].Field, out var printedValue);
+                printedValue ??= "";
                 if (enabled[i].LockAfterInput && !IsInputLocked(enabled[i]))
                 {
-                    enabled[i].LockedValue = _inputTextBoxes[i].Text.Trim();
+                    enabled[i].LockedValue = printedValue;
                     if (enabled[i].AutoIncrement)
                         enabled[i].AutoIncrementLocked = true;
                     else
                         enabled[i].IsLocked = true;
                 }
+                if (enabled[i].AutoIncrement)
+                    _inputTextBoxes[i].Text = printedValue;
             }
 
             AutoIncrementFields(enabled);
@@ -4981,6 +5017,13 @@ namespace BarTenderPrinter
             btnBrowseDir.Enabled = enabled;
             btnLoadConfig.Enabled = enabled;
             inputPanel.Enabled = enabled;
+            if (_cmbPrintCustomer != null) _cmbPrintCustomer.Enabled = enabled;
+            if (_cmbPrintModel != null) _cmbPrintModel.Enabled = enabled;
+            if (_cmbPrintColor != null) _cmbPrintColor.Enabled = enabled;
+            if (_cmbPrintOrderNumber != null) _cmbPrintOrderNumber.Enabled = enabled;
+            if (_btnSidebarToggle != null) _btnSidebarToggle.Enabled = enabled;
+            if (_btnOrderPage != null) _btnOrderPage.Enabled = enabled;
+            if (_btnPrintPage != null) _btnPrintPage.Enabled = enabled;
         }
 
         private List<PrintRecord> GetCurrentHistoryRecords(bool includeAllPages = false)
@@ -5528,6 +5571,7 @@ namespace BarTenderPrinter
         public List<DataSourceItem> SelectedSources { get; private set; }
         private readonly List<DataSourceRow> _rows = new List<DataSourceRow>();
         private Panel _scrollPanel;
+        private Panel _contentPanel;
         private CheckBox chkSelectAll;
 
         private class DataSourceRow
@@ -5560,8 +5604,10 @@ namespace BarTenderPrinter
             _lengthValidationEnabled = lengthValidationEnabled;
             _globalExpectedLength = globalExpectedLength;
             Text = "选择数据源 - 拖拽排序"; Size = new Size(980, 460);
-            FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false; MinimizeBox = false;
+            FormBorderStyle = FormBorderStyle.Sizable; StartPosition = FormStartPosition.CenterParent;
+            MaximizeBox = true; MinimizeBox = false;
+            MinimumSize = new Size(640, 360);
+            _contentPanel = new Panel { Dock = DockStyle.Fill, AutoScroll = true, AutoScrollMinSize = new Size(960, 410) };
 
             var lbl = new Label { Text = $"模板包含 {fields.Count} 个数据源，拖拽 ≡ 排序，勾选使用：", Location = new Point(10, 10), Size = new Size(940, 20) };
 
@@ -5654,13 +5700,24 @@ namespace BarTenderPrinter
             };
             var cancel = new Button { Text = "取消", Location = new Point(865, 365), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
 
-            Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrValidation, hdrAuto, hdrStep, hdrLock, hdrLockedValue, hdrLength, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
+            _contentPanel.Controls.AddRange(new Control[] { lbl, chkSelectAll, hdrGrip, hdrName, hdrValidation, hdrAuto, hdrStep, hdrLock, hdrLockedValue, hdrLength, _scrollPanel, infoLbl, btnSelectAll, btnSelectNone, ok, cancel });
+            Controls.Add(_contentPanel);
             AcceptButton = ok; CancelButton = cancel;
             MiuiTheme.ApplyTheme(this);
             MiuiTheme.StyleButton(btnSelectAll);
             MiuiTheme.StyleButton(btnSelectNone);
             MiuiTheme.StyleButton(ok, true);
             MiuiTheme.StyleButton(cancel);
+            Shown += (s, e) => ConstrainToWorkingArea();
+        }
+
+        private void ConstrainToWorkingArea()
+        {
+            var workingArea = Screen.FromControl(this).WorkingArea;
+            MinimumSize = new Size(Math.Min(MinimumSize.Width, workingArea.Width), Math.Min(MinimumSize.Height, workingArea.Height));
+            Size = new Size(Math.Min(Width, workingArea.Width), Math.Min(Height, workingArea.Height));
+            Left = Math.Max(workingArea.Left, Math.Min(Left, workingArea.Right - Width));
+            Top = Math.Max(workingArea.Top, Math.Min(Top, workingArea.Bottom - Height));
         }
 
         private void CreateRow(string field, bool checkedVal, string displayName, bool autoInc, int autoStep,

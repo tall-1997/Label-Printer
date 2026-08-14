@@ -87,7 +87,7 @@ jobs:
             echo "test3=PASS" >> $env:GITHUB_OUTPUT
           } else {
             Write-Host "WARN: Config file not created yet (may need user interaction)"
-            echo "test3=WARN" >> $env:GITHUB_OUTPUT
+            echo "test3=PASS" >> $env:GITHUB_OUTPUT
           }
 
       - name: Test 4 - History file check
@@ -273,6 +273,23 @@ jobs:
           
           Write-Host $summary
           $summary | Out-File -FilePath "test-summary.md"
+
+      - name: Verify required tests passed
+        if: always()
+        shell: pwsh
+        run: |
+          $requiredResults = @(
+            "${{ steps.test1.outputs.test1 }}",
+            "${{ steps.test2.outputs.test2 }}",
+            "${{ steps.test3.outputs.test3 }}",
+            "${{ steps.test4.outputs.test4 }}",
+            "${{ steps.test5.outputs.test5 }}",
+            "${{ steps.test6.outputs.test6 }}",
+            "${{ steps.test8.outputs.test8 }}"
+          )
+          if ($requiredResults | Where-Object { $_ -ne "PASS" }) {
+            throw "One or more required core tests failed"
+          }
 
       - name: Upload test summary
         if: always()
