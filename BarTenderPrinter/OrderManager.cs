@@ -37,6 +37,34 @@ namespace BarTenderPrinter
         private static string Normalize(string value) => (value ?? "").Trim();
     }
 
+    internal static class OrderCascadeService
+    {
+        public static string[] GetModels(IEnumerable<PackagingOrder> orders, string customer) =>
+            Select(orders, order => Matches(order.Customer, customer), order => order.ProductModel);
+
+        public static string[] GetColors(IEnumerable<PackagingOrder> orders, string customer, string productModel) =>
+            Select(orders, order => Matches(order.Customer, customer) && Matches(order.ProductModel, productModel), order => order.Color);
+
+        public static string[] GetOrderNumbers(IEnumerable<PackagingOrder> orders, string customer, string productModel, string color) =>
+            Select(orders, order => Matches(order.Customer, customer) && Matches(order.ProductModel, productModel) && Matches(order.Color, color), order => order.OrderNumber);
+
+        public static bool Contains(IEnumerable<string> candidates, string value) =>
+            !string.IsNullOrWhiteSpace(value) && (candidates ?? Array.Empty<string>())
+                .Any(candidate => string.Equals(candidate, value.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        private static bool Matches(string actual, string expected) =>
+            string.IsNullOrWhiteSpace(expected) || string.Equals(actual?.Trim(), expected.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        private static string[] Select(IEnumerable<PackagingOrder> orders, Func<PackagingOrder, bool> predicate, Func<PackagingOrder, string> selector) =>
+            (orders ?? Array.Empty<PackagingOrder>())
+                .Where(order => order != null && predicate(order))
+                .Select(selector)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(value => value, NaturalStringComparer.Instance)
+                .ToArray();
+    }
+
     public class OrderTemplate
     {
         public int SchemaVersion { get; set; } = 2;

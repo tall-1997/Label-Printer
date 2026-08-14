@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.73";
+        private readonly string _version = "v5.7.74";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -80,6 +80,8 @@ namespace BarTenderPrinter
         private CheckBox _chkOrderDuplicateValidation;
         private CheckBox _chkOrderLengthValidation;
         private NumericUpDown _numOrderGlobalLength;
+        private Button _btnSelectOrderValidationData;
+        private Button _btnManageOrderValidationData;
         private Label _lblOrderLocalData;
         private DataGridView _orderDataSourcesGrid;
         private readonly List<OrderTemplate> _orderTemplateDrafts = new List<OrderTemplate>();
@@ -108,6 +110,7 @@ namespace BarTenderPrinter
         private readonly Dictionary<string, int> _historyColumnWidths = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private readonly UserSession _session = new UserSession();
         private readonly AccountManager _accountManager = new AccountManager();
+        private UserAccount _currentAccount;
         private readonly Dictionary<string, int> _pendingPrintValues = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private CheckBox _chkPreview;
         private PreviewForm _previewForm;
@@ -258,9 +261,9 @@ namespace BarTenderPrinter
             titlePanel.Controls.Add(_btnToggleLog);
             titlePanel.Controls.SetChildIndex(_btnAbout, 0);
             titlePanel.Controls.SetChildIndex(_btnToggleLog, 0);
-            _btnSidebarToggle.Dock = DockStyle.Right;
             titlePanel.Controls.Add(_btnSidebarToggle);
-            titlePanel.Controls.SetChildIndex(_btnSidebarToggle, 0);
+            _btnSidebarToggle.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            _btnSidebarToggle.BringToFront();
             MiuiTheme.StyleButton(_btnAbout);
             MiuiTheme.StyleButton(_btnToggleLog);
 
@@ -311,11 +314,17 @@ namespace BarTenderPrinter
             _toolTips.SetToolTip(btnExportLog, "导出日志");
             _toolTips.SetToolTip(_btnToggleLog, groupBoxLog.Visible ? "收起日志" : "展开日志");
             _toolTips.SetToolTip(_btnAbout, "关于");
-            foreach (var button in new[] { btnExportLog, _btnToggleLog, _btnAbout, _btnSidebarToggle })
+            _toolTips.SetToolTip(_btnSidebarToggle, _sidebarExpanded ? "收起侧栏" : "展开侧栏");
+            _btnSidebarToggle?.SetBounds(ScaleUi(8), ScaleUi(8), ScaleUi(44), commandHeight);
+            if (_brandIcon != null) _brandIcon.Left = ScaleUi(60);
+            titleLabel.Left = ScaleUi(102);
+            if (_authorLabel != null) _authorLabel.Left = titleLabel.Left;
+            if (_versionBadge != null) _versionBadge.Left = titleLabel.Right + ScaleUi(8);
+            foreach (var button in new[] { btnExportLog, _btnToggleLog, _btnAbout })
             {
                 if (button == null) continue;
                 button.Height = commandHeight;
-                button.Width = compact || button == _btnSidebarToggle
+                button.Width = compact
                     ? ScaleUi(44)
                     : Math.Max(ScaleUi(92), button.GetPreferredSize(new Size(0, commandHeight)).Width + ScaleUi(10));
                 button.Margin = new Padding(ScaleUi(4), 0, ScaleUi(4), 0);
@@ -352,9 +361,10 @@ namespace BarTenderPrinter
             {
                 if (control is Button button)
                 {
-                    button.AutoSize = true;
-                    button.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-                    button.MinimumSize = new Size(ScaleUi(58), ScaleUi(32));
+                    button.AutoSize = false;
+                    var textWidth = TextRenderer.MeasureText(button.Text, button.Font, Size.Empty, TextFormatFlags.NoPadding).Width;
+                    var imageWidth = button.Image == null ? 0 : button.Image.Width + ScaleUi(6);
+                    button.Size = new Size(Math.Max(ScaleUi(58), textWidth + imageWidth + ScaleUi(24)), ScaleUi(32));
                 }
                 else if (control is Label label)
                 {
@@ -554,21 +564,35 @@ namespace BarTenderPrinter
                 }
             }
             ReplaceImage(btnExportLog, SvgIconRenderer.Render(AppIcon.Export, MiuiTheme.Primary, ScaleIcon(18, scale)));
-            ReplaceImage(btnPrint, SvgIconRenderer.Render(AppIcon.Print, Color.White, ScaleIcon(19, scale)));
-            btnPrint.TextImageRelation = TextImageRelation.ImageBeforeText;
-            btnPrint.ImageAlign = ContentAlignment.MiddleCenter;
-            btnPrint.TextAlign = ContentAlignment.MiddleCenter;
-            btnPrint.Padding = new Padding(ScaleUi(8), 0, ScaleUi(8), 0);
+            ApplyCenteredPrintButtonContent(scale);
             ReplaceImage(btnRefreshPrinter, SvgIconRenderer.Render(AppIcon.Refresh, MiuiTheme.TextSecondary, ScaleIcon(16, scale)));
-            ReplaceImage(btnClearSearch, SvgIconRenderer.Render(AppIcon.Clear, MiuiTheme.TextSecondary, ScaleIcon(15, scale)));
-            ReplaceImage(btnClearHistory, SvgIconRenderer.Render(AppIcon.Clear, MiuiTheme.Error, ScaleIcon(15, scale)));
-            ReplaceImage(btnExportHistory, SvgIconRenderer.Render(AppIcon.Export, MiuiTheme.TextSecondary, ScaleIcon(15, scale)));
-            ReplaceImage(btnImportHistory, SvgIconRenderer.Render(AppIcon.Import, MiuiTheme.TextSecondary, ScaleIcon(15, scale)));
-            ReplaceImage(btnReprintHistory, SvgIconRenderer.Render(AppIcon.Reprint, MiuiTheme.Primary, ScaleIcon(15, scale)));
             ReplaceImage(_btnToggleLog, SvgIconRenderer.Render(AppIcon.Log, MiuiTheme.TextSecondary, ScaleIcon(16, scale)));
             ReplaceImage(_btnAbout, SvgIconRenderer.Render(AppIcon.Info, MiuiTheme.TextSecondary, ScaleIcon(16, scale)));
             ReplaceImage(_btnSidebarToggle, SvgIconRenderer.Render(AppIcon.Menu, MiuiTheme.TextPrimary, ScaleIcon(18, scale)));
             ApplyNavigationIcons(_orderPagePanel?.Visible == true, scale);
+        }
+
+        private void ApplyCenteredPrintButtonContent(float scale)
+        {
+            const string text = "打印";
+            using var icon = SvgIconRenderer.Render(AppIcon.Print, Color.White, ScaleIcon(19, scale));
+            var textSize = TextRenderer.MeasureText(text, btnPrint.Font, Size.Empty, TextFormatFlags.NoPadding);
+            var gap = ScaleIcon(7, scale);
+            var content = new Bitmap(icon.Width + gap + textSize.Width + 2, Math.Max(icon.Height, textSize.Height) + 2);
+            using (var graphics = Graphics.FromImage(content))
+            {
+                graphics.Clear(Color.Transparent);
+                graphics.DrawImageUnscaled(icon, 0, (content.Height - icon.Height) / 2);
+                TextRenderer.DrawText(graphics, text, btnPrint.Font,
+                    new Rectangle(icon.Width + gap, 0, textSize.Width + 2, content.Height), Color.White,
+                    TextFormatFlags.NoPadding | TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            }
+            btnPrint.Text = string.Empty;
+            btnPrint.AccessibleName = text;
+            btnPrint.ImageAlign = ContentAlignment.MiddleCenter;
+            btnPrint.TextImageRelation = TextImageRelation.Overlay;
+            ReplaceImage(btnPrint, content);
+            btnPrint.Padding = Padding.Empty;
         }
 
         private void ApplyNavigationIcons(bool orderPageActive, float scale = 0F)
@@ -826,7 +850,7 @@ namespace BarTenderPrinter
             var existingHistoryControls = historyPanel.Controls.Cast<Control>().ToArray();
             historyPanel.Controls.Clear();
             historyPanel.Height = ScaleUi(76);
-            var historyToolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = true, Padding = new Padding(2) };
+            var historyToolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = false, Padding = new Padding(2) };
             historyToolbar.Controls.AddRange(existingHistoryControls);
             historyPanel.Controls.Add(historyToolbar);
             _txtOperator = new TextBox { Location = new Point(695, 2), Size = new Size(80, 25), Text = Environment.UserName ?? "" };
@@ -834,7 +858,7 @@ namespace BarTenderPrinter
             _cmbRole = new ComboBox { Location = new Point(780, 2), Size = new Size(85, 25), DropDownStyle = ComboBoxStyle.DropDownList };
             _cmbRole.Items.AddRange(new object[] { "Admin", "Supervisor", "Operator" });
             _cmbRole.SelectedIndex = 0;
-            _cmbRole.SelectedIndexChanged += (s, e) => UpdateSession();
+            _cmbRole.Enabled = false;
             _txtOperator.TextChanged += (s, e) => UpdateSession();
             _btnLogin = new Button { Text = "登录", Location = new Point(870, 1), Size = new Size(50, 24) };
             _btnLogin.Click += (s, e) => ShowLoginDialog();
@@ -857,6 +881,8 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(_btnNextHistoryPage);
             MiuiTheme.StyleButton(_btnLogin);
             MiuiTheme.StyleTextBox(_txtHistoryDate);
+            foreach (var button in new[] { btnClearSearch, btnClearHistory, btnExportHistory, btnImportHistory, btnReprintHistory })
+                MiuiTheme.StyleButton(button);
             UpdateSession();
         }
 
@@ -868,6 +894,7 @@ namespace BarTenderPrinter
         private void ApplyAccount(UserAccount account)
         {
             if (account == null) return;
+            _currentAccount = account;
             _txtOperator.Text = account.UserName;
             _cmbRole.SelectedItem = account.Role;
             UpdateSession();
@@ -911,7 +938,7 @@ namespace BarTenderPrinter
         private void UpdateSession()
         {
             _session.OperatorName = GetOperatorName();
-            _session.Role = _cmbRole?.SelectedItem?.ToString() ?? "Admin";
+            _session.Role = _currentAccount?.Role ?? "Operator";
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -948,12 +975,11 @@ namespace BarTenderPrinter
             };
             _btnSidebarToggle = new Button { Text = "" };
             _btnSidebarToggle.Click += (s, e) => SetSidebarExpanded(!_sidebarExpanded);
-            _btnSidebarToggle.Paint += SidebarToggle_Paint;
             _btnPrintPage = new Button { Text = "打印页面", Visible = false };
             _btnOrderPage = new Button { Text = "订单管理", Visible = false };
             _btnPrintPage.Click += (s, e) => { ShowPrintPage(); SetSidebarExpanded(false); };
             _btnOrderPage.Click += (s, e) => { ShowOrderManagementPage(); SetSidebarExpanded(false); };
-            _navPanel.Controls.AddRange(new Control[] { _btnSidebarToggle, _btnPrintPage, _btnOrderPage });
+            _navPanel.Controls.AddRange(new Control[] { _btnPrintPage, _btnOrderPage });
             Controls.Add(_navPanel);
             _navPanel.BringToFront();
             MiuiTheme.StyleButton(_btnSidebarToggle);
@@ -1151,14 +1177,8 @@ namespace BarTenderPrinter
             LayoutSidebar();
             RebuildPrintPageLayout();
             LayoutOrderEditor();
+            _toolTips.SetToolTip(_btnSidebarToggle, expanded ? "收起侧栏" : "展开侧栏");
             if (expanded) _navPanel.BringToFront();
-        }
-
-        private void SidebarToggle_Paint(object sender, PaintEventArgs e)
-        {
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            if (_btnSidebarToggle.Image == null)
-                ReplaceImage(_btnSidebarToggle, SvgIconRenderer.Render(AppIcon.Menu, MiuiTheme.TextPrimary, ScaleIcon(18, Math.Max(1F, DeviceDpi / 96F))));
         }
 
         private void ShowPrintPage()
@@ -1639,7 +1659,11 @@ namespace BarTenderPrinter
         private void BuildOrderEditor(PackagingOrder order)
         {
             _loadingOrderEditor = true;
-            _orderContentPanel.Controls.Clear();
+            foreach (var control in _orderContentPanel.Controls.Cast<Control>().ToArray())
+            {
+                _orderContentPanel.Controls.Remove(control);
+                control.Dispose();
+            }
             _orderContentPanel.BackColor = MiuiTheme.Background;
             _orderTemplateDrafts.Clear();
             _selectedOrderTemplateDraft = null;
@@ -1663,7 +1687,6 @@ namespace BarTenderPrinter
                 _txtOrderModel.Text = order.ProductModel;
                 _txtOrderColor.Text = order.Color;
                 _txtOrderNumber.Text = order.OrderNumber;
-                _txtOrderNumber.Enabled = false;
                 _orderTemplateDrafts.AddRange(_orderEditor.CloneTemplates(order.Templates));
             }
 
@@ -1728,18 +1751,18 @@ namespace BarTenderPrinter
             _chkOrderLengthValidation = new CheckBox { Text = "长度校验", Location = new Point(240, 397), Size = new Size(90, 22) };
             var globalLengthLabel = new Label { Text = "全局长度：", Location = new Point(340, 400), Size = new Size(75, 18) };
             _numOrderGlobalLength = new NumericUpDown { Location = new Point(415, 395), Size = new Size(70, 25), Minimum = 0, Maximum = 512 };
-            var chooseValidationData = new Button { Text = "选择校验数据", Location = new Point(500, 393), Size = new Size(100, 28) };
-            chooseValidationData.Click += (s, e) => SelectOrderValidationData();
-            var manageValidationData = new Button { Text = "管理校验", Location = new Point(605, 393), Size = new Size(80, 28) };
-            manageValidationData.Click += (s, e) => ManageOrderValidationData();
+            _btnSelectOrderValidationData = new Button { Text = "选择校验数据", Location = new Point(500, 393), Size = new Size(100, 28) };
+            _btnSelectOrderValidationData.Click += (s, e) => SelectOrderValidationData();
+            _btnManageOrderValidationData = new Button { Text = "管理校验", Location = new Point(605, 393), Size = new Size(80, 28) };
+            _btnManageOrderValidationData.Click += (s, e) => ManageOrderValidationData();
             _lblOrderLocalData = new Label { Text = "校验数据：未配置", Location = new Point(695, 400), Size = new Size(Math.Max(180, contentWidth - 685), 18), AutoEllipsis = true };
             _orderContentPanel.Controls.Add(_chkOrderInputValidation);
             _orderContentPanel.Controls.Add(_chkOrderDuplicateValidation);
             _orderContentPanel.Controls.Add(_chkOrderLengthValidation);
             _orderContentPanel.Controls.Add(globalLengthLabel);
             _orderContentPanel.Controls.Add(_numOrderGlobalLength);
-            _orderContentPanel.Controls.Add(chooseValidationData);
-            _orderContentPanel.Controls.Add(manageValidationData);
+            _orderContentPanel.Controls.Add(_btnSelectOrderValidationData);
+            _orderContentPanel.Controls.Add(_btnManageOrderValidationData);
             _orderContentPanel.Controls.Add(_lblOrderLocalData);
             MiuiTheme.StyleLabel(globalLengthLabel);
             MiuiTheme.StyleLabel(_lblOrderLocalData, true);
@@ -1747,10 +1770,15 @@ namespace BarTenderPrinter
             MiuiTheme.StyleCheckBox(_chkOrderDuplicateValidation);
             MiuiTheme.StyleCheckBox(_chkOrderLengthValidation);
             MiuiTheme.StyleNumericUpDown(_numOrderGlobalLength);
-            MiuiTheme.StyleButton(chooseValidationData);
-            MiuiTheme.StyleButton(manageValidationData);
+            MiuiTheme.StyleButton(_btnSelectOrderValidationData);
+            MiuiTheme.StyleButton(_btnManageOrderValidationData);
+            _btnSelectOrderValidationData.Width = Math.Max(100, GetButtonContentWidth(_btnSelectOrderValidationData));
+            _btnManageOrderValidationData.Left = _btnSelectOrderValidationData.Right + 5;
+            _btnManageOrderValidationData.Width = Math.Max(88, GetButtonContentWidth(_btnManageOrderValidationData));
+            _lblOrderLocalData.Left = _btnManageOrderValidationData.Right + 10;
+            _lblOrderLocalData.Width = Math.Max(160, contentWidth - _lblOrderLocalData.Left + 10);
             AlignControlCenters(_chkOrderInputValidation, _chkOrderDuplicateValidation, _chkOrderLengthValidation,
-                globalLengthLabel, _numOrderGlobalLength, chooseValidationData, manageValidationData, _lblOrderLocalData);
+                globalLengthLabel, _numOrderGlobalLength, _btnSelectOrderValidationData, _btnManageOrderValidationData, _lblOrderLocalData);
 
             var dataSourceTitle = new Label
             {
@@ -1829,6 +1857,7 @@ namespace BarTenderPrinter
             _chkOrderLengthValidation.CheckedChanged += (s, e) => { UpdateOrderValidationControls(); ApplyOrderGlobalLengthToGrid(true); MarkOrderEditorDirty(); };
             _numOrderGlobalLength.ValueChanged += (s, e) => { ApplyOrderGlobalLengthToGrid(true); MarkOrderEditorDirty(); };
             UpdateOrderValidationControls();
+            RefreshOrderEditorCascadeCore(OrderFilterLevel.All);
 
             ScaleOrderEditorControls(editorScale);
 
@@ -1889,6 +1918,14 @@ namespace BarTenderPrinter
                 }
 
                 if (_orderTemplateCards != null) _orderTemplateCards.Width = contentWidth;
+                if (_btnSelectOrderValidationData != null && _btnManageOrderValidationData != null && _lblOrderLocalData != null)
+                {
+                    _btnSelectOrderValidationData.Width = Math.Max(ScaleUi(100), GetButtonContentWidth(_btnSelectOrderValidationData));
+                    _btnManageOrderValidationData.Left = _btnSelectOrderValidationData.Right + ScaleUi(5);
+                    _btnManageOrderValidationData.Width = Math.Max(ScaleUi(88), GetButtonContentWidth(_btnManageOrderValidationData));
+                    _lblOrderLocalData.Left = _btnManageOrderValidationData.Right + ScaleUi(10);
+                    _lblOrderLocalData.Width = Math.Max(ScaleUi(160), padding + contentWidth - _lblOrderLocalData.Left);
+                }
                 _orderDataSourcesGrid.Width = contentWidth;
                 var minimumGridHeight = ScaleUi(285);
                 var availableGridHeight = _orderContentPanel.ClientSize.Height - _orderDataSourcesGrid.Top - ScaleUi(12);
@@ -1918,6 +1955,13 @@ namespace BarTenderPrinter
             }
         }
 
+        private static int GetButtonContentWidth(Button button)
+        {
+            var textWidth = TextRenderer.MeasureText(button.Text, button.Font, Size.Empty, TextFormatFlags.NoPadding).Width;
+            var imageWidth = button.Image == null ? 0 : button.Image.Width + ScaleUiStatic(button, 6);
+            return textWidth + imageWidth + ScaleUiStatic(button, 24);
+        }
+
         private TextBox AddOrderPageTextBox(string labelText, int x, int y, int width = 200)
         {
             var label = new Label { Text = labelText + "：", Location = new Point(x, y), Size = new Size(width, 18) };
@@ -1944,46 +1988,44 @@ namespace BarTenderPrinter
 
         private IEnumerable<string> GetOrderEditorModels()
         {
-            var customer = _txtOrderCustomer?.Text?.Trim() ?? "";
-            return _orders.Orders.Where(order => string.IsNullOrWhiteSpace(customer) || string.Equals(order.Customer, customer, StringComparison.OrdinalIgnoreCase)).Select(order => order.ProductModel);
+            return OrderCascadeService.GetModels(_orders.Orders, _txtOrderCustomer?.Text);
         }
 
         private IEnumerable<string> GetOrderEditorColors()
         {
-            var customer = _txtOrderCustomer?.Text?.Trim() ?? "";
-            var model = _txtOrderModel?.Text?.Trim() ?? "";
-            return _orders.Orders.Where(order =>
-                (string.IsNullOrWhiteSpace(customer) || string.Equals(order.Customer, customer, StringComparison.OrdinalIgnoreCase)) &&
-                (string.IsNullOrWhiteSpace(model) || string.Equals(order.ProductModel, model, StringComparison.OrdinalIgnoreCase))).Select(order => order.Color);
+            return OrderCascadeService.GetColors(_orders.Orders, _txtOrderCustomer?.Text, _txtOrderModel?.Text);
         }
 
         private IEnumerable<string> GetOrderEditorNumbers()
         {
-            var customer = _txtOrderCustomer?.Text?.Trim() ?? "";
-            var model = _txtOrderModel?.Text?.Trim() ?? "";
-            var color = _txtOrderColor?.Text?.Trim() ?? "";
-            return _orders.Orders.Where(order =>
-                (string.IsNullOrWhiteSpace(customer) || string.Equals(order.Customer, customer, StringComparison.OrdinalIgnoreCase)) &&
-                (string.IsNullOrWhiteSpace(model) || string.Equals(order.ProductModel, model, StringComparison.OrdinalIgnoreCase)) &&
-                (string.IsNullOrWhiteSpace(color) || string.Equals(order.Color, color, StringComparison.OrdinalIgnoreCase))).Select(order => order.OrderNumber);
+            return OrderCascadeService.GetOrderNumbers(_orders.Orders, _txtOrderCustomer?.Text, _txtOrderModel?.Text, _txtOrderColor?.Text);
         }
 
         private void RefreshOrderEditorCascade(OrderFilterLevel level)
         {
             if (_loadingOrderEditor) return;
+            var wasLoading = _loadingOrderEditor;
+            _loadingOrderEditor = true;
+            try { RefreshOrderEditorCascadeCore(level); }
+            finally { _loadingOrderEditor = wasLoading; }
+            TryEnterOrderEditModeFromEditor();
+        }
+
+        private void RefreshOrderEditorCascadeCore(OrderFilterLevel level)
+        {
             if (level <= OrderFilterLevel.Customer) FillEditableCombo(_txtOrderModel, GetOrderEditorModels());
             if (level <= OrderFilterLevel.Model) FillEditableCombo(_txtOrderColor, GetOrderEditorColors());
             if (level <= OrderFilterLevel.Color) FillOrderNumberSuggestions();
-            TryEnterOrderEditModeFromEditor();
         }
 
         private void FillEditableCombo(ComboBox combo, IEnumerable<string> values)
         {
             if (combo == null) return;
             var text = combo.Text;
+            var candidates = values.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, NaturalStringComparer.Instance).ToArray();
             combo.Items.Clear();
-            foreach (var value in values.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, NaturalStringComparer.Instance)) combo.Items.Add(value);
-            combo.Text = text;
+            combo.Items.AddRange(candidates.Cast<object>().ToArray());
+            combo.Text = OrderCascadeService.Contains(candidates, text) ? text : string.Empty;
         }
 
         private void FillOrderNumberSuggestions()
@@ -1998,7 +2040,7 @@ namespace BarTenderPrinter
             _txtOrderNumber.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
             _txtOrderNumber.AutoCompleteSource = AutoCompleteSource.CustomSource;
             _txtOrderNumber.AutoCompleteCustomSource = source;
-            _txtOrderNumber.Text = text;
+            _txtOrderNumber.Text = OrderCascadeService.Contains(numbers, text) ? text : string.Empty;
         }
 
         private void TryEnterOrderEditModeFromEditor()
@@ -4868,25 +4910,19 @@ namespace BarTenderPrinter
 
         private void PrintHistoryRecord(PrintRecord record, string printer)
         {
+            UpdateSession();
+            if (!_session.CanApproveReprint)
+            { MessageBox.Show(this, "当前账户无补打印审批权限，请使用 Supervisor 或 Admin 账户登录。", "补打印审批", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (!File.Exists(record.TemplatePath))
             { MessageBox.Show(this, $"历史模板文件不存在：\n{record.TemplatePath}"); return; }
             if (string.IsNullOrEmpty(printer) || !cmbPrinter.Items.Contains(printer))
             { MessageBox.Show(this, $"本次补打印机当前不可用：{printer}"); return; }
             var values = new Dictionary<string, string>(record.FieldValues, StringComparer.OrdinalIgnoreCase);
-            if (!TryGetHistoryTemplateSettings(record, out var settings, out var warning)) return;
             var currentVersion = GetTemplateVersionForPath(record.TemplatePath);
             if (!string.IsNullOrWhiteSpace(record.TemplateVersion) && !string.IsNullOrWhiteSpace(currentVersion) &&
                 !string.Equals(record.TemplateVersion, currentVersion, StringComparison.OrdinalIgnoreCase) &&
                 MessageBox.Show(this, "历史记录的模板版本与当前模板文件版本不一致，继续补打印可能导致版面或字段不一致。\n\n是否继续？", "模板版本差异", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                 return;
-            var configuredSources = settings?.DataSources ?? new List<DataSourceItem>();
-            var enabled = configuredSources.Where(source => source.Enabled).ToList();
-            if (enabled.Count == 0)
-            { MessageBox.Show(this, "历史模板缺少已启用的数据源设置，无法补打印。", "补打印校验", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            if (!ValidateTemplateFieldCoverage(record.TemplatePath, configuredSources, values, "补打印字段完整性")) return;
-            if (!ValidateInputValues(enabled, values, false, settings)) return;
-            if (settings.InputValidation && !ValidateLocalData(values, GetTemplateLocalData(settings), settings.DataSources)) return;
-            if (!string.IsNullOrEmpty(warning) && MessageBox.Show(this, warning + "\n\n是否继续补打印？", "补打印设置确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
             SetPrintEnvironmentEnabled(false);
             SetStatus("补打印中...");
             Task.Run(() =>
@@ -4924,31 +4960,6 @@ namespace BarTenderPrinter
                     }
                 });
             });
-        }
-
-        private bool TryGetHistoryTemplateSettings(PrintRecord record, out TemplateSettings settings, out string warning)
-        {
-            warning = "";
-            settings = null;
-            var orderTemplate = _orders.Orders
-                .SelectMany(order => order.Templates ?? new List<OrderTemplate>())
-                .FirstOrDefault(template =>
-                    (!string.IsNullOrWhiteSpace(record.TemplateId) && string.Equals(template.Id, record.TemplateId, StringComparison.OrdinalIgnoreCase)) ||
-                    string.Equals(template.SourcePath, record.TemplatePath, StringComparison.OrdinalIgnoreCase));
-            if (orderTemplate?.Settings != null)
-            {
-                settings = orderTemplate.Settings;
-                return true;
-            }
-            if (_templateSettings.TryGet(record.TemplateName, record.TemplatePath, out settings)) return true;
-            if (string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase) && _dataSources.Any(source => source.Enabled))
-            {
-                settings = BuildTemplateSettings(record.TemplatePath, _dataSources);
-                warning = "未找到历史模板保存设置，将使用当前页面设置进行补打印校验。";
-                return true;
-            }
-            MessageBox.Show(this, "未找到历史模板保存设置，无法确认长度、本地完整匹配和字段启用规则。", "补打印校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return false;
         }
 
         private string GetTemplateVersionForPath(string templatePath)

@@ -155,7 +155,7 @@ namespace BarTenderPrinter
             this.lblTotalStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "累计 0" };
             this.lblTodayStatus.Visible = false;
             this.lblTotalStatus.Visible = false;
-            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.73" };
+            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.74" };
             this.statusStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] { this.lblConnection, this.lblStatus, this.lblTodayStatus, this.lblTotalStatus, this.lblVersion });
             MiuiTheme.StyleStatusStrip(this.statusStrip);
 

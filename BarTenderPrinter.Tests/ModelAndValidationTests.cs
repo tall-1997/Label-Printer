@@ -19,6 +19,32 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
+        public void OrderCascadeFiltersEachLevelByItsPredecessors()
+        {
+            var orders = new[]
+            {
+                new PackagingOrder { Customer = "A", ProductModel = "M1", Color = "Black", OrderNumber = "10" },
+                new PackagingOrder { Customer = "A", ProductModel = "M2", Color = "White", OrderNumber = "20" },
+                new PackagingOrder { Customer = "B", ProductModel = "M1", Color = "Blue", OrderNumber = "30" }
+            };
+
+            Assert.Equal(new[] { "M1", "M2" }, OrderCascadeService.GetModels(orders, "A"));
+            Assert.Equal(new[] { "Black" }, OrderCascadeService.GetColors(orders, "A", "M1"));
+            Assert.Equal(new[] { "10" }, OrderCascadeService.GetOrderNumbers(orders, "A", "M1", "Black"));
+        }
+
+        [Fact]
+        public void OrderCascadeReturnsNoDownstreamCandidatesForNewValues()
+        {
+            var orders = new[] { new PackagingOrder { Customer = "A", ProductModel = "M1", Color = "Black", OrderNumber = "10" } };
+
+            Assert.Empty(OrderCascadeService.GetModels(orders, "New customer"));
+            Assert.Empty(OrderCascadeService.GetColors(orders, "A", "New model"));
+            Assert.Empty(OrderCascadeService.GetOrderNumbers(orders, "A", "M1", "New color"));
+            Assert.True(OrderCascadeService.Contains(new[] { "M1" }, "m1"));
+        }
+
+        [Fact]
         public void TemplateFieldCoverageReportsMissingValues()
         {
             var issues = ValidationService.FindTemplateFieldIssues(
