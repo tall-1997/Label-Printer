@@ -109,34 +109,23 @@ namespace BarTenderPreviewHost
         private static void ExportPreview(PreviewRequest request)
         {
             var fields = request.Fields ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (fields.Count == 0)
-            {
-                ExportThumbnail(request.TemplatePath, request.OutputPath);
-                return;
-            }
-
             object engine = null;
             object document = null;
+            object documents = null;
+            object subStrings = null;
+            object resolution = null;
             try
             {
                 engine = Activator.CreateInstance(GetSdkType("Engine"));
                 Invoke(engine, "Start");
-                var documents = GetProperty(engine, "Documents");
+                documents = GetProperty(engine, "Documents");
                 document = Invoke(documents, "Open", request.TemplatePath);
-                var subStrings = GetProperty(document, "SubStrings");
+                subStrings = GetProperty(document, "SubStrings");
                 var available = GetDataSourceNames(subStrings);
-                var projected = fields.Where(item => available.Contains(item.Key)).ToList();
-                if (projected.Count == 0)
-                {
-                    CloseDocument(document);
-                    document = null;
-                    ExportThumbnail(request.TemplatePath, request.OutputPath);
-                    return;
-                }
-                foreach (var item in projected)
+                foreach (var item in fields.Where(item => available.Contains(item.Key)))
                     Invoke(subStrings, "SetSubString", item.Key, item.Value ?? "");
 
-                var resolution = Activator.CreateInstance(GetSdkType("Resolution"), 600, 600);
+                resolution = Activator.CreateInstance(GetSdkType("Resolution"), 600, 600);
                 Invoke(document, "ExportImageToFile", request.OutputPath,
                     Enum.Parse(GetSdkType("ImageType"), "PNG"),
                     Enum.Parse(GetSdkType("ColorDepth"), "ColorDepth24bit"),
@@ -146,10 +135,14 @@ namespace BarTenderPreviewHost
             }
             finally
             {
+                DisposeIfPossible(resolution);
+                DisposeIfPossible(subStrings);
                 CloseDocument(document);
+                DisposeIfPossible(documents);
                 if (engine != null)
                 {
                     try { Invoke(engine, "Stop"); } catch { }
+                    DisposeIfPossible(engine);
                 }
             }
         }
@@ -203,6 +196,20 @@ namespace BarTenderPreviewHost
         {
             if (document == null || _sdkAssembly == null) return;
             try { Invoke(document, "Close", Enum.Parse(GetSdkType("SaveOptions"), "DoNotSaveChanges")); } catch { }
+            finally { DisposeIfPossible(document); }
+        }
+
+        private static void DisposeIfPossible(object value)
+        {
+            if (value == null) return;
+            if (value is IDisposable disposable)
+            {
+                disposable.Dispose();
+                return;
+            }
+            var dispose = value.GetType().GetMethod("Dispose", BindingFlags.Instance | BindingFlags.Public, null, Type.EmptyTypes, null);
+            if (dispose == null) return;
+            try { dispose.Invoke(value, Array.Empty<object>()); } catch { }
         }
 
         private static Type GetSdkType(string name) =>

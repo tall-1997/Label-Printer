@@ -24,7 +24,7 @@ jobs:
           Write-Host "=== Test 1: Process Start & Offline Mode ==="
           
           # Clean up any existing config/log
-          $configDir = "$env:USERPROFILE\.bartender-printer"
+          $configDir = Join-Path $env:LOCALAPPDATA "BarTenderPrinter"
           if (Test-Path $configDir) { Remove-Item $configDir -Recurse -Force }
           
           # Start process
@@ -49,7 +49,8 @@ jobs:
         run: |
           Write-Host "=== Test 2: Log File & Offline Mode ==="
           
-          $logFile = "$env:USERPROFILE\.bartender-printer\bartender-printer.log"
+          $configDir = Join-Path $env:LOCALAPPDATA "BarTenderPrinter"
+          $logFile = Join-Path $configDir "bartender-printer.log"
           if (Test-Path $logFile) {
             $content = Get-Content $logFile -Raw
             Write-Host "Log file content:"
@@ -65,7 +66,7 @@ jobs:
           } else {
             Write-Host "FAIL: Log file not found at $logFile"
             # Check alternative locations
-            $altPath = "$env:USERPROFILE\.bartender-printer"
+            $altPath = $configDir
             if (Test-Path $altPath) {
               Write-Host "Config dir exists, contents:"
               Get-ChildItem $altPath
@@ -78,7 +79,8 @@ jobs:
         run: |
           Write-Host "=== Test 3: Config File ==="
           
-          $configFile = "$env:USERPROFILE\.bartender-printer\config.ini"
+          $configDir = Join-Path $env:LOCALAPPDATA "BarTenderPrinter"
+          $configFile = Join-Path $configDir "config.ini"
           if (Test-Path $configFile) {
             $content = Get-Content $configFile -Raw
             Write-Host "Config file content:"
@@ -95,7 +97,8 @@ jobs:
         run: |
           Write-Host "=== Test 4: History File ==="
           
-          $historyFile = "$env:USERPROFILE\.bartender-printer\print_records.csv"
+          $configDir = Join-Path $env:LOCALAPPDATA "BarTenderPrinter"
+          $historyFile = Join-Path $configDir "print_records.csv"
           if (Test-Path $historyFile) {
             $content = Get-Content $historyFile -Raw
             Write-Host "History file content:"

@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.76";
+        private readonly string _version = "v5.7.77";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -1126,7 +1126,7 @@ namespace BarTenderPrinter
             cmbTemplate.Location = new Point(left, _printOrderPanel.Bottom + S(8));
             cmbTemplate.Size = new Size(width, Math.Max(cmbTemplate.PreferredHeight, S(25)));
             lblSelectedTemplate.Location = new Point(left, cmbTemplate.Bottom + S(4));
-            lblSelectedTemplate.Size = new Size(Math.Min(S(420), width), S(18));
+            lblSelectedTemplate.Size = new Size(width, S(18));
 
             lblPrinter.Location = new Point(left, lblSelectedTemplate.Bottom + S(16));
             cmbPrinter.Location = new Point(left + S(58), lblSelectedTemplate.Bottom + S(12));
@@ -1274,7 +1274,7 @@ namespace BarTenderPrinter
             try
             {
                 if (previousOrder != null) { SelectOrder(previousOrder); SelectPrintOrder(previousOrder); }
-                else ClearOrderSelection();
+                else { ClearOrderSelection(); ClearPrintOrderSelection(); }
             }
             finally { _loadingPrintOrderFilters = false; }
         }
@@ -1296,6 +1296,21 @@ namespace BarTenderPrinter
         {
             foreach (var combo in new[] { _cmbOrderCustomer, _cmbOrderModel, _cmbOrderColor, _cmbOrderNumber })
                 if (combo != null) combo.SelectedIndex = -1;
+            UpdateEffectiveSummary();
+        }
+
+        private void ClearPrintOrderSelection()
+        {
+            foreach (var combo in new[] { _cmbPrintCustomer, _cmbPrintModel, _cmbPrintColor, _cmbPrintOrderNumber })
+                if (combo != null) combo.SelectedIndex = -1;
+            _activeOrder = null;
+            _activeOrderTemplate = null;
+            _selectedTemplatePath = "";
+            cmbTemplate.Items.Clear();
+            lblSelectedTemplate.Text = "请选择完整订单";
+            ResetTemplateState();
+            LoadHistory();
+            RefreshStats();
             UpdateEffectiveSummary();
         }
 
@@ -1638,7 +1653,13 @@ namespace BarTenderPrinter
             {
                 BeginInvoke((Action)(() =>
                 {
-                    if (CanPostToUi()) action();
+                    if (!CanPostToUi()) return;
+                    try { action(); }
+                    catch (Exception ex)
+                    {
+                        LoggerService.Error("UI 回调执行失败", ex);
+                        try { SetStatus("操作完成但界面刷新失败，请查看日志"); } catch { }
+                    }
                 }));
             }
             catch (InvalidOperationException) { }
@@ -3155,8 +3176,24 @@ namespace BarTenderPrinter
 
         private async Task RefreshPrintersAsync()
         {
-            var printers = await Task.Run(() => _btService.GetPrinters());
-            PopulatePrinters(printers);
+            try
+            {
+                btnRefreshPrinter.Enabled = false;
+                var printers = await Task.Run(() => _btService.GetPrinters());
+                PopulatePrinters(printers);
+                AddLog("打印机列表已刷新", "INFO");
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error("刷新打印机失败", ex);
+                AddLog($"刷新打印机失败: {ex.Message}", "ERROR");
+                SetStatus("刷新打印机失败");
+            }
+            finally
+            {
+                btnRefreshPrinter.Enabled = true;
+                RefreshPrintActionState();
+            }
         }
 
         private void PopulatePrinters(string[] printers)
@@ -4562,42 +4599,51 @@ namespace BarTenderPrinter
                 orderName, orderId, templateFields);
             PostToUi(() =>
             {
-                RemovePendingPrintValues(templateId, pendingFields, fieldValues);
-                _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
-                if (result.Success)
+                Dictionary<string, string> previewValues = null;
+                try
                 {
-                    var currentSources = _dataSources.Where(source => source.Enabled).ToList();
-                    var contextMatches = string.Equals(orderId, _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
-                        string.Equals(templateId, GetCurrentTemplateId(), StringComparison.Ordinal) &&
-                        string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase) &&
-                        currentSources.Select(source => source.Field).SequenceEqual(sourceSnapshot.Select(source => source.Field), StringComparer.OrdinalIgnoreCase);
-                    if (contextMatches)
-                        AdvanceSuccessfulPrintState(currentSources, fieldValues);
-                    else
-                        AddLog("打印作业已提交，当前页面上下文已变化，跳过输入状态推进。", "WARNING");
-                    AddLog("打印作业已提交", "SUCCESS");
-                    if (!historySaved)
+                    RemovePendingPrintValues(templateId, pendingFields, fieldValues);
+                    _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
+                    if (result.Success)
                     {
-                        AddLog("打印作业已提交，但历史记录保存失败；输入状态已经推进。", "ERROR");
+                        var currentSources = _dataSources.Where(source => source.Enabled).ToList();
+                        var contextMatches = string.Equals(orderId, _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
+                            string.Equals(templateId, GetCurrentTemplateId(), StringComparison.Ordinal) &&
+                            string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase) &&
+                            currentSources.Select(source => source.Field).SequenceEqual(sourceSnapshot.Select(source => source.Field), StringComparer.OrdinalIgnoreCase);
+                        if (contextMatches)
+                            AdvanceSuccessfulPrintState(currentSources, fieldValues);
+                        else
+                            AddLog("打印作业已提交，当前页面上下文已变化，跳过输入状态推进。", "WARNING");
+                        AddLog("打印作业已提交", "SUCCESS");
+                        if (!historySaved)
+                            AddLog("打印作业已提交，但历史记录保存失败；输入状态已经推进。", "ERROR");
                     }
+                    else
+                    {
+                        AddLog($"打印提交失败: {result.ErrorMessage}", "ERROR");
+                        if (!historySaved)
+                            AddLog("失败打印历史记录保存失败。", "ERROR");
+                    }
+                    if (_pendingPrintJobCount == 0 && _chkPreview?.Checked == true)
+                        previewValues = result.Success && string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)
+                            ? new Dictionary<string, string>(fieldValues, StringComparer.OrdinalIgnoreCase)
+                            : null;
+                    LoadHistory();
+                    RefreshStats();
                 }
-                else
+                catch (Exception ex)
                 {
-                    AddLog($"打印提交失败: {result.ErrorMessage}", "ERROR");
-                    if (!historySaved)
-                        AddLog("失败打印历史记录保存失败。", "ERROR");
+                    LoggerService.Error("打印完成处理失败", ex);
+                    AddLog($"打印完成处理失败: {ex.Message}", "ERROR");
                 }
-                SetPrintEnvironmentEnabled(true);
+                finally
+                {
+                    SetPrintEnvironmentEnabled(_pendingPrintJobCount == 0);
+                    SetStatus(_pendingPrintJobCount > 0 ? $"打印队列: {_pendingPrintJobCount}" : result.Success ? "就绪" : "打印提交失败");
+                }
                 if (_pendingPrintJobCount == 0 && _chkPreview?.Checked == true)
-                {
-                    var previewValues = result.Success && string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)
-                        ? new Dictionary<string, string>(fieldValues, StringComparer.OrdinalIgnoreCase)
-                        : null;
                     _ = RefreshPreviewAsync(previewValues);
-                }
-                LoadHistory();
-                RefreshStats();
-                SetStatus(_pendingPrintJobCount > 0 ? $"打印队列: {_pendingPrintJobCount}" : result.Success ? "就绪" : "打印提交失败");
             });
         }
 
@@ -4945,15 +4991,16 @@ namespace BarTenderPrinter
             if (!File.Exists(record.TemplatePath))
             { MessageBox.Show(this, $"历史模板文件不存在：\n{record.TemplatePath}"); return; }
             if (string.IsNullOrEmpty(printer) || !cmbPrinter.Items.Contains(printer))
-            { MessageBox.Show(this, $"本次补打印机当前不可用：{printer}"); return; }
+            { MessageBox.Show(this, $"本次补打印使用的打印机当前不可用：{printer}"); return; }
             var values = new Dictionary<string, string>(record.FieldValues, StringComparer.OrdinalIgnoreCase);
             var currentVersion = GetTemplateVersionForPath(record.TemplatePath);
             if (!string.IsNullOrWhiteSpace(record.TemplateVersion) && !string.IsNullOrWhiteSpace(currentVersion) &&
                 !string.Equals(record.TemplateVersion, currentVersion, StringComparison.OrdinalIgnoreCase) &&
                 MessageBox.Show(this, "历史记录的模板版本与当前模板文件版本不一致，继续补打印可能导致版面或字段不一致。\n\n是否继续？", "模板版本差异", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                 return;
+            _pendingPrintJobCount++;
             SetPrintEnvironmentEnabled(false);
-            SetStatus("补打印中...");
+            SetStatus($"打印队列: {_pendingPrintJobCount}");
             Task.Run(() =>
             {
                 PrintResult result;
@@ -4982,10 +5029,11 @@ namespace BarTenderPrinter
                     }
                     finally
                     {
-                        SetPrintEnvironmentEnabled(true);
+                        _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
+                        SetPrintEnvironmentEnabled(_pendingPrintJobCount == 0);
                         LoadHistory();
                         RefreshStats();
-                        SetStatus(result.Success ? (historySaved ? "补打印作业已提交" : "补打印作业已提交，历史保存失败") : (historySaved ? "补打印失败" : "补打印失败，历史保存失败"));
+                        SetStatus(_pendingPrintJobCount > 0 ? $"打印队列: {_pendingPrintJobCount}" : result.Success ? (historySaved ? "补打印作业已提交" : "补打印作业已提交，历史保存失败") : (historySaved ? "补打印失败" : "补打印失败，历史保存失败"));
                     }
                 });
             });
@@ -5017,6 +5065,20 @@ namespace BarTenderPrinter
             if (_btnSidebarToggle != null) _btnSidebarToggle.Enabled = enabled;
             if (_btnOrderPage != null) _btnOrderPage.Enabled = enabled;
             if (_btnPrintPage != null) _btnPrintPage.Enabled = enabled;
+            if (enabled) RefreshPrintActionState();
+        }
+
+        private void RefreshPrintActionState()
+        {
+            if (btnPrint == null) return;
+            var canPrint = _pendingPrintJobCount == 0 &&
+                _btService.IsConnected &&
+                !string.IsNullOrWhiteSpace(_selectedTemplatePath) &&
+                File.Exists(_selectedTemplatePath) &&
+                cmbPrinter.SelectedItem != null &&
+                _dataSources.Any(source => source.Enabled);
+            btnPrint.Enabled = canPrint;
+            btnPrint.Text = _btService.IsConnected ? "打印" : "打印（需要安装 BarTender）";
         }
 
         private List<PrintRecord> GetCurrentHistoryRecords(bool includeAllPages = false)

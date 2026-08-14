@@ -80,6 +80,9 @@ jobs:
             Write-Host "Process terminated"
           } else {
             Write-Host "Process exited with code: $($process.ExitCode)"
+            if ($process.ExitCode -ne 0) {
+              throw "Process exited unexpectedly with code $($process.ExitCode)"
+            }
           }
 
       - name: Test with timeout

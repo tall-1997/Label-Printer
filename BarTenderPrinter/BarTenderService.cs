@@ -107,6 +107,13 @@ namespace BarTenderPrinter
 
             try
             {
+                if (_btApp != null)
+                {
+                    LoggerService.Info("BarTender 已存在连接，复用当前实例");
+                    _connected = true;
+                    _offlineMode = false;
+                    return true;
+                }
                 var comType = Type.GetTypeFromProgID("BarTender.Application");
                 if (comType == null)
                 {
@@ -658,7 +665,7 @@ namespace BarTenderPrinter
                     try
                     {
                         btFormat.SetNamedSubStringValue(kv.Key, kv.Value);
-                        LoggerService.Info($"数据源: {kv.Key}={kv.Value}");
+                        LoggerService.Info($"数据源: {kv.Key}=<redacted,len={(kv.Value ?? "").Length}>");
                     }
                     catch (Exception ex)
                     {

@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without v prefix, for example 5.7.77'
+        required: true
+        type: string
 
 jobs:
   build-and-release:
@@ -20,18 +25,27 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $semver = '${{ inputs.version }}'
+            if ($semver -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid release version: $semver" }
+            $tag = "v$semver"
+          } else {
+            $tag = '${{ github.ref_name }}'
+            if ($tag -notmatch '^v\d+\.\d+\.\d+$') { throw "Invalid release tag: $tag" }
+            $semver = $tag.Substring(1)
+          }
+          echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+          echo "SEMVER=$semver" >> $env:GITHUB_OUTPUT
+
       - name: Run tests
         run: dotnet test BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release
 
       - name: Publish self-contained application
-        run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
-
-      - name: Get version from tag
-        id: version
-        shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}"
-          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish -p:Version=${{ steps.version.outputs.SEMVER }} -p:AssemblyVersion=${{ steps.version.outputs.SEMVER }}.0 -p:FileVersion=${{ steps.version.outputs.SEMVER }}.0
 
       - name: Build installer
         shell: pwsh
@@ -49,33 +63,37 @@ jobs:
           if (!$installer -or $installer.Length -le 0) {
             throw "Installer was not generated"
           }
-          $releaseInstaller = "installer-output/BarTenderPrinter-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe"
+          $releaseInstaller = "installer-output/BarTenderPrinter-Setup-${{ steps.version.outputs.TAG }}-win-x64.exe"
           Move-Item $installer.FullName $releaseInstaller -Force
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "installer-output/BarTenderPrinter-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe"
+          files: "installer-output/BarTenderPrinter-Setup-${{ steps.version.outputs.TAG }}-win-x64.exe"
+          tag_name: ${{ steps.version.outputs.TAG }}
+          name: ${{ steps.version.outputs.TAG }}
           body: |
-            ## BarTender 标签打印工具 ${{ steps.version.outputs.VERSION }}
+            ## BarTender 标签打印工具 ${{ steps.version.outputs.TAG }}
 
             ### 更新内容
 
-            #### 打印与预览
-            - 修复打印按钮文字重复绘制和字符重叠
-            - 将动态标签预览提升至 600 DPI
-            - 将原模板缩略图提升至 2400 × 2400 像素
-            - 使用高质量双三次插值显示预览图片
+            #### 稳定性与任务生命周期
+            - 补打印纳入统一打印队列，防止后台打印中关闭应用
+            - 打印完成 UI 回调增加异常兜底，避免控件永久禁用
+            - 恢复打印环境时重新校验 BarTender 连接、模板、打印机和数据源状态
+            - 打印页订单加载失败时回滚选择器和生效摘要
 
-            #### 订单与界面
-            - 修复同一客户、机型和颜色下切换订单号无法进入对应编辑页面
-            - 切换订单时保留未保存修改确认流程
-            - 将历史工具栏的清空按钮文案调整为“清空”
-            - 收窄导出日志、展开日志和关于按钮，释放顶栏空间
+            #### 预览、日志与资源
+            - 预览宿主优先使用真实文档导出，减少缩略图与打印结果不一致
+            - 释放预览宿主 SDK 对象，降低长时间预览资源残留风险
+            - 打印日志默认脱敏字段值，仅保留字段长度
+            - 复用已有 BarTender COM 实例，避免重复连接产生额外进程
 
             #### 测试与发布
-            - 在 Windows 工作流中执行单元测试和自包含发布
-            - 使用 Inno Setup 构建 win-x64 安装包
+            - 发布工作流使用标签或手动输入作为版本单一来源
+            - 安装包文件名、Release 标识和应用文件版本保持一致
+            - 核心测试改为检查当前 LocalAppData 数据目录
+            - GUI 启动测试在异常退出时失败
 
             ### 系统要求
             - Windows 10/11 x64
@@ -83,12 +101,12 @@ jobs:
             - BarTender 2022 R2 Automation 或 Enterprise x64
 
             ### 安装说明
-            1. 下载 `BarTenderPrinter-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe`
+            1. 下载 `BarTenderPrinter-Setup-${{ steps.version.outputs.TAG }}-win-x64.exe`
             2. 运行安装向导
             3. 从开始菜单或桌面快捷方式启动软件
 
             ### 文件信息
-            - 文件名: BarTenderPrinter-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe
+            - 文件名: BarTenderPrinter-Setup-${{ steps.version.outputs.TAG }}-win-x64.exe
             - 架构: win-x64
             - 类型: 当前用户范围自包含安装包
           generate_release_notes: false
