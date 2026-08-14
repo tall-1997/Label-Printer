@@ -1,6 +1,18 @@
 name: Core Functionality Test
 
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'BarTenderPrinter/**'
+      - 'BarTenderPrinter.Tests/**'
+      - '.github/workflows/test-core.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'BarTenderPrinter/**'
+      - 'BarTenderPrinter.Tests/**'
+      - '.github/workflows/test-core.yml'
   workflow_dispatch:
 
 jobs:

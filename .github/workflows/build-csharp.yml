@@ -9,6 +9,14 @@ on:
       - 'BarTenderPreviewHost/**'
       - 'installer/**'
       - '.github/workflows/build-csharp.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'BarTenderPrinter/**'
+      - 'BarTenderPrinter.Tests/**'
+      - 'BarTenderPreviewHost/**'
+      - 'installer/**'
+      - '.github/workflows/build-csharp.yml'
   workflow_dispatch:
 
 jobs:

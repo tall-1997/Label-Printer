@@ -8,17 +8,22 @@ namespace BarTenderPrinter
     public static class AuditLogger
     {
         private static readonly string AuditFile = Path.Combine(AppPaths.DataDirectory, "audit.log");
+        private static readonly string AuditKeyFile = Path.Combine(AppPaths.DataDirectory, "audit-integrity.key");
+        private static readonly object Lock = new object();
 
         public static void Append(string operatorName, string action, string detail)
         {
             try
             {
                 AppPaths.Initialize();
-                var previousHash = GetLastHash();
-                var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                var payload = $"{timestamp}|{operatorName}|{action}|{detail}|{previousHash}";
-                var hash = ComputeHash(payload);
-                File.AppendAllText(AuditFile, $"{payload}|{hash}{Environment.NewLine}", Encoding.UTF8);
+                lock (Lock)
+                {
+                    var previousHash = GetLastHash();
+                    var timestamp = DateTime.UtcNow.ToString("O");
+                    var payload = $"{timestamp}|{Sanitize(operatorName)}|{Sanitize(action)}|{Sanitize(detail)}|{previousHash}";
+                    var hash = ComputeHash(payload);
+                    File.AppendAllText(AuditFile, $"{payload}|{hash}{Environment.NewLine}", Encoding.UTF8);
+                }
             }
             catch (Exception ex)
             {
@@ -39,8 +44,21 @@ namespace BarTenderPrinter
 
         private static string ComputeHash(string payload)
         {
-            using (var sha = SHA256.Create())
-                return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(payload ?? "")));
+            using (var hmac = new HMACSHA256(GetAuditKey()))
+                return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload ?? "")));
+        }
+
+        private static byte[] GetAuditKey()
+        {
+            if (File.Exists(AuditKeyFile)) return Convert.FromBase64String(File.ReadAllText(AuditKeyFile).Trim());
+            var key = RandomNumberGenerator.GetBytes(32);
+            AtomicFileWriter.WriteAllText(AuditKeyFile, Convert.ToBase64String(key), Encoding.UTF8);
+            return key;
+        }
+
+        private static string Sanitize(string value)
+        {
+            return (value ?? "").Replace("|", "\\u007C").Replace("\r", "\\r").Replace("\n", "\\n");
         }
     }
 }

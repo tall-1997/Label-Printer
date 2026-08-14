@@ -7,6 +7,7 @@ on:
       - 'BarTenderPrinter/**'
       - 'BarTenderPrinter.Tests/**'
       - 'BarTenderPreviewHost/**'
+      - 'installer/**'
       - '.github/workflows/test-csharp.yml'
   push:
     branches: [ main ]

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without v prefix, for example 5.7.78'
+        description: 'Release version without v prefix, for example 5.7.79'
         required: true
         type: string
 
@@ -59,12 +59,18 @@ jobs:
       - name: Verify installer
         shell: pwsh
         run: |
-          $installer = Get-ChildItem "installer-output/BarTenderPrinter-Setup-*-win-x64.exe" | Select-Object -First 1
+          $releaseInstaller = "installer-output/BarTenderPrinter-Setup-${{ steps.version.outputs.TAG }}-win-x64.exe"
+          $installer = Get-Item $releaseInstaller -ErrorAction SilentlyContinue
           if (!$installer -or $installer.Length -le 0) {
             throw "Installer was not generated"
           }
-          $releaseInstaller = "installer-output/BarTenderPrinter-Setup-${{ steps.version.outputs.TAG }}-win-x64.exe"
-          Move-Item $installer.FullName $releaseInstaller -Force
+          $exeVersion = (Get-Item "publish/BarTenderPrinter.exe").VersionInfo.ProductVersion
+          if (!$exeVersion.StartsWith("${{ steps.version.outputs.SEMVER }}")) {
+            throw "EXE version $exeVersion does not match ${{ steps.version.outputs.SEMVER }}"
+          }
+          if (!(Test-Path "publish/BarTenderPreviewHost.exe")) {
+            throw "BarTenderPreviewHost.exe is missing from publish output"
+          }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -77,21 +83,24 @@ jobs:
 
             ### 更新内容
 
-            #### 打印队列与预览
-            - 补打印预览刷新改为队列计数释放后执行，避免停留在“队列处理中”
-            - 打印完成 UI 回调投递失败时释放队列计数并写入警告日志
-            - 打印队列处理中禁止刷新打印机列表，避免界面打印机状态漂移
-            - 打印环境禁用状态同步覆盖刷新打印机按钮
+            #### 账户与补打印安全
+            - 初始管理员使用随机启动密码，账户密码升级为 PBKDF2-SHA256 存储
+            - 补打印增加 Supervisor/Admin 登录、原因记录和打印机可用性校验
+            - 打印前校验模板文件、打印机和打印份数
 
-            #### 图标、DPI 与资源释放
-            - 打印按钮禁用态图标使用系统禁用态绘制，保持图文状态一致
-            - 打印页锁图标和订单表格锁图标按 DPI 与控件尺寸居中缩放
-            - 刷新订单模板卡片前释放旧控件和右键菜单资源
-            - 预览宿主探针路径补充 Engine 释放，并兜底处理 Dispose 异常
+            #### 历史与文件可靠性
+            - 打印历史和审计记录增加 HMAC-SHA256 完整性校验
+            - 历史独立副本迁移到用户数据目录，主存储成功后归档异常降级为日志告警
+            - 原子文件写入增加跨进程互斥、遗弃锁恢复和唯一临时文件
+            - CSV 导出增加公式注入防护，日志增加换行净化和自动轮转
+
+            #### 预览与交互
+            - 预览字段名称改为大小写无关匹配，并兼容旧版 BarTender 缩略图 API
+            - 打印与补打印仅在订单、模板和字段上下文一致时刷新预览
+            - 过期校验数据导入结果自动丢弃，无效订单筛选组合自动清空
 
             #### 测试与发布
-            - Release 工作流向 Inno Setup 显式传入发布版本
-            - 安装器 AppVersion 与 Release 标签使用同一版本来源
+            - CI 覆盖主分支和 Pull Request 构建、核心测试与安装包版本校验
 
             ### 系统要求
             - Windows 10/11 x64

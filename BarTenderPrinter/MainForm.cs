@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.78";
+        private readonly string _version = "v5.7.79";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -215,7 +215,7 @@ namespace BarTenderPrinter
             historyMenu.Items.Add("从历史控件排除此记录", null, DeleteSelectedHistoryRecord_Click);
             historyMenu.Opening += HistoryMenu_Opening;
             dgvHistory.ContextMenuStrip = historyMenu;
-            cmbPrinter.SelectedIndexChanged += (s, e) => SaveCurrentConfigurationState();
+            cmbPrinter.SelectedIndexChanged += (s, e) => { SaveCurrentConfigurationState(); RefreshPrintActionState(); };
             _historySearchTimer.Tick += (s, e) => { _historySearchTimer.Stop(); LoadHistory(); };
         }
 
@@ -973,6 +973,7 @@ namespace BarTenderPrinter
         {
             _session.OperatorName = GetOperatorName();
             _session.Role = _currentAccount?.Role ?? "Operator";
+            _session.IsAuthenticated = _currentAccount != null;
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -1311,7 +1312,14 @@ namespace BarTenderPrinter
             if (_loadingPrintOrderFilters) return;
             var order = _orders.Find(_cmbPrintCustomer.SelectedItem?.ToString(), _cmbPrintModel.SelectedItem?.ToString(),
                 _cmbPrintColor.SelectedItem?.ToString(), _cmbPrintOrderNumber.SelectedItem?.ToString());
-            if (order == null) return;
+            if (order == null)
+            {
+                _loadingPrintOrderFilters = true;
+                try { ClearOrderSelection(); ClearPrintOrderSelection(); }
+                finally { _loadingPrintOrderFilters = false; }
+                MessageBox.Show(this, "当前订单组合已失效，请重新选择完整订单。", "订单选择", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             var previousOrder = _activeOrder;
             SelectOrder(order);
             if (ApplyOrder(order)) return;
@@ -3162,6 +3170,9 @@ namespace BarTenderPrinter
                 if (_accountManager.LoadError != null)
                     MessageBox.Show(this, $"账户文件无法读取，当前保持 Operator 权限。请由管理员恢复账户文件：\n{_accountManager.AccountFilePath}",
                         "账户恢复", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                else if (!string.IsNullOrWhiteSpace(_accountManager.BootstrapPassword))
+                    MessageBox.Show(this, $"已创建初始化管理员账号。\n账号：superadmin\n一次性初始密码：{_accountManager.BootstrapPassword}\n请立即登录并修改账户文件中的默认初始化密码。",
+                        "管理员初始化", MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
                 AddLog("系统启动完成", "INFO");
             }
@@ -4231,6 +4242,7 @@ namespace BarTenderPrinter
         {
             SetStatus("正在加载 Excel...");
             AddLog("正在加载 Excel 数据...", "INFO");
+            var context = CaptureLocalDataImportContext();
 
             RunSta(() =>
             {
@@ -4273,7 +4285,7 @@ namespace BarTenderPrinter
                             if (!string.IsNullOrEmpty(singleValue)) singleValues.Add(singleValue);
                             BeginInvoke((Action)(() =>
                             {
-                                ApplyLoadedLocalData(path, singleValues, "单列", "Excel");
+                                ApplyLoadedLocalData(path, singleValues, "单列", "Excel", context);
                                 SetStatus("就绪");
                             }));
                             wb.Close(false); excel.Quit();
@@ -4305,7 +4317,7 @@ namespace BarTenderPrinter
 
                         BeginInvoke((Action)(() =>
                         {
-                            ApplyLoadedLocalData(path, data, columnName, "Excel");
+                            ApplyLoadedLocalData(path, data, columnName, "Excel", context);
                             SetStatus("就绪");
                         }));
                     }
@@ -4338,8 +4350,14 @@ namespace BarTenderPrinter
             ApplyLoadedLocalData(path, data, "文本", "本地数据");
         }
 
-        private void ApplyLoadedLocalData(string path, HashSet<string> data, string columnName, string sourceType)
+        private void ApplyLoadedLocalData(string path, HashSet<string> data, string columnName, string sourceType, LocalDataImportContext context = null)
         {
+            if (context != null && !IsLocalDataImportContextCurrent(context))
+            {
+                AddLog("导入期间模板或订单已切换，已丢弃校验数据导入结果。", "WARNING");
+                MessageBox.Show(this, "导入期间模板或订单已切换，请重新导入校验数据。", "校验数据", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             _localData = data;
             _localDataPath = path;
             _localDataStoragePath = SaveValidationDataSnapshot(_activeOrder?.OrderId ?? "global", _activeOrderTemplate?.Id ?? "global", _selectedTemplatePath, data);
@@ -4353,6 +4371,40 @@ namespace BarTenderPrinter
             MessageBox.Show(this, $"校验数据导入完成\n总行数：{data.Count}\n去重后：{data.Count}\n重复数：0\n空值数：0", "校验数据", MessageBoxButtons.OK, MessageBoxIcon.Information);
             AddLog($"加载 {sourceType}: {data.Count} 条, 列: {columnName}", "SUCCESS");
             SaveCurrentConfigurationState();
+        }
+
+        private LocalDataImportContext CaptureLocalDataImportContext()
+        {
+            return new LocalDataImportContext(
+                _activeOrder?.OrderId ?? "",
+                _activeOrderTemplate?.Id ?? "",
+                _selectedTemplatePath,
+                _dataSources.Where(source => source.Enabled).Select(source => source.Field).ToList());
+        }
+
+        private bool IsLocalDataImportContextCurrent(LocalDataImportContext context)
+        {
+            return context != null &&
+                string.Equals(context.OrderId, _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
+                string.Equals(context.TemplateId, _activeOrderTemplate?.Id ?? "", StringComparison.Ordinal) &&
+                string.Equals(context.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase) &&
+                _dataSources.Where(source => source.Enabled).Select(source => source.Field).SequenceEqual(context.EnabledFields, StringComparer.OrdinalIgnoreCase);
+        }
+
+        private sealed class LocalDataImportContext
+        {
+            public LocalDataImportContext(string orderId, string templateId, string templatePath, List<string> enabledFields)
+            {
+                OrderId = orderId ?? "";
+                TemplateId = templateId ?? "";
+                TemplatePath = templatePath ?? "";
+                EnabledFields = enabledFields ?? new List<string>();
+            }
+
+            public string OrderId { get; }
+            public string TemplateId { get; }
+            public string TemplatePath { get; }
+            public List<string> EnabledFields { get; }
         }
 
         private int PromptForColumnSelectionFromWorker(List<string> columns, string fileName)
@@ -4672,9 +4724,18 @@ namespace BarTenderPrinter
                 LoggerService.Error("打印失败", ex);
                 result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
             }
-            var historySaved = _printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
-                result.Success ? "PASS" : "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
-                orderName, orderId, templateFields);
+            var historySaved = true;
+            try
+            {
+                historySaved = _printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
+                    result.Success ? "PASS" : "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
+                    orderName, orderId, templateFields);
+            }
+            catch (Exception ex)
+            {
+                historySaved = false;
+                LoggerService.Error("保存打印历史失败", ex);
+            }
             if (!PostToUi(() =>
             {
                 Dictionary<string, string> previewValues = null;
@@ -4704,9 +4765,16 @@ namespace BarTenderPrinter
                             AddLog("失败打印历史记录保存失败。", "ERROR");
                     }
                     if (_pendingPrintJobCount == 0 && _chkPreview?.Checked == true)
-                        previewValues = result.Success && string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase)
+                    {
+                        var previewContextMatches = result.Success &&
+                            string.Equals(orderId, _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
+                            string.Equals(templateId, GetCurrentTemplateId(), StringComparison.Ordinal) &&
+                            string.Equals(templatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase) &&
+                            _dataSources.Where(source => source.Enabled).Select(source => source.Field).SequenceEqual(sourceSnapshot.Select(source => source.Field), StringComparer.OrdinalIgnoreCase);
+                        previewValues = previewContextMatches
                             ? new Dictionary<string, string>(fieldValues, StringComparer.OrdinalIgnoreCase)
                             : null;
+                    }
                     LoadHistory();
                     RefreshStats();
                 }
@@ -4994,19 +5062,19 @@ namespace BarTenderPrinter
             if (record == null || record.FieldValues == null || record.FieldValues.Count == 0)
             { MessageBox.Show(this, "该历史记录缺少完整字段数据，无法直接补打印"); return; }
 
-            var printer = ShowReprintConfirmDialog(record);
-            if (!string.IsNullOrEmpty(printer)) PrintHistoryRecord(record, printer);
+            var request = ShowReprintConfirmDialog(record);
+            if (request != null) PrintHistoryRecord(record, request.Printer, request.Reason);
         }
 
-        private string ShowReprintConfirmDialog(PrintRecord record)
+        private ReprintRequest ShowReprintConfirmDialog(PrintRecord record)
         {
-            if (cmbPrinter.Items.Count == 0)
+            if (_availablePrinters.Count == 0)
             { MessageBox.Show(this, "当前没有可用打印机，无法补打印"); return null; }
 
             using (var form = new Form())
             {
                 form.Text = "确认补打印";
-                form.Size = new Size(520, 430);
+                form.Size = new Size(520, 480);
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.StartPosition = FormStartPosition.CenterParent;
                 form.MaximizeBox = false;
@@ -5036,7 +5104,7 @@ namespace BarTenderPrinter
                     Size = new Size(365, 25),
                     DropDownStyle = ComboBoxStyle.DropDownList
                 };
-                foreach (var item in cmbPrinter.Items) cmbReprintPrinter.Items.Add(item);
+                foreach (var item in _availablePrinters.OrderBy(value => value, NaturalStringComparer.Instance)) cmbReprintPrinter.Items.Add(item);
 
                 if (!string.IsNullOrEmpty(record.Printer) && cmbReprintPrinter.Items.Contains(record.Printer))
                     cmbReprintPrinter.SelectedItem = record.Printer;
@@ -5045,8 +5113,10 @@ namespace BarTenderPrinter
                 else
                     cmbReprintPrinter.SelectedIndex = 0;
 
-                var ok = new Button { Text = "补打印", Location = new Point(325, 350), Size = new Size(75, 28), DialogResult = DialogResult.OK };
-                var cancel = new Button { Text = "取消", Location = new Point(415, 350), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
+                var lblReason = new Label { Text = "补打印原因：", Location = new Point(12, 335), Size = new Size(110, 22) };
+                var txtReason = new TextBox { Location = new Point(125, 332), Size = new Size(365, 25) };
+                var ok = new Button { Text = "补打印", Location = new Point(325, 395), Size = new Size(75, 28), DialogResult = DialogResult.OK };
+                var cancel = new Button { Text = "取消", Location = new Point(415, 395), Size = new Size(75, 28), DialogResult = DialogResult.Cancel };
                 ok.Click += (s, e) =>
                 {
                     UpdateSession();
@@ -5056,25 +5126,36 @@ namespace BarTenderPrinter
                         form.DialogResult = DialogResult.None;
                         return;
                     }
+                    if (string.IsNullOrWhiteSpace(txtReason.Text))
+                    {
+                        MessageBox.Show(form, "请填写补打印原因。", "补打印原因", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        form.DialogResult = DialogResult.None;
+                    }
                 };
-                form.Controls.AddRange(new Control[] { lblDetails, txtDetails, lblPrinter, cmbReprintPrinter, ok, cancel });
+                form.Controls.AddRange(new Control[] { lblDetails, txtDetails, lblPrinter, cmbReprintPrinter, lblReason, txtReason, ok, cancel });
                 form.AcceptButton = ok;
                 form.CancelButton = cancel;
                 StyleDialog(form, ok, cancel);
 
-                return form.ShowDialog(this) == DialogResult.OK ? cmbReprintPrinter.SelectedItem?.ToString() : null;
+                return form.ShowDialog(this) == DialogResult.OK
+                    ? new ReprintRequest(cmbReprintPrinter.SelectedItem?.ToString(), txtReason.Text.Trim())
+                    : null;
             }
         }
 
-        private void PrintHistoryRecord(PrintRecord record, string printer)
+        private void PrintHistoryRecord(PrintRecord record, string printer, string reason)
         {
             UpdateSession();
+            var operatorName = GetOperatorName();
+            var operatorRole = _session.Role;
             if (!_session.CanApproveReprint)
             { MessageBox.Show(this, "当前账户无补打印审批权限，请使用 Supervisor 或 Admin 账户登录。", "补打印审批", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (!File.Exists(record.TemplatePath))
             { MessageBox.Show(this, $"历史模板文件不存在：\n{record.TemplatePath}"); return; }
-            if (string.IsNullOrEmpty(printer) || !cmbPrinter.Items.Contains(printer))
+            if (string.IsNullOrEmpty(printer) || !_availablePrinters.Contains(printer))
             { MessageBox.Show(this, $"本次补打印使用的打印机当前不可用：{printer}"); return; }
+            if (string.IsNullOrWhiteSpace(reason))
+            { MessageBox.Show(this, "请填写补打印原因。", "补打印原因", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             var values = new Dictionary<string, string>(record.FieldValues, StringComparer.OrdinalIgnoreCase);
             var currentVersion = GetTemplateVersionForPath(record.TemplatePath);
             if (!string.IsNullOrWhiteSpace(record.TemplateVersion) && !string.IsNullOrWhiteSpace(currentVersion) &&
@@ -5097,15 +5178,18 @@ namespace BarTenderPrinter
                     {
                         historySaved = _printWorkflow.RecordPrintResult(_history, record.TemplateName, record.TemplatePath, record.TemplateId, values,
                             result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies,
-                            GetOperatorName(), "", record.TemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
+                            operatorName, reason, record.TemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
                         if (result.Success && historySaved) RestoreAutoIncrementInputsToPendingValues();
                         if (!historySaved)
                             AddLog(result.Success ? "补打印作业已提交，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
                         else if (result.Success)
                         {
-                            AuditLogger.Append(GetOperatorName(), "Reprint", $"record={record.RecordId}");
+                            AuditLogger.Append(operatorName, "Reprint", $"record={record.RecordId};role={operatorRole};reason={reason}");
                             AddLog("补打印作业已提交", "SUCCESS");
-                            if (_chkPreview?.Checked == true && string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
+                            if (_chkPreview?.Checked == true &&
+                                string.Equals(record.OrderId ?? "", _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
+                                string.Equals(record.TemplateId ?? "", GetCurrentTemplateId(), StringComparison.Ordinal) &&
+                                string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
                                 previewValues = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
                         }
                         else
@@ -5127,6 +5211,18 @@ namespace BarTenderPrinter
                     LoggerService.Warn("补打印完成 UI 回调投递失败，已释放打印队列计数。界面状态将在下次可用时刷新。");
                 }
             });
+        }
+
+        private sealed class ReprintRequest
+        {
+            public ReprintRequest(string printer, string reason)
+            {
+                Printer = printer ?? "";
+                Reason = reason ?? "";
+            }
+
+            public string Printer { get; }
+            public string Reason { get; }
         }
 
         private string GetTemplateVersionForPath(string templatePath)
@@ -5156,6 +5252,9 @@ namespace BarTenderPrinter
             if (_btnSidebarToggle != null) _btnSidebarToggle.Enabled = enabled;
             if (_btnOrderPage != null) _btnOrderPage.Enabled = enabled;
             if (_btnPrintPage != null) _btnPrintPage.Enabled = enabled;
+            if (_btnLogin != null) _btnLogin.Enabled = enabled;
+            if (_txtOperator != null) _txtOperator.Enabled = enabled;
+            if (_cmbRole != null) _cmbRole.Enabled = false;
             if (enabled) RefreshPrintActionState();
         }
 
@@ -5167,6 +5266,7 @@ namespace BarTenderPrinter
                 !string.IsNullOrWhiteSpace(_selectedTemplatePath) &&
                 File.Exists(_selectedTemplatePath) &&
                 cmbPrinter.SelectedItem != null &&
+                (_availablePrinters.Count == 0 || _availablePrinters.Contains(cmbPrinter.SelectedItem.ToString())) &&
                 _dataSources.Any(source => source.Enabled);
             btnPrint.Enabled = canPrint;
             SetPrintButtonText(_btService.IsConnected ? "打印" : "打印（需要安装 BarTender）");

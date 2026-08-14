@@ -28,7 +28,7 @@ namespace BarTenderPrinter
                 }
                 else if (c == ',' && !inQuotes)
                 {
-                    result.Add(current.ToString().Trim());
+                    result.Add(current.ToString());
                     current.Clear();
                 }
                 else
@@ -36,10 +36,16 @@ namespace BarTenderPrinter
                     current.Append(c);
                 }
             }
-            result.Add(current.ToString().Trim());
+            result.Add(current.ToString());
             return result;
         }
 
-        public static string Escape(string value) => $"\"{(value ?? "").Replace("\"", "\"\"")}\"";
+        public static string Escape(string value)
+        {
+            value ??= "";
+            if (value.Length > 0 && (value[0] == '=' || value[0] == '+' || value[0] == '-' || value[0] == '@' || value[0] == '\t' || value[0] == '\r'))
+                value = "'" + value;
+            return $"\"{value.Replace("\"", "\"\"")}\"";
+        }
     }
 }

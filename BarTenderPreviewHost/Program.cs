@@ -76,7 +76,12 @@ namespace BarTenderPreviewHost
                 GetSdkType("Resolution"), GetSdkType("OverwriteOptions")
             };
             if (documentType.GetMethod("ExportImageToFile", parameterTypes) == null)
-                throw new MissingMethodException(documentType.FullName, "ExportImageToFile");
+            {
+                var thumbnailType = GetSdkType("LabelFormatThumbnail");
+                if (thumbnailType.GetMethod("Create", BindingFlags.Public | BindingFlags.Static, null,
+                    new[] { typeof(string), typeof(Color), typeof(int), typeof(int) }, null) == null)
+                    throw new MissingMethodException(documentType.FullName, "ExportImageToFile");
+            }
             var engine = Activator.CreateInstance(GetSdkType("Engine"));
             try { Invoke(engine, "Start"); }
             finally
@@ -122,17 +127,27 @@ namespace BarTenderPreviewHost
                 documents = GetProperty(engine, "Documents");
                 document = Invoke(documents, "Open", request.TemplatePath);
                 subStrings = GetProperty(document, "SubStrings");
-                var available = GetDataSourceNames(subStrings);
-                foreach (var item in fields.Where(item => available.Contains(item.Key)))
-                    Invoke(subStrings, "SetSubString", item.Key, item.Value ?? "");
+                var available = GetDataSourceNames(subStrings)
+                    .ToDictionary(name => name, name => name, StringComparer.OrdinalIgnoreCase);
+                foreach (var item in fields.Where(item => available.ContainsKey(item.Key)))
+                    Invoke(subStrings, "SetSubString", available[item.Key], item.Value ?? "");
 
                 resolution = Activator.CreateInstance(GetSdkType("Resolution"), 600, 600);
-                Invoke(document, "ExportImageToFile", request.OutputPath,
-                    Enum.Parse(GetSdkType("ImageType"), "PNG"),
-                    Enum.Parse(GetSdkType("ColorDepth"), "ColorDepth24bit"),
-                    resolution,
-                    Enum.Parse(GetSdkType("OverwriteOptions"), "Overwrite"));
-                ValidateImage(request.OutputPath);
+                try
+                {
+                    Invoke(document, "ExportImageToFile", request.OutputPath,
+                        Enum.Parse(GetSdkType("ImageType"), "PNG"),
+                        Enum.Parse(GetSdkType("ColorDepth"), "ColorDepth24bit"),
+                        resolution,
+                        Enum.Parse(GetSdkType("OverwriteOptions"), "Overwrite"));
+                    ValidateImage(request.OutputPath);
+                }
+                catch (MissingMethodException)
+                {
+                    CloseDocument(document);
+                    document = null;
+                    ExportThumbnail(request.TemplatePath, request.OutputPath);
+                }
             }
             finally
             {

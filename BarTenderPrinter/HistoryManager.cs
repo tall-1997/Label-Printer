@@ -798,7 +798,8 @@ namespace BarTenderPrinter
 
         private SqliteConnection OpenConnection()
         {
-            var connection = new SqliteConnection($"Data Source={_recordsSqliteFile}");
+            var builder = new SqliteConnectionStringBuilder { DataSource = _recordsSqliteFile };
+            var connection = new SqliteConnection(builder.ToString());
             connection.Open();
             return connection;
         }
@@ -832,9 +833,12 @@ namespace BarTenderPrinter
 
         private static bool IsChecksumValid(PrintRecord record)
         {
-            if (record == null || string.IsNullOrWhiteSpace(record.RecordChecksum)) return true;
+            if (record == null) return false;
+            if (string.IsNullOrWhiteSpace(record.RecordChecksum)) return record.SchemaVersion < 3;
             return string.Equals(record.RecordChecksum, ComputeChecksum(record, true), StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(record.RecordChecksum, ComputeChecksum(record, false), StringComparison.OrdinalIgnoreCase);
+                   string.Equals(record.RecordChecksum, ComputeChecksum(record, false), StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(record.RecordChecksum, ComputeLegacyChecksum(record, true), StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(record.RecordChecksum, ComputeLegacyChecksum(record, false), StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ComputeChecksum(PrintRecord record)
@@ -860,8 +864,38 @@ namespace BarTenderPrinter
                 values.Add(record.ExclusionBatchId ?? "");
             }
             var payload = string.Join("|", values);
+            using (var hmac = new HMACSHA256(GetIntegrityKey()))
+                return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)));
+        }
+
+        private static string ComputeLegacyChecksum(PrintRecord record, bool includeLifecycle)
+        {
+            var values = new List<string>
+            {
+                record.RecordId, record.TemplateName, record.TemplatePath, record.TemplateId, record.OrderId,
+                SerializeFields(record.FieldValues), record.PrintTime, record.Status, record.Printer, record.Copies.ToString(),
+                record.OperatorName, record.ReprintReason, record.TemplateVersion, record.DiagnosticDetails, record.OrderName,
+                string.Join(";", record.TemplateFields ?? new List<string>())
+            };
+            if (includeLifecycle)
+            {
+                values.Add(record.IsExcluded.ToString());
+                values.Add(record.ExcludedAtUtc ?? "");
+                values.Add(record.ExcludedBy ?? "");
+                values.Add(record.ExclusionReason ?? "");
+                values.Add(record.ExclusionBatchId ?? "");
+            }
             using (var sha = SHA256.Create())
-                return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(payload)));
+                return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join("|", values))));
+        }
+
+        private static byte[] GetIntegrityKey()
+        {
+            var path = Path.Combine(AppPaths.DataDirectory, "history-integrity.key");
+            if (File.Exists(path)) return Convert.FromBase64String(File.ReadAllText(path).Trim());
+            var key = RandomNumberGenerator.GetBytes(32);
+            AtomicFileWriter.WriteAllText(path, Convert.ToBase64String(key), Encoding.UTF8);
+            return key;
         }
     }
 }

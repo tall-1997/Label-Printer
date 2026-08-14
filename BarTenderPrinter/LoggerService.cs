@@ -7,6 +7,7 @@ namespace BarTenderPrinter
     {
         private static readonly string LogFile = AppPaths.LogFile;
         private static readonly object Lock = new object();
+        private const long MaxLogBytes = 5 * 1024 * 1024;
 
         static LoggerService()
         {
@@ -47,7 +48,9 @@ namespace BarTenderPrinter
         {
             if (File.Exists(LogFile))
             {
-                File.Copy(LogFile, targetPath, true);
+                if (string.Equals(Path.GetFullPath(targetPath), Path.GetFullPath(LogFile), StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("不能覆盖当前日志文件。");
+                File.Copy(LogFile, targetPath, false);
             }
         }
 
@@ -57,13 +60,30 @@ namespace BarTenderPrinter
             {
                 lock (Lock)
                 {
-                    var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}{Environment.NewLine}";
+                    RotateIfNeeded();
+                    var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {Sanitize(message)}{Environment.NewLine}";
                     File.AppendAllText(LogFile, line);
                 }
             }
             catch
             {
             }
+        }
+
+        private static void RotateIfNeeded()
+        {
+            try
+            {
+                if (!File.Exists(LogFile) || new FileInfo(LogFile).Length < MaxLogBytes) return;
+                var archive = Path.Combine(Path.GetDirectoryName(LogFile) ?? AppPaths.DataDirectory, "bartender-printer." + DateTime.Now.ToString("yyyyMMddHHmmss") + ".log");
+                File.Move(LogFile, archive);
+            }
+            catch { }
+        }
+
+        private static string Sanitize(string message)
+        {
+            return (message ?? "").Replace("\r", "\\r").Replace("\n", "\\n");
         }
     }
 }

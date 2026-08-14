@@ -343,6 +343,12 @@ namespace BarTenderPrinter
 
         public Task<PrintResult> PrintAsync(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
         {
+            if (string.IsNullOrWhiteSpace(templatePath) || !File.Exists(templatePath) || !string.Equals(Path.GetExtension(templatePath), ".btw", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(new PrintResult(false, "模板文件无效", $"template={templatePath}"));
+            if (string.IsNullOrWhiteSpace(printer))
+                return Task.FromResult(new PrintResult(false, "打印机为空", $"template={templatePath};printer={printer};copies={copies}"));
+            if (copies < 1 || copies > 99)
+                return Task.FromResult(new PrintResult(false, "打印份数超出范围", $"template={templatePath};printer={printer};copies={copies}"));
             var values = new Dictionary<string, string>(fieldValues ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
             return InvokeStaAsync(() => PrintCore(templatePath, values, printer, copies));
         }

@@ -76,7 +76,7 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
-        public void MissingAccountFileCreatesCompatibleAdministrator()
+        public void MissingAccountFileCreatesRandomBootstrapAdministrator()
         {
             var directory = CreateTempDirectory();
             var path = Path.Combine(directory, "accounts.json");
@@ -85,8 +85,11 @@ namespace BarTenderPrinter.Tests
 
             Assert.Null(manager.LoadError);
             Assert.NotNull(manager.DefaultAccount);
-            Assert.True(manager.TryLogin("superadmin", "admin", out var account));
+            Assert.False(manager.TryLogin("superadmin", "admin", out _));
+            Assert.False(string.IsNullOrWhiteSpace(manager.BootstrapPassword));
+            Assert.True(manager.TryLogin("superadmin", manager.BootstrapPassword, out var account));
             Assert.Equal("Admin", account.Role);
+            Assert.StartsWith("PBKDF2-SHA256$", account.PasswordHash);
             Assert.True(File.Exists(path));
         }
 
@@ -255,6 +258,24 @@ namespace BarTenderPrinter.Tests
             var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db);
             Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "PASS", "Printer", 1));
             Assert.True(File.Exists(db));
+        }
+
+        [Fact]
+        public void HistoryManagerKeepsSuccessfulPrimaryWriteWhenArchiveFails()
+        {
+            var dir = CreateTempDirectory();
+            var archivePath = Path.Combine(dir, "archive-file");
+            File.WriteAllText(archivePath, "blocks archive directory creation");
+            var db = Path.Combine(dir, "records.db");
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db, archivePath);
+
+            var added = history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "PASS", "Printer", 1);
+
+            Assert.True(added);
+            Assert.Single(history.Records);
+            var reloaded = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db, archivePath);
+            reloaded.Load();
+            Assert.Single(reloaded.Records);
         }
 
         [Fact]

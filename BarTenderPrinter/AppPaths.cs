@@ -21,7 +21,7 @@ namespace BarTenderPrinter
         public static readonly string ApplicationStateFile = Path.Combine(DataDirectory, "application-state.json");
         public static readonly string ValidationDataDirectory = Path.Combine(DataDirectory, "validation-data");
         public static readonly string PreviewDirectory = Path.Combine(DataDirectory, "previews");
-        public static readonly string HistoryRecordsDirectory = Path.Combine(AppContext.BaseDirectory, "history-records");
+        public static readonly string HistoryRecordsDirectory = Path.Combine(DataDirectory, "history-records");
 
         public static void Initialize()
         {

@@ -93,6 +93,7 @@ namespace BarTenderPrinter
         private readonly string _path;
 
         public IReadOnlyList<PackagingOrder> Orders => _orders;
+        public Exception LoadError { get; private set; }
 
         public OrderManager()
             : this(AppPaths.OrdersFile, true)
@@ -258,12 +259,14 @@ namespace BarTenderPrinter
             }
             catch (Exception ex)
             {
+                LoadError = ex;
                 LoggerService.Error("加载订单失败", ex);
             }
         }
 
         private void Save(IEnumerable<PackagingOrder> orders = null)
         {
+            if (LoadError != null) throw new InvalidOperationException("订单文件加载失败，已阻止覆盖保存。请先恢复订单文件。", LoadError);
             var json = JsonSerializer.Serialize(orders ?? _orders, new JsonSerializerOptions { WriteIndented = true });
             AtomicFileWriter.WriteAllText(_path, json);
         }
