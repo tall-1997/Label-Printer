@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.77";
+        private readonly string _version = "v5.7.78";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -134,6 +134,8 @@ namespace BarTenderPrinter
         private Button _btnAbout;
         private int _historyToolbarWidth;
         private bool _layingOutOrderEditor;
+        private string _printButtonText = "打印";
+        private Image _printButtonIcon;
 
         private int ScaleUi(int value) => (int)Math.Round(value * Math.Max(1F, DeviceDpi / 96F));
         private int SidebarCollapsedWidth => 0;
@@ -582,11 +584,45 @@ namespace BarTenderPrinter
         {
             var icon = SvgIconRenderer.Render(AppIcon.Print, Color.White, ScaleIcon(19, scale));
             btnPrint.AccessibleName = "打印";
-            btnPrint.ImageAlign = ContentAlignment.MiddleCenter;
-            btnPrint.TextAlign = ContentAlignment.MiddleCenter;
-            btnPrint.TextImageRelation = TextImageRelation.ImageBeforeText;
-            ReplaceImage(btnPrint, icon);
-            btnPrint.Padding = new Padding(ScaleIcon(6, scale), 0, ScaleIcon(8, scale), 0);
+            btnPrint.Text = string.Empty;
+            btnPrint.Image = null;
+            btnPrint.ImageAlign = ContentAlignment.MiddleLeft;
+            btnPrint.TextAlign = ContentAlignment.MiddleLeft;
+            btnPrint.TextImageRelation = TextImageRelation.Overlay;
+            ReplacePrintButtonIcon(icon);
+            btnPrint.Padding = Padding.Empty;
+            btnPrint.Paint -= PrintButton_Paint;
+            btnPrint.Paint += PrintButton_Paint;
+            btnPrint.Invalidate();
+        }
+
+        private void PrintButton_Paint(object sender, PaintEventArgs e)
+        {
+            if (sender is not Button button) return;
+            var text = string.IsNullOrWhiteSpace(_printButtonText) ? "打印" : _printButtonText;
+            var image = _printButtonIcon;
+            var scale = Math.Max(1F, button.DeviceDpi / 96F);
+            var gap = image == null ? 0 : (int)Math.Round(8 * scale);
+            var flags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter;
+            var textSize = TextRenderer.MeasureText(e.Graphics, text, button.Font, Size.Empty, flags);
+            var contentWidth = (image?.Width ?? 0) + gap + textSize.Width;
+            var contentHeight = Math.Max(image?.Height ?? 0, textSize.Height);
+            var startX = Math.Max(0, (button.ClientSize.Width - contentWidth) / 2);
+            var centerY = button.ClientSize.Height / 2;
+            var color = button.Enabled ? button.ForeColor : SystemColors.GrayText;
+
+            if (image != null)
+            {
+                var imageY = centerY - image.Height / 2;
+                if (button.Enabled)
+                    e.Graphics.DrawImageUnscaled(image, startX, imageY);
+                else
+                    ControlPaint.DrawImageDisabled(e.Graphics, image, startX, imageY, button.BackColor);
+                startX += image.Width + gap;
+            }
+
+            var textBounds = new Rectangle(startX, centerY - contentHeight / 2, textSize.Width + 2, contentHeight);
+            TextRenderer.DrawText(e.Graphics, text, button.Font, textBounds, color, flags | TextFormatFlags.Left);
         }
 
         private void ApplyNavigationIcons(bool orderPageActive, float scale = 0F)
@@ -610,6 +646,13 @@ namespace BarTenderPrinter
             previous?.Dispose();
         }
 
+        private void ReplacePrintButtonIcon(Image image)
+        {
+            var previous = _printButtonIcon;
+            _printButtonIcon = image;
+            previous?.Dispose();
+        }
+
         private static int ScaleUiStatic(Control control, int value) =>
             (int)Math.Round(value * Math.Max(1F, control.DeviceDpi / 96F));
 
@@ -629,6 +672,8 @@ namespace BarTenderPrinter
                 button.Image = null;
                 image?.Dispose();
             }
+            _printButtonIcon?.Dispose();
+            _printButtonIcon = null;
             if (_brandIcon != null)
             {
                 var image = _brandIcon.Image;
@@ -1646,9 +1691,9 @@ namespace BarTenderPrinter
             return !IsDisposed && !Disposing && IsHandleCreated;
         }
 
-        private void PostToUi(Action action)
+        private bool PostToUi(Action action)
         {
-            if (!CanPostToUi()) return;
+            if (!CanPostToUi()) return false;
             try
             {
                 BeginInvoke((Action)(() =>
@@ -1661,8 +1706,10 @@ namespace BarTenderPrinter
                         try { SetStatus("操作完成但界面刷新失败，请查看日志"); } catch { }
                     }
                 }));
+                return true;
             }
-            catch (InvalidOperationException) { }
+            catch (ObjectDisposedException) { return false; }
+            catch (InvalidOperationException) { return false; }
         }
 
         private void MarkOrderEditorDirty()
@@ -2223,6 +2270,11 @@ namespace BarTenderPrinter
         private void RefreshOrderTemplateCards()
         {
             if (_orderTemplateCards == null) return;
+            foreach (var control in _orderTemplateCards.Controls.Cast<Control>().ToArray())
+            {
+                control.ContextMenuStrip?.Dispose();
+                control.Dispose();
+            }
             _orderTemplateCards.Controls.Clear();
             if (_orderTemplateDrafts.Count == 0)
             {
@@ -2852,16 +2904,16 @@ namespace BarTenderPrinter
             var row = _orderDataSourcesGrid.Rows[e.RowIndex];
             var locked = ToBoolean(row.Cells["LockEnabled"].Value);
             var color = locked ? Color.FromArgb(45, 105, 210) : Color.FromArgb(150, 150, 150);
-            var centerX = e.CellBounds.Left + e.CellBounds.Width / 2;
-            var top = e.CellBounds.Top + Math.Max(4, (e.CellBounds.Height - 22) / 2);
+            var scale = Math.Max(1F, _orderDataSourcesGrid.DeviceDpi / 96F);
+            var iconWidth = 20F * scale;
+            var iconHeight = 22F * scale;
+            var left = e.CellBounds.Left + (e.CellBounds.Width - iconWidth) / 2F;
+            var top = e.CellBounds.Top + (e.CellBounds.Height - iconHeight) / 2F;
             using (var pen = new Pen(color, 1.7F) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             using (var brush = new SolidBrush(color))
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                DrawRoundedRectangle(e.Graphics, pen, new RectangleF(centerX - 7, top + 8, 14, 11), 2.2F);
-                if (locked) e.Graphics.DrawArc(pen, centerX - 5, top + 1, 10, 11, 180, 180);
-                else e.Graphics.DrawArc(pen, centerX - 2, top + 1, 10, 11, 190, 230);
-                e.Graphics.FillEllipse(brush, centerX - 1.2F, top + 12.5F, 2.5F, 2.5F);
+                DrawScaledLockGlyph(e.Graphics, pen, brush, new RectangleF(left, top, iconWidth, iconHeight), locked);
             }
             e.Handled = true;
         }
@@ -3132,14 +3184,14 @@ namespace BarTenderPrinter
                 SetStatus("BarTender 已连接");
                 AddLog("BarTender 已连接", "SUCCESS");
                 btnPrint.Enabled = true;
-                btnPrint.Text = "打印";
+                SetPrintButtonText("打印");
             }
             else
             {
                 SetStatus("离线模式 - BarTender 未安装");
                 AddLog("BarTender 未安装，进入离线模式", "WARNING");
                 btnPrint.Enabled = false;
-                btnPrint.Text = "打印（需要安装 BarTender）";
+                SetPrintButtonText("打印（需要安装 BarTender）");
             }
         }
 
@@ -3176,6 +3228,11 @@ namespace BarTenderPrinter
 
         private async Task RefreshPrintersAsync()
         {
+            if (_pendingPrintJobCount > 0)
+            {
+                AddLog("打印队列处理中，暂不刷新打印机列表。", "INFO");
+                return;
+            }
             try
             {
                 btnRefreshPrinter.Enabled = false;
@@ -3191,7 +3248,7 @@ namespace BarTenderPrinter
             }
             finally
             {
-                btnRefreshPrinter.Enabled = true;
+                btnRefreshPrinter.Enabled = _pendingPrintJobCount == 0;
                 RefreshPrintActionState();
             }
         }
@@ -3840,17 +3897,13 @@ namespace BarTenderPrinter
 
             var isLocked = IsInputLocked(enabled[index]);
             var color = isLocked ? Color.FromArgb(45, 105, 210) : Color.FromArgb(150, 150, 150);
+            var size = Math.Min(button.ClientSize.Width, button.ClientSize.Height);
+            var bounds = new RectangleF((button.ClientSize.Width - size) / 2F, (button.ClientSize.Height - size) / 2F, size, size);
             using (var pen = new Pen(color, 1.8F) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             using (var brush = new SolidBrush(color))
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                // Based on Heroicons MIT lock-open/lock-closed outline SVGs, redrawn to avoid bundled image files.
-                DrawRoundedRectangle(e.Graphics, pen, new RectangleF(5.5F, 10.5F, 13F, 10F), 2.2F);
-                if (isLocked)
-                    e.Graphics.DrawArc(pen, 7F, 3.5F, 10F, 11F, 180F, 180F);
-                else
-                    e.Graphics.DrawArc(pen, 10F, 3.5F, 10F, 11F, 190F, 230F);
-                e.Graphics.FillEllipse(brush, 11F, 14F, 2.5F, 2.5F);
+                DrawScaledLockGlyph(e.Graphics, pen, brush, bounds, isLocked);
             }
         }
 
@@ -3860,6 +3913,31 @@ namespace BarTenderPrinter
         }
 
         private static bool IsInputLocked(DataSourceItem source) => source != null && (source.IsLocked || source.AutoIncrementLocked);
+
+        private static void DrawScaledLockGlyph(Graphics graphics, Pen pen, Brush brush, RectangleF bounds, bool locked)
+        {
+            const float designSize = 24F;
+            var scale = Math.Min(bounds.Width, bounds.Height) / designSize;
+            var offsetX = bounds.Left + (bounds.Width - designSize * scale) / 2F;
+            var offsetY = bounds.Top + (bounds.Height - designSize * scale) / 2F;
+            var previous = graphics.Transform;
+            graphics.TranslateTransform(offsetX, offsetY);
+            graphics.ScaleTransform(scale, scale);
+            try
+            {
+                DrawRoundedRectangle(graphics, pen, new RectangleF(5.5F, 10.5F, 13F, 10F), 2.2F);
+                if (locked)
+                    graphics.DrawArc(pen, 7F, 3.5F, 10F, 11F, 180F, 180F);
+                else
+                    graphics.DrawArc(pen, 10F, 3.5F, 10F, 11F, 190F, 230F);
+                graphics.FillEllipse(brush, 11F, 14F, 2.5F, 2.5F);
+            }
+            finally
+            {
+                graphics.Transform = previous;
+                previous.Dispose();
+            }
+        }
 
         private static void DrawRoundedRectangle(Graphics graphics, Pen pen, RectangleF bounds, float radius)
         {
@@ -4597,7 +4675,7 @@ namespace BarTenderPrinter
             var historySaved = _printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
                 result.Success ? "PASS" : "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
                 orderName, orderId, templateFields);
-            PostToUi(() =>
+            if (!PostToUi(() =>
             {
                 Dictionary<string, string> previewValues = null;
                 try
@@ -4644,7 +4722,12 @@ namespace BarTenderPrinter
                 }
                 if (_pendingPrintJobCount == 0 && _chkPreview?.Checked == true)
                     _ = RefreshPreviewAsync(previewValues);
-            });
+            }))
+            {
+                RemovePendingPrintValues(templateId, pendingFields, fieldValues);
+                _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
+                LoggerService.Warn("打印完成 UI 回调投递失败，已释放打印队列计数。界面状态将在下次可用时刷新。");
+            }
         }
 
         private string GetPendingPrintValueKey(string templateId, string value)
@@ -5006,9 +5089,10 @@ namespace BarTenderPrinter
                 PrintResult result;
                 try { result = _btService.Print(record.TemplatePath, values, printer, record.Copies); }
                 catch (Exception ex) { result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={record.TemplatePath};printer={printer};copies={record.Copies};message={ex.Message}"); }
-                PostToUi(() =>
+                if (!PostToUi(() =>
                 {
                     var historySaved = true;
+                    Dictionary<string, string> previewValues = null;
                     try
                     {
                         historySaved = _printWorkflow.RecordPrintResult(_history, record.TemplateName, record.TemplatePath, record.TemplateId, values,
@@ -5022,7 +5106,7 @@ namespace BarTenderPrinter
                             AuditLogger.Append(GetOperatorName(), "Reprint", $"record={record.RecordId}");
                             AddLog("补打印作业已提交", "SUCCESS");
                             if (_chkPreview?.Checked == true && string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
-                                _ = RefreshPreviewAsync(new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase));
+                                previewValues = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
                         }
                         else
                             AddLog($"历史记录补打印失败: {result.ErrorMessage}", "ERROR");
@@ -5035,7 +5119,13 @@ namespace BarTenderPrinter
                         RefreshStats();
                         SetStatus(_pendingPrintJobCount > 0 ? $"打印队列: {_pendingPrintJobCount}" : result.Success ? (historySaved ? "补打印作业已提交" : "补打印作业已提交，历史保存失败") : (historySaved ? "补打印失败" : "补打印失败，历史保存失败"));
                     }
-                });
+                    if (_pendingPrintJobCount == 0 && previewValues != null)
+                        _ = RefreshPreviewAsync(previewValues);
+                }))
+                {
+                    _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
+                    LoggerService.Warn("补打印完成 UI 回调投递失败，已释放打印队列计数。界面状态将在下次可用时刷新。");
+                }
             });
         }
 
@@ -5051,6 +5141,7 @@ namespace BarTenderPrinter
             btnPrint.Enabled = enabled;
             btnImportHistory.Enabled = enabled;
             btnReprintHistory.Enabled = enabled;
+            btnRefreshPrinter.Enabled = enabled;
             cmbTemplate.Enabled = enabled;
             cmbPrinter.Enabled = enabled;
             numCopies.Enabled = enabled;
@@ -5078,7 +5169,16 @@ namespace BarTenderPrinter
                 cmbPrinter.SelectedItem != null &&
                 _dataSources.Any(source => source.Enabled);
             btnPrint.Enabled = canPrint;
-            btnPrint.Text = _btService.IsConnected ? "打印" : "打印（需要安装 BarTender）";
+            SetPrintButtonText(_btService.IsConnected ? "打印" : "打印（需要安装 BarTender）");
+        }
+
+        private void SetPrintButtonText(string text)
+        {
+            _printButtonText = string.IsNullOrWhiteSpace(text) ? "打印" : text;
+            if (btnPrint == null) return;
+            btnPrint.AccessibleName = _printButtonText;
+            btnPrint.Text = string.Empty;
+            btnPrint.Invalidate();
         }
 
         private List<PrintRecord> GetCurrentHistoryRecords(bool includeAllPages = false)

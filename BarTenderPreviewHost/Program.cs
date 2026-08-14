@@ -84,6 +84,7 @@ namespace BarTenderPreviewHost
                 if (engine != null)
                 {
                     try { Invoke(engine, "Stop"); } catch { }
+                    DisposeIfPossible(engine);
                 }
             }
         }
@@ -204,7 +205,7 @@ namespace BarTenderPreviewHost
             if (value == null) return;
             if (value is IDisposable disposable)
             {
-                disposable.Dispose();
+                try { disposable.Dispose(); } catch { }
                 return;
             }
             var dispose = value.GetType().GetMethod("Dispose", BindingFlags.Instance | BindingFlags.Public, null, Type.EmptyTypes, null);

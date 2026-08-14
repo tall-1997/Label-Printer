@@ -1,7 +1,9 @@
 #define MyAppName "BarTender 标签打印工具"
 #define MyAppPublisher "tall-1997"
 #define MyAppExeName "BarTenderPrinter.exe"
+#ifndef MyAppVersion
 #define MyAppVersion GetVersionNumbersString("..\publish\BarTenderPrinter.exe")
+#endif
 
 [Setup]
 AppId={{AA293069-3471-49F7-A52A-7976253617BC}
