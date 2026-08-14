@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.72";
+        private readonly string _version = "v5.7.73";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -130,9 +130,10 @@ namespace BarTenderPrinter
         private Button _btnToggleLog;
         private Button _btnAbout;
         private int _historyToolbarWidth;
+        private bool _layingOutOrderEditor;
 
         private int ScaleUi(int value) => (int)Math.Round(value * Math.Max(1F, DeviceDpi / 96F));
-        private int SidebarCollapsedWidth => ScaleUi(12);
+        private int SidebarCollapsedWidth => 0;
         private int SidebarExpandedWidth => ScaleUi(168);
 
         public MainForm(string startupTemplatePath = null)
@@ -161,6 +162,7 @@ namespace BarTenderPrinter
                         LayoutStatsCards();
                         LayoutModernShell();
                         RebuildPrintPageLayout();
+                        LayoutOrderEditor();
                         DockPreviewForm();
                     }));
                 }
@@ -184,7 +186,13 @@ namespace BarTenderPrinter
             inputPanel.SizeChanged += InputPanel_SizeChanged;
             inputPanel.Scroll += (s, e) => ClampInputPanelScroll();
             inputPanel.MouseWheel += (s, e) => BeginInvoke((Action)ClampInputPanelScroll);
-            SizeChanged += (s, e) => { RebuildPrintPageLayout(); DockPreviewForm(); };
+            SizeChanged += (s, e) =>
+            {
+                LayoutModernShell();
+                RebuildPrintPageLayout();
+                LayoutOrderEditor();
+                DockPreviewForm();
+            };
             historyPanel.SizeChanged += (s, e) =>
             {
                 if (_historyToolbarWidth != historyPanel.ClientSize.Width) LayoutHistoryToolbar();
@@ -322,6 +330,7 @@ namespace BarTenderPrinter
             if (_navPanel == null) return;
             var sidebarWidth = _sidebarExpanded ? SidebarExpandedWidth : SidebarCollapsedWidth;
             _navPanel.Width = sidebarWidth;
+            _navPanel.Visible = _sidebarExpanded;
             _navPanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
             var navWidth = Math.Max(ScaleUi(136), SidebarExpandedWidth - ScaleUi(16));
             _btnPrintPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(12), navWidth, ScaleUi(44));
@@ -341,7 +350,6 @@ namespace BarTenderPrinter
             toolbar.Padding = new Padding(ScaleUi(4));
             foreach (Control control in toolbar.Controls)
             {
-                control.Margin = new Padding(ScaleUi(3));
                 if (control is Button button)
                 {
                     button.AutoSize = true;
@@ -358,6 +366,16 @@ namespace BarTenderPrinter
                 {
                     control.Height = Math.Max(control.PreferredSize.Height, ScaleUi(28));
                 }
+                else if (control is CheckBox checkBox)
+                {
+                    checkBox.AutoSize = false;
+                    checkBox.Height = ScaleUi(32);
+                    checkBox.TextAlign = ContentAlignment.MiddleLeft;
+                    checkBox.Padding = new Padding(0, 0, ScaleUi(4), 0);
+                }
+                var rowHeight = ScaleUi(32);
+                var verticalMargin = ScaleUi(3) + Math.Max(0, (rowHeight - control.Height) / 2);
+                control.Margin = new Padding(ScaleUi(3), verticalMargin, ScaleUi(3), ScaleUi(3));
             }
             if (_txtOperator != null) _txtOperator.Width = ScaleUi(96);
             if (_cmbRole != null) _cmbRole.Width = ScaleUi(104);
@@ -378,7 +396,7 @@ namespace BarTenderPrinter
             if (_orderPagePanel != null)
             {
                 _orderPagePanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
-                _orderContentPanel?.PerformLayout();
+                LayoutOrderEditor();
             }
         }
 
@@ -995,6 +1013,7 @@ namespace BarTenderPrinter
                 Padding = new Padding(ScaleUi(12))
             };
             _orderContentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(ScaleUi(12)), AutoScroll = true };
+            _orderContentPanel.SizeChanged += (s, e) => LayoutOrderEditor();
             var y = 28;
             _btnAddOrder = new Button
             {
@@ -1103,6 +1122,7 @@ namespace BarTenderPrinter
             lblCopies.Location = new Point(left + width - S(86), lblSelectedTemplate.Bottom + S(15));
             numCopies.Location = new Point(left + width - S(45), lblSelectedTemplate.Bottom + S(12));
             cmbPrinter.Size = new Size(Math.Max(S(180), btnRefreshPrinter.Left - cmbPrinter.Left - S(6)), Math.Max(cmbPrinter.PreferredHeight, S(25)));
+            AlignControlCenters(lblPrinter, cmbPrinter, btnRefreshPrinter, lblCopies, numCopies);
 
             inputPanel.Location = new Point(left, cmbPrinter.Bottom + S(10));
             inputPanel.Width = width;
@@ -1127,9 +1147,11 @@ namespace BarTenderPrinter
             _sidebarExpanded = expanded;
             _btnPrintPage.Visible = expanded;
             _btnOrderPage.Visible = expanded;
+            _navPanel.Visible = expanded;
             LayoutSidebar();
             RebuildPrintPageLayout();
-            _navPanel.BringToFront();
+            LayoutOrderEditor();
+            if (expanded) _navPanel.BringToFront();
         }
 
         private void SidebarToggle_Paint(object sender, PaintEventArgs e)
@@ -1699,6 +1721,7 @@ namespace BarTenderPrinter
             MiuiTheme.StyleLabel(copiesLabel);
             MiuiTheme.StyleComboBox(_cmbOrderPrinter);
             MiuiTheme.StyleNumericUpDown(_numOrderCopies);
+            AlignControlCenters(printerLabel, _cmbOrderPrinter, copiesLabel, _numOrderCopies);
 
             _chkOrderInputValidation = new CheckBox { Text = "本地完整匹配", Location = new Point(10, 397), Size = new Size(120, 22), Enabled = false };
             _chkOrderDuplicateValidation = new CheckBox { Text = "重复校验", Location = new Point(140, 397), Size = new Size(90, 22) };
@@ -1726,6 +1749,8 @@ namespace BarTenderPrinter
             MiuiTheme.StyleNumericUpDown(_numOrderGlobalLength);
             MiuiTheme.StyleButton(chooseValidationData);
             MiuiTheme.StyleButton(manageValidationData);
+            AlignControlCenters(_chkOrderInputValidation, _chkOrderDuplicateValidation, _chkOrderLengthValidation,
+                globalLengthLabel, _numOrderGlobalLength, chooseValidationData, manageValidationData, _lblOrderLocalData);
 
             var dataSourceTitle = new Label
             {
@@ -1743,6 +1768,7 @@ namespace BarTenderPrinter
             MiuiTheme.StyleLabel(dataSourceTitle);
             MiuiTheme.StyleCheckBox(_chkOrderToggleAllSources);
             MiuiTheme.StyleButton(invertSources);
+            AlignControlCenters(dataSourceTitle, _chkOrderToggleAllSources, invertSources);
 
             _orderDataSourcesGrid = new DataGridView
             {
@@ -1808,6 +1834,7 @@ namespace BarTenderPrinter
 
             RefreshOrderTemplateCards();
             if (_orderTemplateDrafts.Count > 0) SelectOrderTemplateDraft(_orderTemplateDrafts[0]);
+            LayoutOrderEditor();
             _loadingOrderEditor = false;
             _orderEditorDirty = false;
         }
@@ -1829,6 +1856,66 @@ namespace BarTenderPrinter
                     (int)Math.Round(bounds.Height * scale));
             }
             _orderContentPanel.AutoScrollMinSize = new Size(ScaleUi(740), ScaleUi(845));
+        }
+
+        private void LayoutOrderEditor()
+        {
+            if (_layingOutOrderEditor || _orderContentPanel == null || _orderDataSourcesGrid == null) return;
+            _layingOutOrderEditor = true;
+            var scrollPosition = new Point(
+                Math.Max(0, -_orderContentPanel.AutoScrollPosition.X),
+                Math.Max(0, -_orderContentPanel.AutoScrollPosition.Y));
+            try
+            {
+                _orderContentPanel.SuspendLayout();
+                _orderContentPanel.AutoScrollPosition = Point.Empty;
+                var padding = ScaleUi(10);
+                var gap = ScaleUi(10);
+                var contentWidth = Math.Max(ScaleUi(700), _orderContentPanel.ClientSize.Width - ScaleUi(25));
+                var fieldWidth = Math.Max(ScaleUi(130), (contentWidth - padding * 2 - gap * 3) / 4);
+                var combos = new[] { _txtOrderCustomer, _txtOrderModel, _txtOrderColor, _txtOrderNumber };
+                var labelTexts = new[] { "客户：", "机型：", "颜色：", "订单号：" };
+                for (var index = 0; index < combos.Length; index++)
+                {
+                    var combo = combos[index];
+                    if (combo == null) continue;
+                    var left = padding + index * (fieldWidth + gap);
+                    combo.SetBounds(left, combo.Top, fieldWidth, Math.Max(combo.PreferredHeight, ScaleUi(25)));
+                    var label = _orderContentPanel.Controls.OfType<Label>()
+                        .FirstOrDefault(item => item.Text == labelTexts[index]);
+                    if (label == null) continue;
+                    label.SetBounds(left, combo.Top - ScaleUi(22), fieldWidth, ScaleUi(20));
+                    label.TextAlign = ContentAlignment.MiddleLeft;
+                }
+
+                if (_orderTemplateCards != null) _orderTemplateCards.Width = contentWidth;
+                _orderDataSourcesGrid.Width = contentWidth;
+                var minimumGridHeight = ScaleUi(285);
+                var availableGridHeight = _orderContentPanel.ClientSize.Height - _orderDataSourcesGrid.Top - ScaleUi(12);
+                _orderDataSourcesGrid.Height = Math.Max(minimumGridHeight, availableGridHeight);
+                _orderContentPanel.AutoScrollMinSize = new Size(
+                    ScaleUi(740),
+                    _orderDataSourcesGrid.Bottom + ScaleUi(12));
+            }
+            finally
+            {
+                _orderContentPanel.AutoScrollPosition = scrollPosition;
+                _orderContentPanel.ResumeLayout(false);
+                _layingOutOrderEditor = false;
+            }
+        }
+
+        private static void AlignControlCenters(params Control[] controls)
+        {
+            var visibleControls = controls.Where(control => control != null).ToArray();
+            if (visibleControls.Length == 0) return;
+            var rowTop = visibleControls.Min(control => control.Top);
+            var rowHeight = visibleControls.Max(control => control.Height);
+            foreach (var control in visibleControls)
+            {
+                control.Top = rowTop + Math.Max(0, (rowHeight - control.Height) / 2);
+                if (control is Label label) label.TextAlign = ContentAlignment.MiddleLeft;
+            }
         }
 
         private TextBox AddOrderPageTextBox(string labelText, int x, int y, int width = 200)

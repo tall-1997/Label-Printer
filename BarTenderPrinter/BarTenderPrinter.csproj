@@ -6,7 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>BarTenderPrinter</RootNamespace>
     <AssemblyName>BarTenderPrinter</AssemblyName>
-    <Version>5.7.72</Version>
+    <Version>5.7.73</Version>
     <ApplicationIcon>icon.ico</ApplicationIcon>
 
     <!-- Self-contained installed application -->
@@ -27,5 +27,24 @@
   <ItemGroup>
     <InternalsVisibleTo Include="BarTenderPrinter.Tests" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <PreviewHostProject>$(MSBuildProjectDirectory)/../BarTenderPreviewHost/BarTenderPreviewHost.csproj</PreviewHostProject>
+    <PreviewHostOutput>$(MSBuildProjectDirectory)/../BarTenderPreviewHost/bin/$(Configuration)/net48</PreviewHostOutput>
+  </PropertyGroup>
+
+  <Target Name="BuildPreviewHost" BeforeTargets="Build">
+    <MSBuild Projects="$(PreviewHostProject)" Targets="Restore;Build" Properties="Configuration=$(Configuration);RuntimeIdentifier=" />
+    <ItemGroup>
+      <PreviewHostFiles Include="$(PreviewHostOutput)/BarTenderPreviewHost.exe" />
+      <PreviewHostFiles Include="$(PreviewHostOutput)/BarTenderPreviewHost.exe.config" Condition="Exists('$(PreviewHostOutput)/BarTenderPreviewHost.exe.config')" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(PreviewHostOutput)/BarTenderPreviewHost.exe')" Text="BarTenderPreviewHost.exe was not built." />
+    <Copy SourceFiles="@(PreviewHostFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyPreviewHostToPublish" AfterTargets="Publish" DependsOnTargets="BuildPreviewHost">
+    <Copy SourceFiles="@(PreviewHostFiles)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

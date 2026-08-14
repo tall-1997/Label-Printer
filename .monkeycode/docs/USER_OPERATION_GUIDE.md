@@ -1,6 +1,6 @@
 # BarTenderPrinter 使用说明与操作步骤
 
-适用版本：`v5.7.72`
+适用版本：`v5.7.73`
 
 本文面向现场操作员、班组长、工艺/模板维护人员和系统管理员，说明 BarTenderPrinter 的安装、登录、订单管理、模板配置、数据源设置、打印、补打印、历史追溯和日常维护流程。
 
@@ -29,11 +29,11 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 
 从 GitHub Release 下载最新安装包：
 
-`BarTenderPrinter-Setup-v5.7.72-win-x64.exe`
+`BarTenderPrinter-Setup-v5.7.73-win-x64.exe`
 
 发布地址：
 
-`https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.72`
+`https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.73`
 
 ## 3. 首次启动
 
@@ -363,7 +363,7 @@ BarTenderPrinter 是基于 BarTender COM 接口的标签打印工具，用于包
 
 ### 9.5 标签预览
 
-应用启动时检测目标机器安装的 BarTender 2022 R2 `Seagull.BarTender.Print` SDK。检测成功后显示 `开启预览`；SDK 缺失、架构不匹配或版本不匹配时显示 `预览不可用`，鼠标停留可查看原因。打印后预览只使用当前模板仍存在的历史字段，旧字段会被忽略；无可用动态字段时显示原模板缩略图。预览窗口按图片比例和屏幕工作区自动调整。该功能需在安装 BarTender 的 Windows 机器上完成静默性和打印隔离验收后用于生产。
+应用启动时通过独立的 .NET Framework 4.8 x64 宿主检测目标机器安装的 BarTender 2022 R2 `Seagull.BarTender.Print` SDK，并执行 Engine 启停探针。检测成功后显示 `开启预览`；宿主、SDK、架构、版本或依赖异常时显示 `预览不可用`，鼠标停留可查看原因。打印后预览只使用当前模板仍存在的历史字段，旧字段会被忽略；无可用动态字段时显示原模板缩略图。预览窗口按图片比例和屏幕工作区自动调整。
 
 ## 10. 补打印
 

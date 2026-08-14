@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.72** - C# WinForms 安装版
+**v5.7.73** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -22,8 +22,8 @@
 - **动态输入框**：根据数据源配置自动生成输入框，右侧锁图标支持固定锁定和增降序锁定
 - **打印完成后自动清空**：清空非增序字段，增序字段自动更新并锁定
 - **连续静默打印**：扫码作业进入本地 FIFO 队列后立即恢复输入，后台按顺序提交并短暂重试 BarTender Busy 错误
-- **右侧标签预览框架**：通过目标机器安装的 BarTender 2022 R2 .NET SDK 导出 PNG；原模板使用 `LabelFormatThumbnail`，动态字段使用 `ExportImageToFile`
-- **SDK 运行时防护**：优先选择 BarTender 2022 R2 `SDK/Redist/x64` 中最新的 `11.3.x` SDK，字段赋值失败时阻止错误预览，Engine 启动失败后自动清理
+- **右侧标签预览框架**：通过独立的 .NET Framework 4.8 x64 宿主调用 BarTender 2022 R2 SDK 导出 PNG
+- **SDK 运行时隔离**：主应用保持 .NET 8，预览宿主负责 Engine 启停、动态字段赋值、超时回收和错误隔离
 - **预览渲染缓存**：模板路径、修改时间或字段快照未变化时复用已验证 PNG，减少 Engine 与模板重复调用
 - **动态字段兼容**：打印后预览按当前模板字段过滤历史旧字段，字段无交集时回退原模板缩略图
 - **预览自适应**：预览窗口根据标签图片比例和当前屏幕工作区自动调整尺寸
@@ -75,7 +75,7 @@
 | UI | WinForms + MIUIX 风格配色 |
 | BarTender | COM 接口调用 |
 | 打印方式 | `Formats.Open` → `SetNamedSubStringValue` → `PrintOut` |
-| 预览方式 | 运行时加载 BarTender 2022 R2 `Seagull.BarTender.Print` SDK；实机验收完成前按候选功能管理 |
+| 预览方式 | .NET Framework 4.8 x64 隔离宿主调用 BarTender 2022 R2 `Seagull.BarTender.Print` SDK |
 | 配置存储 | Windows INI 文件 |
 | 历史记录 | CSV 文件 |
 | 发布方式 | Inno Setup 当前用户安装包（内置 .NET 运行时） |
@@ -84,7 +84,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender Printer v5.7.72  By---池鱼  [日志] [关于] [导出日志] │
+│ BarTender Printer v5.7.73  By---池鱼  [日志] [关于] [导出日志] │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -135,6 +135,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
+| [v5.7.73](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.73) | ~50 MB | 零占位侧栏、订单页空间回收与预览运行时兼容修复版 |
 | [v5.7.72](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.72) | ~50 MB | 多 DPI 控件可见性、表格可读性与预览避让优化版 |
 | [v5.7.71](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.71) | ~50 MB | 订单业务打印历史 CSV 导出版 |
 | [v5.7.70](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.70) | ~50 MB | 浅色导航、响应式布局与多 DPI 显示修复版 |
