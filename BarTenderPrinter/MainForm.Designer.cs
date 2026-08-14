@@ -150,10 +150,12 @@ namespace BarTenderPrinter
             this.lblStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "就绪" };
             this.lblStatus.Spring = true;
             this.lblStatus.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
-            this.lblConnection = new System.Windows.Forms.ToolStripStatusLabel { Text = "● 正在连接" };
+            this.lblConnection = new System.Windows.Forms.ToolStripStatusLabel { Text = "正在连接" };
             this.lblTodayStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "今日 0" };
             this.lblTotalStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "累计 0" };
-            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.71" };
+            this.lblTodayStatus.Visible = false;
+            this.lblTotalStatus.Visible = false;
+            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.72" };
             this.statusStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] { this.lblConnection, this.lblStatus, this.lblTodayStatus, this.lblTotalStatus, this.lblVersion });
             MiuiTheme.StyleStatusStrip(this.statusStrip);
 
@@ -188,7 +190,7 @@ namespace BarTenderPrinter
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             this.ClientSize = new System.Drawing.Size(1080, 900);
             this.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
-            this.MinimumSize = new System.Drawing.Size(1080, 900);
+            this.MinimumSize = new System.Drawing.Size(900, 650);
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "BarTender Printer";
             this.ResumeLayout(false); this.PerformLayout();

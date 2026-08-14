@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.71";
+        private readonly string _version = "v5.7.72";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -113,12 +113,18 @@ namespace BarTenderPrinter
         private PreviewForm _previewForm;
         private int _previewRequestVersion;
         private bool _closingPreviewForm;
+        private Rectangle? _prePreviewBounds;
+        private FormWindowState? _prePreviewWindowState;
+        private Size? _prePreviewMinimumSize;
+        private bool _tilingPreview;
         private int _pendingPrintJobCount;
         private int _historyPageIndex;
         private const int HistoryPageSize = 200;
         private ApplicationState _applicationState = new ApplicationState();
         private readonly HashSet<string> _availablePrinters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private PictureBox _brandIcon;
+        private Label _versionBadge;
+        private Label _authorLabel;
         private Panel _todayStatsCard;
         private Panel _totalStatsCard;
         private Button _btnToggleLog;
@@ -126,8 +132,8 @@ namespace BarTenderPrinter
         private int _historyToolbarWidth;
 
         private int ScaleUi(int value) => (int)Math.Round(value * Math.Max(1F, DeviceDpi / 96F));
-        private int SidebarCollapsedWidth => ScaleUi(52);
-        private int SidebarExpandedWidth => ScaleUi(196);
+        private int SidebarCollapsedWidth => ScaleUi(12);
+        private int SidebarExpandedWidth => ScaleUi(168);
 
         public MainForm(string startupTemplatePath = null)
         {
@@ -155,6 +161,7 @@ namespace BarTenderPrinter
                         LayoutStatsCards();
                         LayoutModernShell();
                         RebuildPrintPageLayout();
+                        DockPreviewForm();
                     }));
                 }
                 catch (ObjectDisposedException) { }
@@ -212,7 +219,7 @@ namespace BarTenderPrinter
             catch (Exception ex) { LoggerService.Warn($"加载应用图标失败: {ex.Message}"); }
 
             titleLabel.Text = "BarTender Printer";
-            var versionBadge = new Label
+            _versionBadge = new Label
             {
                 Text = _version,
                 AutoSize = true,
@@ -222,7 +229,7 @@ namespace BarTenderPrinter
                 ForeColor = MiuiTheme.PrimaryDark,
                 Font = MiuiTheme.VersionFont
             };
-            var author = new Label
+            _authorLabel = new Label
             {
                 Text = "By---池鱼",
                 AutoSize = true,
@@ -230,10 +237,10 @@ namespace BarTenderPrinter
                 ForeColor = MiuiTheme.TextSecondary,
                 Font = MiuiTheme.SecondaryFont
             };
-            titlePanel.Controls.Add(versionBadge);
-            titlePanel.Controls.Add(author);
-            versionBadge.BringToFront();
-            author.BringToFront();
+            titlePanel.Controls.Add(_versionBadge);
+            titlePanel.Controls.Add(_authorLabel);
+            _versionBadge.BringToFront();
+            _authorLabel.BringToFront();
 
             _btnAbout = new Button { Text = "关于", Dock = DockStyle.Right, Width = 84 };
             _btnToggleLog = new Button { Text = "收起日志", Dock = DockStyle.Right, Width = 104 };
@@ -243,6 +250,9 @@ namespace BarTenderPrinter
             titlePanel.Controls.Add(_btnToggleLog);
             titlePanel.Controls.SetChildIndex(_btnAbout, 0);
             titlePanel.Controls.SetChildIndex(_btnToggleLog, 0);
+            _btnSidebarToggle.Dock = DockStyle.Right;
+            titlePanel.Controls.Add(_btnSidebarToggle);
+            titlePanel.Controls.SetChildIndex(_btnSidebarToggle, 0);
             MiuiTheme.StyleButton(_btnAbout);
             MiuiTheme.StyleButton(_btnToggleLog);
 
@@ -254,7 +264,7 @@ namespace BarTenderPrinter
                     args.Graphics.DrawLine(pen, 0, titlePanel.Height - 1, titlePanel.Width, titlePanel.Height - 1);
             };
             _navPanel.BackColor = MiuiTheme.Sidebar;
-            _btnSidebarToggle.BackColor = MiuiTheme.Sidebar;
+            _btnSidebarToggle.BackColor = MiuiTheme.CardBackground;
             _btnSidebarToggle.FlatAppearance.BorderSize = 0;
             _btnSidebarToggle.FlatAppearance.MouseOverBackColor = MiuiTheme.SidebarHover;
             _btnPrintPage.ForeColor = Color.White;
@@ -281,11 +291,25 @@ namespace BarTenderPrinter
         private void LayoutModernShell()
         {
             var commandHeight = Math.Max(ScaleUi(36), titlePanel.ClientSize.Height - ScaleUi(16));
-            foreach (var button in new[] { btnExportLog, _btnToggleLog, _btnAbout })
+            var compact = titlePanel.ClientSize.Width < ScaleUi(900);
+            titleLabel.Visible = !compact;
+            if (_brandIcon != null) _brandIcon.Visible = !compact;
+            if (_versionBadge != null) _versionBadge.Visible = !compact;
+            if (_authorLabel != null) _authorLabel.Visible = !compact;
+            btnExportLog.Text = compact ? string.Empty : "导出日志";
+            _btnToggleLog.Text = compact ? string.Empty : groupBoxLog.Visible ? "收起日志" : "展开日志";
+            _btnAbout.Text = compact ? string.Empty : "关于";
+            if (_chkPreview != null) _chkPreview.Text = compact ? "预览" : _btService.IsPreviewAvailable ? "开启预览" : "预览不可用";
+            _toolTips.SetToolTip(btnExportLog, "导出日志");
+            _toolTips.SetToolTip(_btnToggleLog, groupBoxLog.Visible ? "收起日志" : "展开日志");
+            _toolTips.SetToolTip(_btnAbout, "关于");
+            foreach (var button in new[] { btnExportLog, _btnToggleLog, _btnAbout, _btnSidebarToggle })
             {
                 if (button == null) continue;
                 button.Height = commandHeight;
-                button.Width = Math.Max(ScaleUi(92), button.GetPreferredSize(new Size(0, commandHeight)).Width + ScaleUi(10));
+                button.Width = compact || button == _btnSidebarToggle
+                    ? ScaleUi(44)
+                    : Math.Max(ScaleUi(92), button.GetPreferredSize(new Size(0, commandHeight)).Width + ScaleUi(10));
                 button.Margin = new Padding(ScaleUi(4), 0, ScaleUi(4), 0);
             }
             if (_chkPreview != null) _chkPreview.Padding = new Padding(ScaleUi(10), ScaleUi(9), ScaleUi(10), 0);
@@ -299,10 +323,9 @@ namespace BarTenderPrinter
             var sidebarWidth = _sidebarExpanded ? SidebarExpandedWidth : SidebarCollapsedWidth;
             _navPanel.Width = sidebarWidth;
             _navPanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
-            _btnSidebarToggle.Bounds = new Rectangle(ScaleUi(8), ScaleUi(12), ScaleUi(36), ScaleUi(36));
-            var navWidth = Math.Max(ScaleUi(140), SidebarExpandedWidth - ScaleUi(24));
-            _btnPrintPage.Bounds = new Rectangle(ScaleUi(12), ScaleUi(60), navWidth, ScaleUi(44));
-            _btnOrderPage.Bounds = new Rectangle(ScaleUi(12), ScaleUi(112), navWidth, ScaleUi(44));
+            var navWidth = Math.Max(ScaleUi(136), SidebarExpandedWidth - ScaleUi(16));
+            _btnPrintPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(12), navWidth, ScaleUi(44));
+            _btnOrderPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(64), navWidth, ScaleUi(44));
             if (_printOrderPanel != null) _printOrderPanel.Left = sidebarWidth + ScaleUi(12);
             if (_orderPagePanel != null)
             {
@@ -350,10 +373,13 @@ namespace BarTenderPrinter
         private void ToggleLogPanel()
         {
             groupBoxLog.Visible = !groupBoxLog.Visible;
-            _btnToggleLog.Text = groupBoxLog.Visible ? "收起日志" : "展开日志";
             LayoutModernShell();
             RebuildPrintPageLayout();
-            if (_orderPagePanel != null) _orderPagePanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
+            if (_orderPagePanel != null)
+            {
+                _orderPagePanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
+                _orderContentPanel?.PerformLayout();
+            }
         }
 
         private void ShowAboutDialog()
@@ -433,6 +459,7 @@ namespace BarTenderPrinter
             _printOrderPanel.BackColor = MiuiTheme.CardBackground;
             _printOrderPanel.Padding = new Padding(ScaleUi(12), ScaleUi(8), ScaleUi(12), ScaleUi(8));
             inputPanel.BackColor = MiuiTheme.CardBackground;
+            inputPanel.Padding = Padding.Empty;
             inputPanel.BorderStyle = BorderStyle.None;
             historyPanel.BackColor = MiuiTheme.CardBackground;
             tabHistory.BackColor = MiuiTheme.CardBackground;
@@ -455,10 +482,12 @@ namespace BarTenderPrinter
             lblTodayTitle.Location = new Point(16, 14);
             lblTodayTitle.ForeColor = MiuiTheme.PrimaryDark;
             lblTodayCount.Location = new Point(16, 38);
+            lblTodayCount.AutoSize = true;
             lblTodayCount.ForeColor = MiuiTheme.Primary;
             lblTotalTitle.Location = new Point(16, 14);
             lblTotalTitle.ForeColor = MiuiTheme.Accent;
             lblTotalCount.Location = new Point(16, 38);
+            lblTotalCount.AutoSize = true;
             lblTotalCount.ForeColor = MiuiTheme.Accent;
             _todayStatsCard.Controls.Add(lblTodayTitle);
             _todayStatsCard.Controls.Add(lblTodayCount);
@@ -484,6 +513,8 @@ namespace BarTenderPrinter
             var width = Math.Max((int)Math.Round(150 * scale), (tabStats.ClientSize.Width - margin * 2 - gap) / 2);
             _todayStatsCard.Bounds = new Rectangle(margin, margin, width, height);
             _totalStatsCard.Bounds = new Rectangle(_todayStatsCard.Right + gap, margin, width, height);
+            lblTodayCount.MaximumSize = new Size(Math.Max(1, width - ScaleUi(32)), 0);
+            lblTotalCount.MaximumSize = new Size(Math.Max(1, width - ScaleUi(32)), 0);
         }
 
         private static void DrawCardBorder(object sender, PaintEventArgs e)
@@ -506,6 +537,10 @@ namespace BarTenderPrinter
             }
             ReplaceImage(btnExportLog, SvgIconRenderer.Render(AppIcon.Export, MiuiTheme.Primary, ScaleIcon(18, scale)));
             ReplaceImage(btnPrint, SvgIconRenderer.Render(AppIcon.Print, Color.White, ScaleIcon(19, scale)));
+            btnPrint.TextImageRelation = TextImageRelation.ImageBeforeText;
+            btnPrint.ImageAlign = ContentAlignment.MiddleCenter;
+            btnPrint.TextAlign = ContentAlignment.MiddleCenter;
+            btnPrint.Padding = new Padding(ScaleUi(8), 0, ScaleUi(8), 0);
             ReplaceImage(btnRefreshPrinter, SvgIconRenderer.Render(AppIcon.Refresh, MiuiTheme.TextSecondary, ScaleIcon(16, scale)));
             ReplaceImage(btnClearSearch, SvgIconRenderer.Render(AppIcon.Clear, MiuiTheme.TextSecondary, ScaleIcon(15, scale)));
             ReplaceImage(btnClearHistory, SvgIconRenderer.Render(AppIcon.Clear, MiuiTheme.Error, ScaleIcon(15, scale)));
@@ -600,16 +635,18 @@ namespace BarTenderPrinter
         private void EnsurePreviewForm()
         {
             if (_previewForm != null && !_previewForm.IsDisposed) return;
-            _previewForm = new PreviewForm();
+            _previewForm = new PreviewForm { Owner = this };
             _previewForm.ImageAspectRatioChanged += (sender, args) => DockPreviewForm();
+            _previewForm.DpiChanged += (sender, args) => PostToUi(DockPreviewForm);
             _previewForm.PreviewClosed += (sender, args) =>
             {
                 _previewForm = null;
+                RestorePrePreviewBounds();
                 if (_closingPreviewForm || _chkPreview == null) return;
                 _chkPreview.Checked = false;
             };
-            _previewForm.Show(this);
             DockPreviewForm();
+            _previewForm.Show();
         }
 
         private void ClosePreviewForm()
@@ -622,28 +659,94 @@ namespace BarTenderPrinter
             {
                 _previewForm = null;
                 _closingPreviewForm = false;
+                RestorePrePreviewBounds();
             }
         }
 
         private void DockPreviewForm()
         {
-            if (_previewForm == null || _previewForm.IsDisposed || !_previewForm.Visible) return;
+            if (_previewForm == null || _previewForm.IsDisposed || WindowState == FormWindowState.Minimized || _tilingPreview) return;
             var scale = Math.Max(1F, DeviceDpi / 96F);
             int S(int value) => (int)Math.Round(value * scale);
             var gap = S(8);
             var workingArea = Screen.FromControl(this).WorkingArea;
-            var top = Math.Max(workingArea.Top, Math.Min(Top, workingArea.Bottom - _previewForm.MinimumSize.Height));
-            var height = Math.Min(workingArea.Height, Math.Max(_previewForm.MinimumSize.Height, Math.Min(Height, workingArea.Bottom - top)));
+            var minHeight = Math.Min(workingArea.Height, S(240));
+            var top = Math.Max(workingArea.Top, Math.Min(Top, workingArea.Bottom - minHeight));
+            var height = Math.Min(workingArea.Height, Math.Max(minHeight, Math.Min(Height, workingArea.Bottom - top)));
             var ratio = Math.Max(0.35F, Math.Min(3F, _previewForm.ImageAspectRatio));
             var desiredWidth = (int)Math.Round(Math.Max(0, height - S(66)) * ratio + S(24));
-            var width = Math.Min(workingArea.Width, Math.Max(S(320), Math.Min(S(720), desiredWidth)));
+            var width = Math.Min(workingArea.Width, Math.Max(Math.Min(workingArea.Width, S(280)), Math.Min(S(640), desiredWidth)));
             var rightSpace = workingArea.Right - Right - gap;
             var leftSpace = Left - workingArea.Left - gap;
             int left;
             if (rightSpace >= width) left = Right + gap;
             else if (leftSpace >= width) left = Left - width - gap;
-            else left = Math.Max(workingArea.Left, Math.Min(workingArea.Right - width, Right - width));
-            _previewForm.Bounds = new Rectangle(left, top, width, height);
+            else
+            {
+                TileMainAndPreview(workingArea, width, gap);
+                return;
+            }
+            left = Math.Max(workingArea.Left, Math.Min(left, workingArea.Right - width));
+            var target = new Rectangle(left, top, width, height);
+            if (target.IntersectsWith(Bounds))
+            {
+                TileMainAndPreview(workingArea, width, gap);
+                return;
+            }
+            if (_previewForm.Bounds != target) _previewForm.Bounds = target;
+        }
+
+        private void TileMainAndPreview(Rectangle workingArea, int previewWidth, int gap)
+        {
+            _tilingPreview = true;
+            try
+            {
+                if (!_prePreviewBounds.HasValue)
+                {
+                    _prePreviewWindowState = WindowState;
+                    _prePreviewBounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+                    _prePreviewMinimumSize = MinimumSize;
+                }
+                if (WindowState != FormWindowState.Normal) WindowState = FormWindowState.Normal;
+                MinimumSize = Size.Empty;
+                var usableWidth = Math.Max(1, workingArea.Width - gap);
+                previewWidth = Math.Max(1, Math.Min(previewWidth, usableWidth / 3));
+                var mainWidth = Math.Max(1, usableWidth - previewWidth);
+                Bounds = new Rectangle(workingArea.Left, workingArea.Top, mainWidth, workingArea.Height);
+                var previewBounds = new Rectangle(Bounds.Right + gap, workingArea.Top, previewWidth, workingArea.Height);
+                if (_previewForm.Bounds != previewBounds) _previewForm.Bounds = previewBounds;
+            }
+            finally
+            {
+                _tilingPreview = false;
+            }
+        }
+
+        private void RestorePrePreviewBounds()
+        {
+            if (!_prePreviewBounds.HasValue || IsDisposed || Disposing) return;
+            _tilingPreview = true;
+            try
+            {
+                WindowState = FormWindowState.Normal;
+                Bounds = _prePreviewBounds.Value;
+                if (_prePreviewMinimumSize.HasValue) MinimumSize = _prePreviewMinimumSize.Value;
+                if (_prePreviewWindowState == FormWindowState.Maximized) WindowState = FormWindowState.Maximized;
+            }
+            finally
+            {
+                _prePreviewBounds = null;
+                _prePreviewWindowState = null;
+                _prePreviewMinimumSize = null;
+                _tilingPreview = false;
+            }
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            base.WndProc(ref message);
+            const int wmDisplayChange = 0x007E;
+            if (message.Msg == wmDisplayChange) PostToUi(DockPreviewForm);
         }
 
         private async Task RefreshPreviewAsync(Dictionary<string, string> successfulValues = null)
@@ -993,7 +1096,10 @@ namespace BarTenderPrinter
 
             lblPrinter.Location = new Point(left, lblSelectedTemplate.Bottom + S(16));
             cmbPrinter.Location = new Point(left + S(58), lblSelectedTemplate.Bottom + S(12));
-            btnRefreshPrinter.Location = new Point(left + width - S(140), lblSelectedTemplate.Bottom + S(11));
+            btnRefreshPrinter.Size = new Size(
+                Math.Max(S(72), btnRefreshPrinter.GetPreferredSize(new Size(0, S(28))).Width + S(4)),
+                Math.Max(S(28), btnRefreshPrinter.GetPreferredSize(new Size(0, S(28))).Height));
+            btnRefreshPrinter.Location = new Point(left + width - S(95) - btnRefreshPrinter.Width, lblSelectedTemplate.Bottom + S(11));
             lblCopies.Location = new Point(left + width - S(86), lblSelectedTemplate.Bottom + S(15));
             numCopies.Location = new Point(left + width - S(45), lblSelectedTemplate.Bottom + S(12));
             cmbPrinter.Size = new Size(Math.Max(S(180), btnRefreshPrinter.Left - cmbPrinter.Left - S(6)), Math.Max(cmbPrinter.PreferredHeight, S(25)));
@@ -1512,12 +1618,12 @@ namespace BarTenderPrinter
         {
             _loadingOrderEditor = true;
             _orderContentPanel.Controls.Clear();
-            _orderContentPanel.AutoScrollMinSize = new Size(740, 845);
             _orderContentPanel.BackColor = MiuiTheme.Background;
             _orderTemplateDrafts.Clear();
             _selectedOrderTemplateDraft = null;
             _editingOrder = order;
-            var contentWidth = Math.Max(700, _orderContentPanel.ClientSize.Width - 25);
+            var editorScale = Math.Max(1F, DeviceDpi / 96F);
+            var contentWidth = Math.Max(700, (int)Math.Round(_orderContentPanel.ClientSize.Width / editorScale) - 25);
             var fieldGap = 10;
             var fieldWidth = (contentWidth - 30 - fieldGap * 3) / 4;
             var addOrderTop = new Button { Text = "添加订单", Location = new Point(10, 10), Size = new Size(90, 28) };
@@ -1672,6 +1778,14 @@ namespace BarTenderPrinter
             _orderDataSourcesGrid.DataError += (s, e) => { e.ThrowException = false; };
             _orderContentPanel.Controls.Add(_orderDataSourcesGrid);
             MiuiTheme.StyleDataGridView(_orderDataSourcesGrid);
+            _orderDataSourcesGrid.BorderStyle = BorderStyle.FixedSingle;
+            _orderDataSourcesGrid.CellBorderStyle = DataGridViewCellBorderStyle.Single;
+            _orderDataSourcesGrid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+            _orderDataSourcesGrid.GridColor = MiuiTheme.Border;
+            _orderDataSourcesGrid.ColumnHeadersHeight = ScaleUi(36);
+            _orderDataSourcesGrid.RowTemplate.Height = ScaleUi(32);
+            _orderDataSourcesGrid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(224, 236, 255);
+            _orderDataSourcesGrid.DefaultCellStyle.SelectionForeColor = MiuiTheme.TextPrimary;
 
             _txtOrderTemplate.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             _lblOrderLocalData.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
@@ -1690,10 +1804,31 @@ namespace BarTenderPrinter
             _numOrderGlobalLength.ValueChanged += (s, e) => { ApplyOrderGlobalLengthToGrid(true); MarkOrderEditorDirty(); };
             UpdateOrderValidationControls();
 
+            ScaleOrderEditorControls(editorScale);
+
             RefreshOrderTemplateCards();
             if (_orderTemplateDrafts.Count > 0) SelectOrderTemplateDraft(_orderTemplateDrafts[0]);
             _loadingOrderEditor = false;
             _orderEditorDirty = false;
+        }
+
+        private void ScaleOrderEditorControls(float scale)
+        {
+            if (scale <= 1F)
+            {
+                _orderContentPanel.AutoScrollMinSize = new Size(ScaleUi(740), ScaleUi(845));
+                return;
+            }
+            foreach (Control control in _orderContentPanel.Controls)
+            {
+                var bounds = control.Bounds;
+                control.Bounds = new Rectangle(
+                    (int)Math.Round(bounds.X * scale),
+                    (int)Math.Round(bounds.Y * scale),
+                    (int)Math.Round(bounds.Width * scale),
+                    (int)Math.Round(bounds.Height * scale));
+            }
+            _orderContentPanel.AutoScrollMinSize = new Size(ScaleUi(740), ScaleUi(845));
         }
 
         private TextBox AddOrderPageTextBox(string labelText, int x, int y, int width = 200)
@@ -1952,8 +2087,8 @@ namespace BarTenderPrinter
                 {
                     Text = "尚未添加模板，请点击右侧“添加模板”开始配置。",
                     AutoSize = false,
-                    Size = new Size(Math.Max(320, _orderTemplateCards.ClientSize.Width - 20), 52),
-                    Padding = new Padding(10, 16, 0, 0),
+                    Size = new Size(Math.Max(ScaleUi(320), _orderTemplateCards.ClientSize.Width - ScaleUi(20)), ScaleUi(52)),
+                    Padding = new Padding(ScaleUi(10), ScaleUi(16), 0, 0),
                     ForeColor = MiuiTheme.TextSecondary
                 });
                 return;
@@ -1968,14 +2103,14 @@ namespace BarTenderPrinter
                     Text = string.IsNullOrWhiteSpace(template.SourcePath)
                         ? $"需重新选择外部模板\r\n已保留 {totalCount} 个旧设置"
                         : $"{template.DisplayName}\r\n已启用 {enabledCount} / 共 {totalCount} 个数据源",
-                    Size = new Size(210, 52),
+                    Size = new Size(ScaleUi(210), ScaleUi(52)),
                     TextAlign = ContentAlignment.MiddleLeft,
                     Tag = template,
                     FlatStyle = FlatStyle.Flat,
                     BackColor = selected ? MiuiTheme.PrimaryLight : Color.White,
                     ForeColor = selected ? MiuiTheme.PrimaryDark : MiuiTheme.TextPrimary,
-                    Margin = new Padding(4),
-                    Padding = new Padding(8, 3, 8, 3),
+                    Margin = new Padding(ScaleUi(4)),
+                    Padding = new Padding(ScaleUi(8), ScaleUi(3), ScaleUi(8), ScaleUi(3)),
                     Cursor = Cursors.Hand
                 };
                 card.FlatAppearance.BorderColor = selected ? Color.FromArgb(55, 115, 205) : Color.FromArgb(205, 210, 220);
@@ -2423,14 +2558,14 @@ namespace BarTenderPrinter
         private void ConfigureOrderDataSourceGrid()
         {
             _orderDataSourcesGrid.Columns.Clear();
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "使用", Width = 60 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "UseLocalDataValidation", HeaderText = "使用校验数据", Width = 105 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Field", HeaderText = "字段名", ReadOnly = true, MinimumWidth = 180, Width = 220 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "使用", Width = ScaleUi(60) });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "UseLocalDataValidation", HeaderText = "使用校验数据", Width = ScaleUi(105) });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Field", HeaderText = "字段名", ReadOnly = true, MinimumWidth = ScaleUi(180), Width = ScaleUi(220) });
             _orderDataSourcesGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "LockEnabled", HeaderText = "锁定", Visible = false });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewButtonColumn { Name = "LockToggle", HeaderText = "锁定", Width = 52, FlatStyle = FlatStyle.Flat });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AutoStep", HeaderText = "步长（正增负减0不变）", Width = 150 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LockedValue", HeaderText = "锁定后输入值", Width = 180 });
-            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ExpectedLength", HeaderText = "长度", Width = 80 });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewButtonColumn { Name = "LockToggle", HeaderText = "锁定", Width = ScaleUi(52), FlatStyle = FlatStyle.Flat });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AutoStep", HeaderText = "步长（正增负减0不变）", Width = ScaleUi(150) });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LockedValue", HeaderText = "锁定后输入值", Width = ScaleUi(180) });
+            _orderDataSourcesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ExpectedLength", HeaderText = "长度", Width = ScaleUi(80) });
         }
 
         private void ToggleOrderDataSources(bool enabled)
@@ -2849,7 +2984,7 @@ namespace BarTenderPrinter
 
         private void ApplyBarTenderConnection(bool connected)
         {
-            lblConnection.Text = connected ? "● BarTender 在线" : "● 离线模式";
+            lblConnection.Text = connected ? "BarTender 在线" : "离线模式";
             lblConnection.ForeColor = connected ? MiuiTheme.Success : MiuiTheme.Warning;
             if (connected)
             {
@@ -4774,14 +4909,16 @@ namespace BarTenderPrinter
                 var statusCell = row.Cells["状态"];
                 if (statusCell?.Value?.ToString().EndsWith("PASS", StringComparison.Ordinal) == true)
                 {
-                    statusCell.Style.ForeColor = Color.Green;
+                    statusCell.Style.ForeColor = MiuiTheme.Success;
                     statusCell.Style.Font = MiuiTheme.EmphasizedBodyFont;
                 }
                 else if (statusCell?.Value?.ToString().EndsWith("FAIL", StringComparison.Ordinal) == true)
                 {
-                    statusCell.Style.ForeColor = Color.Red;
+                    statusCell.Style.ForeColor = MiuiTheme.Error;
                     statusCell.Style.Font = MiuiTheme.EmphasizedBodyFont;
                 }
+                statusCell.Style.SelectionBackColor = Color.FromArgb(224, 236, 255);
+                statusCell.Style.SelectionForeColor = MiuiTheme.TextPrimary;
             }
             dgvHistory.ClearSelection();
             if (_lblHistoryPage != null) _lblHistoryPage.Text = $"第 {_historyPageIndex + 1} 页";

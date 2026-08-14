@@ -22,7 +22,7 @@ namespace BarTenderPrinter
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            MinimumSize = new Size(280, 240);
+            MinimumSize = Size.Empty;
             BackColor = MiuiTheme.Background;
 
             var header = new Panel
@@ -77,6 +77,8 @@ namespace BarTenderPrinter
                 PreviewClosed?.Invoke(this, EventArgs.Empty);
             };
         }
+
+        protected override bool ShowWithoutActivation => true;
 
         public void ShowLoading(string source)
         {

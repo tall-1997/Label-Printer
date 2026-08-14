@@ -52,12 +52,15 @@ namespace BarTenderPrinter
 
         public static void StyleButton(System.Windows.Forms.Button btn, bool isPrimary = false)
         {
+            var scale = Math.Max(1F, btn.DeviceDpi / 96F);
+            int S(int value) => (int)Math.Round(value * scale);
             if (isPrimary)
             {
                 btn.BackColor = Primary;
                 btn.ForeColor = Color.White;
                 btn.FlatStyle = FlatStyle.Flat;
-                btn.FlatAppearance.BorderSize = 0;
+                btn.FlatAppearance.BorderColor = PrimaryDark;
+                btn.FlatAppearance.BorderSize = 1;
             }
             else
             {
@@ -70,14 +73,15 @@ namespace BarTenderPrinter
             btn.Cursor = System.Windows.Forms.Cursors.Hand;
             btn.Font = isPrimary ? ButtonBoldFont : ButtonFont;
             btn.TextImageRelation = TextImageRelation.ImageBeforeText;
-            btn.ImageAlign = ContentAlignment.MiddleLeft;
+            btn.ImageAlign = ContentAlignment.MiddleCenter;
             btn.TextAlign = ContentAlignment.MiddleCenter;
-            btn.Padding = new Padding(btn.Image == null ? 8 : 6, 0, 8, 0);
+            btn.Padding = new Padding(btn.Image == null ? S(8) : S(6), 0, S(8), 0);
             btn.FlatAppearance.MouseOverBackColor = isPrimary ? PrimaryDark : PrimaryLight;
             btn.FlatAppearance.MouseDownBackColor = isPrimary ? Color.FromArgb(30, 64, 175) : Color.FromArgb(219, 234, 254);
             btn.Resize -= RoundedControl_Resize;
-            btn.Resize += RoundedControl_Resize;
-            ApplyRoundedRegion(btn, 8);
+            var previousRegion = btn.Region;
+            btn.Region = null;
+            previousRegion?.Dispose();
         }
 
         public static void StyleCard(System.Windows.Forms.Panel panel)
@@ -123,7 +127,7 @@ namespace BarTenderPrinter
         {
             combo.BackColor = CardBackground;
             combo.ForeColor = TextPrimary;
-            combo.FlatStyle = FlatStyle.Flat;
+            combo.FlatStyle = FlatStyle.Standard;
         }
 
         public static void StyleNumericUpDown(NumericUpDown number)
@@ -173,22 +177,24 @@ namespace BarTenderPrinter
 
         public static void StyleDataGridView(DataGridView grid)
         {
+            var scale = Math.Max(1F, grid.DeviceDpi / 96F);
+            int S(int value) => (int)Math.Round(value * scale);
             grid.BackgroundColor = CardBackground;
-            grid.BorderStyle = BorderStyle.None;
-            grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
-            grid.GridColor = Divider;
+            grid.BorderStyle = BorderStyle.FixedSingle;
+            grid.CellBorderStyle = DataGridViewCellBorderStyle.Single;
+            grid.GridColor = Border;
             grid.EnableHeadersVisualStyles = false;
-            grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
-            grid.ColumnHeadersHeight = 38;
+            grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+            grid.ColumnHeadersHeight = S(38);
             grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(241, 245, 249);
             grid.ColumnHeadersDefaultCellStyle.ForeColor = TextSecondary;
             grid.ColumnHeadersDefaultCellStyle.Font = GridHeaderFont;
-            grid.RowTemplate.Height = 34;
+            grid.RowTemplate.Height = S(34);
             grid.DefaultCellStyle.BackColor = CardBackground;
             grid.DefaultCellStyle.ForeColor = TextPrimary;
-            grid.DefaultCellStyle.SelectionBackColor = PrimaryLight;
-            grid.DefaultCellStyle.SelectionForeColor = PrimaryDark;
-            grid.DefaultCellStyle.Padding = new Padding(4, 0, 4, 0);
+            grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(224, 236, 255);
+            grid.DefaultCellStyle.SelectionForeColor = TextPrimary;
+            grid.DefaultCellStyle.Padding = new Padding(S(5), S(2), S(5), S(2));
         }
 
         public static void StyleLabel(System.Windows.Forms.Label lbl, bool isSecondary = false)
