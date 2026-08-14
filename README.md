@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.82** - C# WinForms 安装版
+**v5.7.83** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -85,7 +85,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender Printer v5.7.82  By---池鱼  [日志] [关于] [导出日志] │
+│ BarTender Printer v5.7.83  By---池鱼  [日志] [关于] [导出日志] │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -136,6 +136,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
+| [v5.7.83](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.83) | ~50 MB | 响应式布局、多 DPI 与待核查状态显示修复版 |
 | [v5.7.82](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.82) | ~50 MB | 打印可靠性与审计加固版 |
 | [v5.7.81](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.81) | ~50 MB | 超级管理员固定凭据版 |
 | [v5.7.80](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.80) | ~50 MB | 账户、补打印、历史完整性与文件可靠性增强版 |

@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.82";
+        private readonly string _version = "v5.7.83";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -62,6 +62,7 @@ namespace BarTenderPrinter
         private Button _btnPrintPage;
         private Button _btnOrderPage;
         private bool _sidebarExpanded;
+        private Panel _printPagePanel;
         private Panel _printOrderPanel;
         private ComboBox _cmbPrintCustomer;
         private ComboBox _cmbPrintModel;
@@ -135,6 +136,7 @@ namespace BarTenderPrinter
         private Button _btnAbout;
         private int _historyToolbarWidth;
         private bool _layingOutOrderEditor;
+        private int _requiredInputPanelHeight;
         private string _printButtonText = "打印";
         private Image _printButtonIcon;
 
@@ -163,6 +165,7 @@ namespace BarTenderPrinter
                     {
                         if (IsDisposed || Disposing) return;
                         ApplyModernIcons(e.DeviceDpiNew);
+                        UpdateResponsiveMinimumSize();
                         MiuiTheme.StyleTabControl(tabBottom, e.DeviceDpiNew);
                         LayoutStatsCards();
                         LayoutModernShell();
@@ -199,6 +202,7 @@ namespace BarTenderPrinter
             inputPanel.MouseWheel += (s, e) => BeginInvoke((Action)ClampInputPanelScroll);
             SizeChanged += (s, e) =>
             {
+                UpdateResponsiveMinimumSize();
                 LayoutModernShell();
                 RebuildPrintPageLayout();
                 LayoutOrderEditor();
@@ -208,6 +212,7 @@ namespace BarTenderPrinter
             {
                 if (_historyToolbarWidth != historyPanel.ClientSize.Width) LayoutHistoryToolbar();
             };
+            tabHistory.SizeChanged += (s, e) => LayoutHistoryToolbar();
             LocationChanged += (s, e) => DockPreviewForm();
             dgvHistory.CellDoubleClick += DgvHistory_CellDoubleClick;
             dgvHistory.CellMouseDown += DgvHistory_CellMouseDown;
@@ -218,6 +223,16 @@ namespace BarTenderPrinter
             dgvHistory.ContextMenuStrip = historyMenu;
             cmbPrinter.SelectedIndexChanged += (s, e) => { SaveCurrentConfigurationState(); RefreshPrintActionState(); };
             _historySearchTimer.Tick += (s, e) => { _historySearchTimer.Stop(); LoadHistory(); };
+            UpdateResponsiveMinimumSize();
+        }
+
+        private void UpdateResponsiveMinimumSize()
+        {
+            if (!IsHandleCreated || WindowState == FormWindowState.Minimized) return;
+            var workingArea = Screen.FromControl(this).WorkingArea;
+            var preferred = new Size(ScaleUi(760), ScaleUi(650));
+            var cap = new Size(Math.Max(1, workingArea.Width * 9 / 10), Math.Max(1, workingArea.Height * 9 / 10));
+            MinimumSize = new Size(Math.Min(preferred.Width, cap.Width), Math.Min(preferred.Height, cap.Height));
         }
 
         private void ConfigureModernShell()
@@ -354,6 +369,12 @@ namespace BarTenderPrinter
             _btnPrintPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(12), navWidth, ScaleUi(44));
             _btnOrderPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(64), navWidth, ScaleUi(44));
             if (_printOrderPanel != null) _printOrderPanel.Left = sidebarWidth + ScaleUi(12);
+            if (_printPagePanel != null)
+            {
+                _printPagePanel.Left = 0;
+                _printPagePanel.Width = ClientSize.Width;
+                _printPagePanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
+            }
             if (_orderPagePanel != null)
             {
                 _orderPagePanel.Left = sidebarWidth;
@@ -401,8 +422,9 @@ namespace BarTenderPrinter
             if (_cmbHistoryStatus != null) _cmbHistoryStatus.Width = ScaleUi(124);
             if (_txtHistoryDate != null) _txtHistoryDate.Width = ScaleUi(112);
             if (txtSearch != null) txtSearch.Width = ScaleUi(190);
-            var preferredHeight = toolbar.GetPreferredSize(new Size(Math.Max(ScaleUi(320), historyPanel.ClientSize.Width), 0)).Height;
-            historyPanel.Height = Math.Max(ScaleUi(76), preferredHeight + ScaleUi(4));
+            var preferredHeight = toolbar.GetPreferredSize(new Size(Math.Max(ScaleUi(320), historyPanel.ClientSize.Width), 0)).Height + ScaleUi(4);
+            var availableHeight = Math.Max(ScaleUi(44), tabHistory.ClientSize.Height - ScaleUi(112));
+            historyPanel.Height = UiLayoutPolicy.CalculateToolbarHeight(preferredHeight, availableHeight, ScaleUi(44));
         }
 
         private int WorkspaceBottom => groupBoxLog.Visible ? groupBoxLog.Top : statusStrip.Top;
@@ -790,10 +812,17 @@ namespace BarTenderPrinter
                     _prePreviewMinimumSize = MinimumSize;
                 }
                 if (WindowState != FormWindowState.Normal) WindowState = FormWindowState.Normal;
-                MinimumSize = Size.Empty;
                 var usableWidth = Math.Max(1, workingArea.Width - gap);
-                previewWidth = Math.Max(1, Math.Min(previewWidth, usableWidth / 3));
-                var mainWidth = Math.Max(1, usableWidth - previewWidth);
+                var widths = UiLayoutPolicy.CalculateTileWidths(
+                    usableWidth,
+                    previewWidth,
+                    Math.Min(ScaleUi(680), Math.Max(1, usableWidth - ScaleUi(220))),
+                    Math.Min(ScaleUi(220), Math.Max(1, usableWidth / 4)));
+                var mainWidth = widths.MainWidth;
+                previewWidth = widths.PreviewWidth;
+                MinimumSize = new Size(
+                    Math.Min(mainWidth, _prePreviewMinimumSize?.Width ?? ScaleUi(680)),
+                    Math.Min(workingArea.Height, _prePreviewMinimumSize?.Height ?? ScaleUi(520)));
                 Bounds = new Rectangle(workingArea.Left, workingArea.Top, mainWidth, workingArea.Height);
                 var previewBounds = new Rectangle(Bounds.Right + gap, workingArea.Top, previewWidth, workingArea.Height);
                 if (_previewForm.Bounds != previewBounds) _previewForm.Bounds = previewBounds;
@@ -811,8 +840,11 @@ namespace BarTenderPrinter
             try
             {
                 WindowState = FormWindowState.Normal;
-                Bounds = _prePreviewBounds.Value;
                 if (_prePreviewMinimumSize.HasValue) MinimumSize = _prePreviewMinimumSize.Value;
+                var savedBounds = _prePreviewBounds.Value;
+                var workingArea = Screen.FromRectangle(savedBounds).WorkingArea;
+                Bounds = UiLayoutPolicy.ConstrainToWorkingArea(savedBounds, workingArea);
+                UpdateResponsiveMinimumSize();
                 if (_prePreviewWindowState == FormWindowState.Maximized) WindowState = FormWindowState.Maximized;
             }
             finally
@@ -890,7 +922,7 @@ namespace BarTenderPrinter
             var existingHistoryControls = historyPanel.Controls.Cast<Control>().ToArray();
             historyPanel.Controls.Clear();
             historyPanel.Height = ScaleUi(76);
-            var historyToolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = false, Padding = new Padding(2) };
+            var historyToolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = true, Padding = new Padding(2) };
             historyToolbar.Controls.AddRange(existingHistoryControls);
             historyPanel.Controls.Add(historyToolbar);
             _txtOperator = new TextBox { Location = new Point(695, 2), Size = new Size(80, 25), Text = Environment.UserName ?? "" };
@@ -1027,7 +1059,7 @@ namespace BarTenderPrinter
 
             _printOrderPanel = new Panel
             {
-                Location = new Point(collapsedWidth + ScaleUi(10), titlePanel.Bottom + ScaleUi(4)),
+                Location = new Point(collapsedWidth + ScaleUi(10), ScaleUi(4)),
                 Size = new Size(ClientSize.Width - collapsedWidth - ScaleUi(20), ScaleUi(34)),
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 BackColor = BackColor
@@ -1059,6 +1091,28 @@ namespace BarTenderPrinter
             Controls.Add(_printOrderPanel);
             MiuiTheme.StyleLabel(printOrderLabel);
             MiuiTheme.StyleLabel(_lblEffectiveSummary, true);
+
+            _printPagePanel = new Panel
+            {
+                Location = new Point(0, titlePanel.Bottom),
+                Size = new Size(ClientSize.Width, WorkspaceBottom - titlePanel.Bottom),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                AutoScroll = true,
+                BackColor = BackColor
+            };
+            _printPagePanel.SizeChanged += (s, e) => RebuildPrintPageLayout();
+            Controls.Add(_printPagePanel);
+            foreach (var control in new Control[]
+            {
+                _printOrderPanel, cmbTemplate, lblSelectedTemplate, lblPrinter, cmbPrinter,
+                btnRefreshPrinter, lblCopies, numCopies, inputPanel, btnPrint, tabBottom
+            })
+                _printPagePanel.Controls.Add(control);
+            _printPagePanel.BringToFront();
+            titlePanel.BringToFront();
+            groupBoxLog.BringToFront();
+            statusStrip.BringToFront();
+            _navPanel.BringToFront();
 
             _orderPagePanel = new Panel
             {
@@ -1140,15 +1194,16 @@ namespace BarTenderPrinter
             var scale = Math.Max(1F, DeviceDpi / 96F);
             int S(int value) => (int)Math.Round(value * scale);
             var left = _printOrderPanel.Left;
-            var width = Math.Max(S(500), ClientSize.Width - left - S(10));
+            var viewportWidth = _printPagePanel?.ClientSize.Width ?? ClientSize.Width;
+            var width = Math.Max(S(240), viewportWidth - left - S(10));
             _printOrderPanel.Width = width;
             var orderCaption = _printOrderPanel.Controls.OfType<Label>().FirstOrDefault(item => item.Text == "当前订单：");
             if (orderCaption != null) orderCaption.Bounds = new Rectangle(S(12), S(8), width - S(24), S(22));
             var comboHeight = Math.Max(_cmbPrintCustomer.PreferredHeight, S(25));
             var comboGap = S(10);
             var combos = new[] { _cmbPrintCustomer, _cmbPrintModel, _cmbPrintColor, _cmbPrintOrderNumber };
-            var columns = width >= S(760) ? 4 : 2;
-            var comboWidth = Math.Max(S(150), (width - S(24) - comboGap * (columns - 1)) / columns);
+            var columns = width >= S(760) ? 4 : width >= S(360) ? 2 : 1;
+            var comboWidth = Math.Max(S(100), (width - S(24) - comboGap * (columns - 1)) / columns);
             var firstComboTop = S(54);
             for (var index = 0; index < combos.Length; index++)
             {
@@ -1176,23 +1231,57 @@ namespace BarTenderPrinter
             lblSelectedTemplate.Location = new Point(left, cmbTemplate.Bottom + S(4));
             lblSelectedTemplate.Size = new Size(width, S(18));
 
-            lblPrinter.Location = new Point(left, lblSelectedTemplate.Bottom + S(16));
-            cmbPrinter.Location = new Point(left + S(58), lblSelectedTemplate.Bottom + S(12));
+            var printerRowTop = lblSelectedTemplate.Bottom + S(12);
+            lblPrinter.AutoSize = false;
+            lblPrinter.Size = new Size(Math.Max(S(55), lblPrinter.PreferredWidth), S(24));
+            lblCopies.AutoSize = false;
+            lblCopies.Size = new Size(Math.Max(S(44), lblCopies.PreferredWidth), S(24));
+            lblPrinter.Location = new Point(left, printerRowTop);
+            cmbPrinter.Location = new Point(lblPrinter.Right + S(4), printerRowTop);
             btnRefreshPrinter.Size = new Size(
                 Math.Max(S(72), btnRefreshPrinter.GetPreferredSize(new Size(0, S(28))).Width + S(4)),
                 Math.Max(S(28), btnRefreshPrinter.GetPreferredSize(new Size(0, S(28))).Height));
-            btnRefreshPrinter.Location = new Point(left + width - S(95) - btnRefreshPrinter.Width, lblSelectedTemplate.Bottom + S(11));
-            lblCopies.Location = new Point(left + width - S(86), lblSelectedTemplate.Bottom + S(15));
-            numCopies.Location = new Point(left + width - S(45), lblSelectedTemplate.Bottom + S(12));
-            cmbPrinter.Size = new Size(Math.Max(S(180), btnRefreshPrinter.Left - cmbPrinter.Left - S(6)), Math.Max(cmbPrinter.PreferredHeight, S(25)));
-            AlignControlCenters(lblPrinter, cmbPrinter, btnRefreshPrinter, lblCopies, numCopies);
+            numCopies.Size = new Size(S(64), Math.Max(numCopies.PreferredHeight, S(25)));
+            var widePrinterRow = width >= S(620);
+            if (widePrinterRow)
+            {
+                numCopies.Location = new Point(left + width - numCopies.Width, printerRowTop);
+                lblCopies.Location = new Point(numCopies.Left - lblCopies.Width - S(4), printerRowTop);
+                btnRefreshPrinter.Location = new Point(lblCopies.Left - btnRefreshPrinter.Width - S(8), printerRowTop);
+                cmbPrinter.Size = new Size(Math.Max(S(120), btnRefreshPrinter.Left - cmbPrinter.Left - S(8)), Math.Max(cmbPrinter.PreferredHeight, S(25)));
+            }
+            else
+            {
+                btnRefreshPrinter.Location = new Point(left + width - btnRefreshPrinter.Width, printerRowTop);
+                cmbPrinter.Size = new Size(Math.Max(S(100), btnRefreshPrinter.Left - cmbPrinter.Left - S(8)), Math.Max(cmbPrinter.PreferredHeight, S(25)));
+                lblCopies.Location = new Point(left, cmbPrinter.Bottom + S(8));
+                numCopies.Location = new Point(lblCopies.Right + S(4), cmbPrinter.Bottom + S(8));
+            }
+            if (widePrinterRow)
+                AlignControlCenters(lblPrinter, cmbPrinter, btnRefreshPrinter, lblCopies, numCopies);
+            else
+            {
+                AlignControlCenters(lblPrinter, cmbPrinter, btnRefreshPrinter);
+                AlignControlCenters(lblCopies, numCopies);
+            }
 
-            inputPanel.Location = new Point(left, cmbPrinter.Bottom + S(10));
+            var printerControlsBottom = new[] { cmbPrinter.Bottom, btnRefreshPrinter.Bottom, lblCopies.Bottom, numCopies.Bottom }.Max();
+            inputPanel.Location = new Point(left, printerControlsBottom + S(10));
             inputPanel.Width = width;
+            var printButtonHeight = Math.Max(S(36), btnPrint.GetPreferredSize(new Size(width, 0)).Height);
+            var fixedHeight = S(8) + printButtonHeight + S(8) + S(132) + S(8);
+            var workspaceBottom = _printPagePanel?.ClientSize.Height ?? WorkspaceBottom;
+            var availableInputHeight = Math.Max(S(40), workspaceBottom - inputPanel.Top - fixedHeight);
+            inputPanel.Height = UiLayoutPolicy.CalculateInputPanelHeight(
+                Math.Max(S(40), _requiredInputPanelHeight), availableInputHeight, S(40), S(220));
             btnPrint.Location = new Point(left, inputPanel.Bottom + S(8));
+            btnPrint.Height = printButtonHeight;
             btnPrint.Width = width;
             tabBottom.Location = new Point(left, btnPrint.Bottom + S(8));
-            tabBottom.Size = new Size(width, Math.Max(1, WorkspaceBottom - tabBottom.Top - S(8)));
+            tabBottom.Size = new Size(width, Math.Max(S(180), workspaceBottom - tabBottom.Top - S(8)));
+            if (_printPagePanel != null)
+                _printPagePanel.AutoScrollMinSize = new Size(0, tabBottom.Bottom + S(8));
+            LayoutHistoryToolbar();
         }
 
         private void SetPrintOrderLabelBounds(string text, ComboBox combo)
@@ -1224,8 +1313,10 @@ namespace BarTenderPrinter
             if (_activeOrderTemplate != null && !ResolveTemplateUpdate(_activeOrder, _activeOrderTemplate)) return;
             if (!SaveSelectedOrderTemplateDraft()) return;
             _orderPagePanel.Visible = false;
-            _printOrderPanel.Visible = true;
-            _printOrderPanel.BringToFront();
+            _printPagePanel.Visible = true;
+            _printPagePanel.BringToFront();
+            _navPanel.BringToFront();
+            titlePanel.BringToFront();
             if (_chkPreview != null) _chkPreview.Visible = true;
             MiuiTheme.StyleNavigationButton(_btnPrintPage, true);
             MiuiTheme.StyleNavigationButton(_btnOrderPage, false);
@@ -1239,7 +1330,7 @@ namespace BarTenderPrinter
                 _chkPreview.Checked = false;
                 _chkPreview.Visible = false;
             }
-            _printOrderPanel.Visible = false;
+            _printPagePanel.Visible = false;
             _orderPagePanel.Visible = true;
             _orderPagePanel.BringToFront();
             MiuiTheme.StyleNavigationButton(_btnOrderPage, true);
@@ -3652,16 +3743,25 @@ namespace BarTenderPrinter
             using (var f = new Form())
             {
                 f.Text = "手动添加数据源";
-                f.Size = new Size(350, 250);
+                f.ClientSize = new Size(420, 300);
                 f.FormBorderStyle = FormBorderStyle.FixedDialog;
                 f.StartPosition = FormStartPosition.CenterParent;
                 f.MaximizeBox = false; f.MinimizeBox = false;
-                var lbl = new Label { Text = "输入数据源字段名（每行一个）：", Location = new Point(10, 10), Size = new Size(320, 20) };
-                var txt = new TextBox { Location = new Point(10, 35), Size = new Size(315, 150), Multiline = true, ScrollBars = ScrollBars.Vertical };
+                var content = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 3 };
+                content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                var lbl = new Label { Text = "输入数据源字段名（每行一个）：", Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
+                var txt = new TextBox { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical, AcceptsReturn = true };
                 txt.Text = "IMEI1\nDS1";
-                var ok = new Button { Text = "确定", Location = new Point(170, 195), Size = new Size(75, 25), DialogResult = DialogResult.OK };
-                var cancel = new Button { Text = "取消", Location = new Point(255, 195), Size = new Size(75, 25), DialogResult = DialogResult.Cancel };
-                f.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
+                var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Margin = new Padding(0, 10, 0, 0) };
+                var cancel = new Button { Text = "取消", AutoSize = true, MinimumSize = new Size(75, 28), DialogResult = DialogResult.Cancel };
+                var ok = new Button { Text = "确定", AutoSize = true, MinimumSize = new Size(75, 28), DialogResult = DialogResult.OK };
+                buttons.Controls.AddRange(new Control[] { cancel, ok });
+                content.Controls.Add(lbl, 0, 0);
+                content.Controls.Add(txt, 0, 1);
+                content.Controls.Add(buttons, 0, 2);
+                f.Controls.Add(content);
                 f.AcceptButton = ok; f.CancelButton = cancel;
                 StyleDialog(f, ok, cancel);
                 return f.ShowDialog(this) == DialogResult.OK ? txt.Text.Split('\n').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList() : null;
@@ -3828,14 +3928,18 @@ namespace BarTenderPrinter
                 };
                 grip.MouseDown += Grip_MouseDown;
 
+                var labelText = enabled[i].Name + "：";
                 var lbl = new Label
                 {
-                    Text = enabled[i].Name + "：",
+                    Text = labelText,
                     Location = new Point(S(52), S(3)),
                     Size = new Size(S(75), S(20)),
-                    TextAlign = ContentAlignment.MiddleRight
+                    TextAlign = ContentAlignment.MiddleRight,
+                    AutoEllipsis = true,
+                    AccessibleName = enabled[i].Name
                 };
                 MiuiTheme.StyleLabel(lbl);
+                _toolTips.SetToolTip(lbl, enabled[i].Name);
 
                 var lockButton = new Button
                 {
@@ -3846,7 +3950,9 @@ namespace BarTenderPrinter
                     FlatStyle = FlatStyle.Flat,
                     Cursor = Cursors.Default,
                     BackColor = Color.Transparent,
-                    AccessibleName = IsInputLocked(enabled[i]) ? "已锁定" : "未锁定"
+                    AccessibleName = $"{enabled[i].Name}，{(IsInputLocked(enabled[i]) ? "已锁定" : "未锁定")}",
+                    TabStop = true,
+                    TabIndex = i * 2 + 1
                 };
                 lockButton.FlatAppearance.BorderSize = 0;
                 lockButton.Paint += LockButton_Paint;
@@ -3860,7 +3966,9 @@ namespace BarTenderPrinter
                     Tag = i,
                     Text = enabled[i].IsLocked || enabled[i].AutoIncrementLocked ? enabled[i].LockedValue ?? "" : "",
                     ReadOnly = enabled[i].IsLocked || enabled[i].AutoIncrementLocked,
-                    BackColor = enabled[i].IsLocked || enabled[i].AutoIncrementLocked ? SystemColors.Control : MiuiTheme.InputBackground
+                    BackColor = enabled[i].IsLocked || enabled[i].AutoIncrementLocked ? SystemColors.Control : MiuiTheme.InputBackground,
+                    AccessibleName = enabled[i].Name,
+                    TabIndex = i * 2
                 };
                 MiuiTheme.StyleTextBox(txt);
                 txt.BackColor = txt.ReadOnly ? SystemColors.Control : MiuiTheme.InputBackground;
@@ -3880,15 +3988,10 @@ namespace BarTenderPrinter
             }
 
             int requiredHeight = Math.Max(S(40), y + S(4));
-            int maxHeight = S(180);
-            inputPanel.Height = Math.Min(requiredHeight, maxHeight);
+            _requiredInputPanelHeight = requiredHeight;
             inputPanel.AutoScroll = true;
             inputPanel.AutoScrollMinSize = new Size(0, requiredHeight);
-
-            btnPrint.Top = inputPanel.Bottom + S(8);
-            btnPrint.Width = inputPanel.Width;
-            tabBottom.Top = btnPrint.Bottom + S(8);
-            tabBottom.Height = Math.Max(1, WorkspaceBottom - tabBottom.Top - S(8));
+            RebuildPrintPageLayout();
             ClampInputPanelScroll();
         }
 
@@ -3910,8 +4013,14 @@ namespace BarTenderPrinter
             {
                 if (_rowPanels[i] == null) continue;
                 _rowPanels[i].Width = w;
+                var label = _rowPanels[i].Controls.OfType<Label>().FirstOrDefault(control => control.Text != "≡");
+                var labelWidth = label == null ? S(75) : Math.Min(Math.Max(S(75), label.PreferredWidth + S(6)), Math.Max(S(75), w / 3));
+                if (label != null) label.Width = labelWidth;
                 if (i < _inputTextBoxes.Length && _inputTextBoxes[i] != null)
-                    _inputTextBoxes[i].Width = Math.Max(S(80), w - S(164));
+                {
+                    _inputTextBoxes[i].Left = S(52) + labelWidth + S(4);
+                    _inputTextBoxes[i].Width = Math.Max(S(80), w - _inputTextBoxes[i].Left - S(34));
+                }
                 if (i < _lockButtons.Length && _lockButtons[i] != null)
                     _lockButtons[i].Left = w - S(28);
             }
@@ -4455,17 +4564,27 @@ namespace BarTenderPrinter
             using (var f = new Form())
             {
                 f.Text = "选择校验列";
-                f.Size = new Size(350, 250);
+                f.ClientSize = new Size(420, 300);
                 f.FormBorderStyle = FormBorderStyle.FixedDialog;
                 f.StartPosition = FormStartPosition.CenterParent;
                 f.MaximizeBox = false; f.MinimizeBox = false;
-                var lbl = new Label { Text = $"文件: {fileName}\n选择用于校验的列：", Location = new Point(10, 10), Size = new Size(320, 40) };
-                var lst = new ListBox { Location = new Point(10, 55), Size = new Size(315, 130) };
+                var content = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 3 };
+                content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                var lbl = new Label { Text = $"文件: {fileName}\n选择用于校验的列：", Dock = DockStyle.Fill, AutoSize = true, AutoEllipsis = true, Margin = new Padding(0, 0, 0, 8) };
+                _toolTips.SetToolTip(lbl, fileName);
+                var lst = new ListBox { Dock = DockStyle.Fill };
                 foreach (var col in columns) lst.Items.Add(col);
                 if (lst.Items.Count > 0) lst.SelectedIndex = 0;
-                var ok = new Button { Text = "确定", Location = new Point(170, 195), Size = new Size(75, 25), DialogResult = DialogResult.OK };
-                var cancel = new Button { Text = "取消", Location = new Point(255, 195), Size = new Size(75, 25), DialogResult = DialogResult.Cancel };
-                f.Controls.AddRange(new Control[] { lbl, lst, ok, cancel });
+                var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Margin = new Padding(0, 10, 0, 0) };
+                var cancel = new Button { Text = "取消", AutoSize = true, MinimumSize = new Size(75, 28), DialogResult = DialogResult.Cancel };
+                var ok = new Button { Text = "确定", AutoSize = true, MinimumSize = new Size(75, 28), DialogResult = DialogResult.OK };
+                buttons.Controls.AddRange(new Control[] { cancel, ok });
+                content.Controls.Add(lbl, 0, 0);
+                content.Controls.Add(lst, 0, 1);
+                content.Controls.Add(buttons, 0, 2);
+                f.Controls.Add(content);
                 f.AcceptButton = ok; f.CancelButton = cancel;
                 StyleDialog(f, ok, cancel);
                 return f.ShowDialog(this) == DialogResult.OK ? lst.SelectedIndex : -1;
@@ -4826,7 +4945,9 @@ namespace BarTenderPrinter
                 finally
                 {
                     SetPrintEnvironmentEnabled(_pendingPrintJobCount == 0);
-                    SetStatus(_pendingPrintJobCount > 0 ? $"打印队列: {_pendingPrintJobCount}" : result.Success ? "就绪" : "打印提交失败");
+                    SetStatus(_pendingPrintJobCount > 0
+                        ? $"打印队列: {_pendingPrintJobCount}"
+                        : UiLayoutPolicy.GetPrintCompletionStatus(result.Success, historySaved, historyStatus == "UNCERTAIN"));
                 }
                 if (_pendingPrintJobCount == 0 && _chkPreview?.Checked == true)
                     _ = RefreshPreviewAsync(previewValues);
@@ -5355,6 +5476,11 @@ namespace BarTenderPrinter
                 else if (statusCell?.Value?.ToString().EndsWith("FAIL", StringComparison.Ordinal) == true)
                 {
                     statusCell.Style.ForeColor = MiuiTheme.Error;
+                    statusCell.Style.Font = MiuiTheme.EmphasizedBodyFont;
+                }
+                else if (UiLayoutPolicy.IsUncertainStatus(statusCell?.Value?.ToString()))
+                {
+                    statusCell.Style.ForeColor = MiuiTheme.Warning;
                     statusCell.Style.Font = MiuiTheme.EmphasizedBodyFont;
                 }
                 statusCell.Style.SelectionBackColor = Color.FromArgb(224, 236, 255);

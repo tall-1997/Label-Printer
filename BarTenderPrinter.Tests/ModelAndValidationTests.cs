@@ -512,6 +512,45 @@ namespace BarTenderPrinter.Tests
             Assert.Single(table.Rows.Cast<System.Data.DataRow>());
         }
 
+        [Theory]
+        [InlineData(true, true, false, "就绪")]
+        [InlineData(true, false, false, "打印作业已提交，历史保存失败")]
+        [InlineData(false, true, true, "打印结果待核查")]
+        [InlineData(false, false, true, "打印结果待核查，历史保存失败")]
+        [InlineData(false, true, false, "打印提交失败")]
+        public void PrintCompletionStatusPreservesUncertainOutcome(bool success, bool historySaved, bool uncertain, string expected)
+        {
+            Assert.Equal(expected, UiLayoutPolicy.GetPrintCompletionStatus(success, historySaved, uncertain));
+        }
+
+        [Fact]
+        public void LayoutPolicyKeepsRestoredWindowVisible()
+        {
+            var constrained = UiLayoutPolicy.ConstrainToWorkingArea(
+                new System.Drawing.Rectangle(4000, -200, 1200, 900),
+                new System.Drawing.Rectangle(0, 0, 1024, 768));
+
+            Assert.Equal(new System.Drawing.Rectangle(0, 0, 1024, 768), constrained);
+        }
+
+        [Fact]
+        public void LayoutPolicyPrioritizesMainWindowWhenTilingPreview()
+        {
+            var widths = UiLayoutPolicy.CalculateTileWidths(1000, 500, 680, 220);
+
+            Assert.Equal(680, widths.MainWidth);
+            Assert.Equal(320, widths.PreviewWidth);
+        }
+
+        [Theory]
+        [InlineData(300, 100, 40, 220, 100)]
+        [InlineData(300, 500, 40, 220, 220)]
+        [InlineData(20, 20, 40, 220, 20)]
+        public void InputPanelHeightStaysWithinAvailableSpace(int required, int available, int minimum, int maximum, int expected)
+        {
+            Assert.Equal(expected, UiLayoutPolicy.CalculateInputPanelHeight(required, available, minimum, maximum));
+        }
+
         [Fact]
         public void SvgIconRendererCreatesRequestedTransparentBitmap()
         {

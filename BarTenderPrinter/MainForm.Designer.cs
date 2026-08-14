@@ -74,7 +74,7 @@ namespace BarTenderPrinter
             this.cmbTemplate = new System.Windows.Forms.ComboBox { Location = new System.Drawing.Point(10, 102), Size = new System.Drawing.Size(1060, 25), DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList };
             this.cmbTemplate.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             this.cmbTemplate.SelectedIndexChanged += new System.EventHandler(this.cmbTemplate_SelectedIndexChanged);
-            this.lblSelectedTemplate = new System.Windows.Forms.Label { Text = "未选择模板", Location = new System.Drawing.Point(10, 132), Size = new System.Drawing.Size(300, 18) };
+            this.lblSelectedTemplate = new System.Windows.Forms.Label { Text = "未选择模板", Location = new System.Drawing.Point(10, 132), Size = new System.Drawing.Size(300, 18), AutoEllipsis = true };
             MiuiTheme.StyleLabel(this.lblSelectedTemplate, true);
 
             // === Printer + Copies Row (y=157) ===
@@ -155,7 +155,7 @@ namespace BarTenderPrinter
             this.lblTotalStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "累计 0" };
             this.lblTodayStatus.Visible = false;
             this.lblTotalStatus.Visible = false;
-            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.82" };
+            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.83" };
             this.statusStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] { this.lblConnection, this.lblStatus, this.lblTodayStatus, this.lblTotalStatus, this.lblVersion });
             MiuiTheme.StyleStatusStrip(this.statusStrip);
 
