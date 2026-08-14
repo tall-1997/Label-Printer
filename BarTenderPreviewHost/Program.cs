@@ -136,7 +136,7 @@ namespace BarTenderPreviewHost
                 foreach (var item in projected)
                     Invoke(subStrings, "SetSubString", item.Key, item.Value ?? "");
 
-                var resolution = Activator.CreateInstance(GetSdkType("Resolution"), 300, 300);
+                var resolution = Activator.CreateInstance(GetSdkType("Resolution"), 600, 600);
                 Invoke(document, "ExportImageToFile", request.OutputPath,
                     Enum.Parse(GetSdkType("ImageType"), "PNG"),
                     Enum.Parse(GetSdkType("ColorDepth"), "ColorDepth24bit"),
@@ -160,7 +160,7 @@ namespace BarTenderPreviewHost
             var create = type.GetMethod("Create", BindingFlags.Public | BindingFlags.Static, null,
                 new[] { typeof(string), typeof(Color), typeof(int), typeof(int) }, null)
                 ?? throw new MissingMethodException(type.FullName, "Create");
-            using (var image = create.Invoke(null, new object[] { templatePath, Color.White, 1200, 1200 }) as Image
+            using (var image = create.Invoke(null, new object[] { templatePath, Color.White, 2400, 2400 }) as Image
                 ?? throw new InvalidDataException("BarTender SDK 未生成模板缩略图"))
                 image.Save(outputPath, ImageFormat.Png);
             ValidateImage(outputPath);

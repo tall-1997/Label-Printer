@@ -118,13 +118,13 @@ namespace BarTenderPrinter
             this.btnClearSearch.Click += new System.EventHandler(this.btnClearSearch_Click);
             this.chkExactSearch = new System.Windows.Forms.CheckBox { Text = "精确", Location = new System.Drawing.Point(282, 4), Size = new System.Drawing.Size(55, 20) };
             this.chkExactSearch.CheckedChanged += new System.EventHandler(this.chkExactSearch_CheckedChanged);
-            this.btnClearHistory = new System.Windows.Forms.Button { Text = "清空控件", Location = new System.Drawing.Point(340, 1), Size = new System.Drawing.Size(70, 24) };
+            this.btnClearHistory = new System.Windows.Forms.Button { Text = "清空", Location = new System.Drawing.Point(340, 1), Size = new System.Drawing.Size(58, 24) };
             this.btnClearHistory.Click += new System.EventHandler(this.btnClearHistory_Click);
-            this.btnExportHistory = new System.Windows.Forms.Button { Text = "导出", Location = new System.Drawing.Point(416, 1), Size = new System.Drawing.Size(50, 24) };
+            this.btnExportHistory = new System.Windows.Forms.Button { Text = "导出", Location = new System.Drawing.Point(404, 1), Size = new System.Drawing.Size(50, 24) };
             this.btnExportHistory.Click += new System.EventHandler(this.btnExportHistory_Click);
-            this.btnImportHistory = new System.Windows.Forms.Button { Text = "导入", Location = new System.Drawing.Point(472, 1), Size = new System.Drawing.Size(50, 24) };
+            this.btnImportHistory = new System.Windows.Forms.Button { Text = "导入", Location = new System.Drawing.Point(460, 1), Size = new System.Drawing.Size(50, 24) };
             this.btnImportHistory.Click += new System.EventHandler(this.btnImportHistory_Click);
-            this.btnReprintHistory = new System.Windows.Forms.Button { Text = "补打印选中项", Location = new System.Drawing.Point(528, 1), Size = new System.Drawing.Size(100, 24) };
+            this.btnReprintHistory = new System.Windows.Forms.Button { Text = "补打印选中项", Location = new System.Drawing.Point(516, 1), Size = new System.Drawing.Size(100, 24) };
             this.btnReprintHistory.Click += new System.EventHandler(this.btnReprintHistory_Click);
             this.historyPanel.Controls.AddRange(new System.Windows.Forms.Control[] { this.lblSearch, this.txtSearch, this.btnClearSearch, this.chkExactSearch, this.btnClearHistory, this.btnExportHistory, this.btnImportHistory, this.btnReprintHistory });
             this.tabHistory.Controls.Add(this.dgvHistory); this.tabHistory.Controls.Add(this.historyPanel);
@@ -155,7 +155,7 @@ namespace BarTenderPrinter
             this.lblTotalStatus = new System.Windows.Forms.ToolStripStatusLabel { Text = "累计 0" };
             this.lblTodayStatus.Visible = false;
             this.lblTotalStatus.Visible = false;
-            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.75" };
+            this.lblVersion = new System.Windows.Forms.ToolStripStatusLabel { Text = "v5.7.76" };
             this.statusStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] { this.lblConnection, this.lblStatus, this.lblTodayStatus, this.lblTotalStatus, this.lblVersion });
             MiuiTheme.StyleStatusStrip(this.statusStrip);
 

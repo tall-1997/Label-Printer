@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.75";
+        private readonly string _version = "v5.7.76";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -258,8 +258,8 @@ namespace BarTenderPrinter
             _versionBadge.BringToFront();
             _authorLabel.BringToFront();
 
-            _btnAbout = new Button { Text = "关于", Dock = DockStyle.Right, Width = 84 };
-            _btnToggleLog = new Button { Text = "收起日志", Dock = DockStyle.Right, Width = 104 };
+            _btnAbout = new Button { Text = "关于", Dock = DockStyle.Right, Width = 64 };
+            _btnToggleLog = new Button { Text = "收起日志", Dock = DockStyle.Right, Width = 88 };
             _btnAbout.Click += (s, e) => ShowAboutDialog();
             _btnToggleLog.Click += (s, e) => ToggleLogPanel();
             titlePanel.Controls.Add(_btnAbout);
@@ -329,9 +329,10 @@ namespace BarTenderPrinter
             {
                 if (button == null) continue;
                 button.Height = commandHeight;
+                var minimumWidth = button == _btnAbout ? 64 : button == btnExportLog ? 84 : 88;
                 button.Width = compact
                     ? ScaleUi(44)
-                    : Math.Max(ScaleUi(92), button.GetPreferredSize(new Size(0, commandHeight)).Width + ScaleUi(10));
+                    : Math.Max(ScaleUi(minimumWidth), button.GetPreferredSize(new Size(0, commandHeight)).Width + ScaleUi(4));
                 button.Margin = new Padding(ScaleUi(4), 0, ScaleUi(4), 0);
             }
             if (_chkPreview != null) _chkPreview.Padding = new Padding(ScaleUi(10), ScaleUi(9), ScaleUi(10), 0);
@@ -579,25 +580,13 @@ namespace BarTenderPrinter
 
         private void ApplyCenteredPrintButtonContent(float scale)
         {
-            const string text = "打印";
-            using var icon = SvgIconRenderer.Render(AppIcon.Print, Color.White, ScaleIcon(19, scale));
-            var textSize = TextRenderer.MeasureText(text, btnPrint.Font, Size.Empty, TextFormatFlags.NoPadding);
-            var gap = ScaleIcon(7, scale);
-            var content = new Bitmap(icon.Width + gap + textSize.Width + 2, Math.Max(icon.Height, textSize.Height) + 2);
-            using (var graphics = Graphics.FromImage(content))
-            {
-                graphics.Clear(Color.Transparent);
-                graphics.DrawImageUnscaled(icon, 0, (content.Height - icon.Height) / 2);
-                TextRenderer.DrawText(graphics, text, btnPrint.Font,
-                    new Rectangle(icon.Width + gap, 0, textSize.Width + 2, content.Height), Color.White,
-                    TextFormatFlags.NoPadding | TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-            }
-            btnPrint.Text = string.Empty;
-            btnPrint.AccessibleName = text;
+            var icon = SvgIconRenderer.Render(AppIcon.Print, Color.White, ScaleIcon(19, scale));
+            btnPrint.AccessibleName = "打印";
             btnPrint.ImageAlign = ContentAlignment.MiddleCenter;
-            btnPrint.TextImageRelation = TextImageRelation.Overlay;
-            ReplaceImage(btnPrint, content);
-            btnPrint.Padding = Padding.Empty;
+            btnPrint.TextAlign = ContentAlignment.MiddleCenter;
+            btnPrint.TextImageRelation = TextImageRelation.ImageBeforeText;
+            ReplaceImage(btnPrint, icon);
+            btnPrint.Padding = new Padding(ScaleIcon(6, scale), 0, ScaleIcon(8, scale), 0);
         }
 
         private void ApplyNavigationIcons(bool orderPageActive, float scale = 0F)
@@ -1432,19 +1421,23 @@ namespace BarTenderPrinter
                 else ClearOrderSelection();
                 return;
             }
-            if (!ApplyOrder(order))
+            if (_orderPagePanel.Visible)
             {
-                if (_orderPagePanel.Visible)
+                if (_editingOrder != null && string.Equals(_editingOrder.Key, order.Key, StringComparison.OrdinalIgnoreCase)) return;
+                if (!ConfirmOrderEditorChanges())
                 {
-                    ShowOrderSettingsPage(order);
+                    if (_editingOrder != null) SelectOrder(_editingOrder);
+                    else if (previousOrder != null) SelectOrder(previousOrder);
                     return;
                 }
+                SelectOrder(order);
+                ShowOrderSettingsPage(order);
+                return;
+            }
+            if (!ApplyOrder(order))
+            {
                 if (previousOrder != null) SelectOrder(previousOrder);
                 else ClearOrderSelection();
-            }
-            else if (_orderPagePanel.Visible)
-            {
-                ShowOrderSettingsPage(order);
             }
         }
 

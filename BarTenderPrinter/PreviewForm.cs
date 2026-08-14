@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Windows.Forms;
 
@@ -59,7 +60,7 @@ namespace BarTenderPrinter
                 Padding = new Padding(12),
                 BackColor = MiuiTheme.Background
             };
-            _pictureBox = new PictureBox
+            _pictureBox = new HighQualityPictureBox
             {
                 Dock = DockStyle.Fill,
                 BackColor = MiuiTheme.CardBackground,
@@ -111,6 +112,18 @@ namespace BarTenderPrinter
             var previous = _pictureBox.Image;
             _pictureBox.Image = image;
             previous?.Dispose();
+        }
+
+        private sealed class HighQualityPictureBox : PictureBox
+        {
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+                e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                e.Graphics.SmoothingMode = SmoothingMode.HighQuality;
+                base.OnPaint(e);
+            }
         }
     }
 }
