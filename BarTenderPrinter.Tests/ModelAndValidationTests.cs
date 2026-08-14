@@ -228,7 +228,11 @@ namespace BarTenderPrinter.Tests
             var csv = Path.Combine(dir, "records.csv");
             var jsonl = Path.Combine(dir, "records.jsonl");
             var db = Path.Combine(dir, "records.db");
-            File.WriteAllText(jsonl, "{bad json}\n" + System.Text.Json.JsonSerializer.Serialize(new PrintRecord("Template", "C:\\a.btw", "tid", new Dictionary<string, string> { ["A"] = "1" }, "now", "PASS", "P", 1)));
+            var legacyRecord = new PrintRecord("Template", "C:\\a.btw", "tid", new Dictionary<string, string> { ["A"] = "1" }, "now", "PASS", "P", 1)
+            {
+                SchemaVersion = 2
+            };
+            File.WriteAllText(jsonl, "{bad json}\n" + System.Text.Json.JsonSerializer.Serialize(legacyRecord));
             var history = new HistoryManager(csv, jsonl, db);
             history.Load();
             Assert.Single(history.Records);
