@@ -76,7 +76,7 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
-        public void MissingAccountFileCreatesRandomBootstrapAdministrator()
+        public void MissingAccountFileCreatesFixedSuperAdministrator()
         {
             var directory = CreateTempDirectory();
             var path = Path.Combine(directory, "accounts.json");
@@ -85,12 +85,30 @@ namespace BarTenderPrinter.Tests
 
             Assert.Null(manager.LoadError);
             Assert.NotNull(manager.DefaultAccount);
-            Assert.False(manager.TryLogin("superadmin", "admin", out _));
-            Assert.False(string.IsNullOrWhiteSpace(manager.BootstrapPassword));
-            Assert.True(manager.TryLogin("superadmin", manager.BootstrapPassword, out var account));
+            Assert.Equal("admin123", manager.BootstrapPassword);
+            Assert.True(manager.TryLogin("superadmin", "admin123", out var account));
             Assert.Equal("Admin", account.Role);
             Assert.StartsWith("PBKDF2-SHA256$", account.PasswordHash);
             Assert.True(File.Exists(path));
+        }
+
+        [Fact]
+        public void ExistingSuperAdministratorPasswordIsResetToFixedPassword()
+        {
+            var directory = CreateTempDirectory();
+            var path = Path.Combine(directory, "accounts.json");
+            var oldPasswordHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("old-password")));
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new[]
+            {
+                new UserAccount { UserName = "SuperAdmin", PasswordHash = oldPasswordHash, Role = "Operator" }
+            }));
+
+            var manager = new AccountManager(path);
+
+            Assert.True(manager.TryLogin("superadmin", "admin123", out var account));
+            Assert.False(manager.TryLogin("superadmin", "old-password", out _));
+            Assert.Equal("Admin", account.Role);
+            Assert.StartsWith("PBKDF2-SHA256$", account.PasswordHash);
         }
 
         [Fact]

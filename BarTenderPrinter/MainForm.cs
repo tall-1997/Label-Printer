@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.80";
+        private readonly string _version = "v5.7.81";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -3171,7 +3171,7 @@ namespace BarTenderPrinter
                     MessageBox.Show(this, $"账户文件无法读取，当前保持 Operator 权限。请由管理员恢复账户文件：\n{_accountManager.AccountFilePath}",
                         "账户恢复", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 else if (!string.IsNullOrWhiteSpace(_accountManager.BootstrapPassword))
-                    MessageBox.Show(this, $"已创建初始化管理员账号。\n账号：superadmin\n一次性初始密码：{_accountManager.BootstrapPassword}\n请立即登录并修改账户文件中的默认初始化密码。",
+                    MessageBox.Show(this, $"已创建超级管理员账号。\n账号：superadmin\n密码：{_accountManager.BootstrapPassword}",
                         "管理员初始化", MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
                 AddLog("系统启动完成", "INFO");

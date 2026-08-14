@@ -17,6 +17,8 @@ namespace BarTenderPrinter
 
     public class AccountManager
     {
+        private const string SuperAdminUserName = "superadmin";
+        private const string SuperAdminPassword = "admin123";
         private readonly string _path;
         private readonly List<UserAccount> _accounts = new List<UserAccount>();
 
@@ -27,7 +29,7 @@ namespace BarTenderPrinter
             Load();
         }
 
-        public UserAccount DefaultAccount => _accounts.FirstOrDefault(account => account.UserName == "superadmin");
+        public UserAccount DefaultAccount => _accounts.FirstOrDefault(account => account.UserName == SuperAdminUserName);
         public Exception LoadError { get; private set; }
         public string AccountFilePath => _path;
         public string BootstrapPassword { get; private set; }
@@ -62,10 +64,18 @@ namespace BarTenderPrinter
                 LoggerService.Error("加载账户文件失败，原文件已保留", ex);
                 return;
             }
-            if (_accounts.All(account => !string.Equals(account.UserName, "superadmin", System.StringComparison.OrdinalIgnoreCase)))
+            var superAdmin = _accounts.FirstOrDefault(account => string.Equals(account.UserName, SuperAdminUserName, StringComparison.OrdinalIgnoreCase));
+            if (superAdmin == null)
             {
-                BootstrapPassword = GenerateBootstrapPassword();
-                _accounts.Add(new UserAccount { UserName = "superadmin", PasswordHash = HashPassword(BootstrapPassword), Role = "Admin" });
+                BootstrapPassword = SuperAdminPassword;
+                _accounts.Add(new UserAccount { UserName = SuperAdminUserName, PasswordHash = HashPassword(SuperAdminPassword), Role = "Admin" });
+            }
+            else
+            {
+                superAdmin.UserName = SuperAdminUserName;
+                superAdmin.Role = "Admin";
+                if (!VerifyPassword(SuperAdminPassword, superAdmin.PasswordHash))
+                    superAdmin.PasswordHash = HashPassword(SuperAdminPassword);
             }
             if (!fileExists || _accounts.Count > 0) Save();
         }
@@ -107,12 +117,6 @@ namespace BarTenderPrinter
                     return CryptographicOperations.FixedTimeEquals(expected, pbkdf2.GetBytes(expected.Length));
             }
             catch { return false; }
-        }
-
-        private static string GenerateBootstrapPassword()
-        {
-            var bytes = RandomNumberGenerator.GetBytes(18);
-            return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', 'A').Replace('/', 'B');
         }
     }
 }

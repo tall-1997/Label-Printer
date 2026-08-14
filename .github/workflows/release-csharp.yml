@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without v prefix, for example 5.7.80'
+        description: 'Release version without v prefix, for example 5.7.81'
         required: true
         type: string
 
@@ -84,7 +84,9 @@ jobs:
             ### 更新内容
 
             #### 账户与补打印安全
-            - 初始管理员使用随机启动密码，账户密码升级为 PBKDF2-SHA256 存储
+            - 超级管理员账号固定为 `superadmin`，默认密码固定为 `admin123`
+            - 新建和现有超级管理员账户启动时统一应用固定凭据与 Admin 角色
+            - 账户文件继续使用 PBKDF2-SHA256 哈希存储密码
             - 补打印增加 Supervisor/Admin 登录、原因记录和打印机可用性校验
             - 打印前校验模板文件、打印机和打印份数
 
