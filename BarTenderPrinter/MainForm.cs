@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.70";
+        private readonly string _version = "v5.7.71";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -4454,12 +4454,31 @@ namespace BarTenderPrinter
         }
         private void btnExportHistory_Click(object sender, EventArgs e)
         {
-            var records = GetCurrentHistoryRecords();
+            var records = GetCurrentHistoryRecords(true);
             if (records.Count == 0) { MessageBox.Show(this, "当前模板没有可导出的记录"); return; }
-            using (var sfd = new SaveFileDialog { Filter = "CSV|*.csv", FileName = $"records_{DateTime.Now:yyyyMMdd_HHmmss}.csv" })
+            using (var dialog = new FolderBrowserDialog { Description = "选择打印历史 CSV 导出目录", UseDescriptionForTitle = true })
             {
-                if (sfd.ShowDialog(this) == DialogResult.OK)
-                { try { _history.Export(sfd.FileName, records); MessageBox.Show(this, "导出成功"); } catch (Exception ex) { MessageBox.Show(this, ex.Message); } }
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                try
+                {
+                    var templateFields = _dataSources.Select(source => source.Field).ToList();
+                    IReadOnlyList<string> paths;
+                    try
+                    {
+                        paths = BusinessHistoryCsvExporter.Export(dialog.SelectedPath, records, _orders.Orders, templateFields, DateTime.Now);
+                    }
+                    catch (IOException ex) when (ex.Message.StartsWith("导出文件已存在：", StringComparison.Ordinal))
+                    {
+                        if (MessageBox.Show(this, ex.Message + "\n\n是否覆盖目标目录中本次导出的同名文件？", "确认覆盖", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                            return;
+                        paths = BusinessHistoryCsvExporter.Export(dialog.SelectedPath, records, _orders.Orders, templateFields, DateTime.Now, true);
+                    }
+                    MessageBox.Show(this, $"导出成功，共生成 {paths.Count} 个 CSV 文件。", "导出历史", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, ex.Message, "导出失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
         }
 
@@ -4731,13 +4750,13 @@ namespace BarTenderPrinter
             inputPanel.Enabled = enabled;
         }
 
-        private List<PrintRecord> GetCurrentHistoryRecords()
+        private List<PrintRecord> GetCurrentHistoryRecords(bool includeAllPages = false)
         {
             var status = _cmbHistoryStatus?.SelectedItem?.ToString() ?? "全部状态";
             if (string.Equals(status, "全部状态", StringComparison.OrdinalIgnoreCase)) status = "";
             var date = _txtHistoryDate?.Text?.Trim() ?? "";
             return _history.Search(Path.GetFileName(_selectedTemplatePath), _selectedTemplatePath, GetCurrentTemplateId(), txtSearch?.Text ?? "", chkExactSearch.Checked,
-                HistoryPageSize, true, _historyPageIndex * HistoryPageSize, status, date, "", "");
+                includeAllPages ? 0 : HistoryPageSize, true, includeAllPages ? 0 : _historyPageIndex * HistoryPageSize, status, date, "", "");
         }
 
         private void LoadHistory()

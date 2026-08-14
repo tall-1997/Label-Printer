@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -288,6 +289,81 @@ namespace BarTenderPrinter.Tests
         {
             var parts = CsvUtils.ParseLine("\"a,1\",\"b\"\"2\"");
             Assert.Equal(new[] { "a,1", "b\"2" }, parts);
+        }
+
+        [Fact]
+        public void BusinessHistoryCsvMapsOrderFieldsAndTemplateSources()
+        {
+            var order = new PackagingOrder { Id = "order-1", Customer = "客户甲", ProductModel = "M1", Color = "蓝色", OrderNumber = "SO001" };
+            var record = new PrintRecord("T", "C:\\a.btw", "template-1", new Dictionary<string, string>
+            {
+                ["IMEI"] = "123,456",
+                ["BOX"] = "A\"B"
+            }, "2026-08-14 09:08:07", "PASS", "P", 1)
+            {
+                OrderId = order.OrderId,
+                OperatorName = "operator1"
+            };
+
+            var csv = BusinessHistoryCsvExporter.BuildCsv(new[] { record }, order, new[] { "IMEI", "BOX", "MISSING" });
+            var rows = csv.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+
+            Assert.Equal(new[] { "日期", "客户", "颜色", "机型", "订单号", "IMEI", "BOX", "MISSING", "操作人", "打印时间", "打印状态" }, CsvUtils.ParseLine(rows[0]));
+            Assert.Equal(new[] { "2026-08-14", "客户甲", "蓝色", "M1", "SO001", "123,456", "A\"B", "", "operator1", "2026/08/14 09:08:07", "PASS" }, CsvUtils.ParseLine(rows[1]));
+            Assert.Contains("\"123,456\"", rows[1]);
+            Assert.Contains("\"A\"\"B\"", rows[1]);
+        }
+
+        [Fact]
+        public void BusinessHistoryCsvExportSplitsOrdersAndWritesUtf8Bom()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "BarTenderPrinterTests", Guid.NewGuid().ToString("N"));
+            var orders = new[]
+            {
+                new PackagingOrder { Id = "order-1", Customer = "客户甲", ProductModel = "M1", Color = "蓝色", OrderNumber = "SO001" },
+                new PackagingOrder { Id = "order-2", Customer = "客户乙", ProductModel = "M2", Color = "红色", OrderNumber = "SO002" }
+            };
+            var records = orders.Select(order => new PrintRecord("T", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["SN"] = order.OrderNumber }, "2026-08-14 10:00:00", "PASS", "P", 1)
+            {
+                OrderId = order.OrderId
+            }).ToList();
+
+            var paths = BusinessHistoryCsvExporter.Export(directory, records, orders, new[] { "SN", "sn" }, new DateTime(2026, 8, 14));
+
+            Assert.Equal(2, paths.Count);
+            Assert.Contains(paths, path => Path.GetFileName(path) == "客户甲_M1_蓝色_SO001_20260814.csv");
+            Assert.Contains(paths, path => Path.GetFileName(path) == "客户乙_M2_红色_SO002_20260814.csv");
+            Assert.All(paths, path => Assert.Equal(new byte[] { 0xEF, 0xBB, 0xBF }, File.ReadAllBytes(path).Take(3).ToArray()));
+        }
+
+        [Fact]
+        public void BusinessHistoryCsvExportRequiresExplicitOverwrite()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "BarTenderPrinterTests", Guid.NewGuid().ToString("N"));
+            var order = new PackagingOrder { Id = "order-1", Customer = "客户甲", ProductModel = "M1", Color = "蓝色", OrderNumber = "SO001" };
+            var record = new PrintRecord { OrderId = order.OrderId, PrintTime = "2026-08-14 10:00:00" };
+
+            BusinessHistoryCsvExporter.Export(directory, new[] { record }, new[] { order }, Array.Empty<string>(), new DateTime(2026, 8, 14));
+            var error = Assert.Throws<IOException>(() => BusinessHistoryCsvExporter.Export(directory, new[] { record }, new[] { order }, Array.Empty<string>(), new DateTime(2026, 8, 14)));
+            Assert.StartsWith("导出文件已存在：", error.Message);
+            Assert.Single(BusinessHistoryCsvExporter.Export(directory, new[] { record }, new[] { order }, Array.Empty<string>(), new DateTime(2026, 8, 14), true));
+        }
+
+        [Fact]
+        public void BusinessHistoryCsvExportMergesRecordsWithoutOrderSnapshot()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "BarTenderPrinterTests", Guid.NewGuid().ToString("N"));
+            var records = new[]
+            {
+                new PrintRecord { OrderId = "missing-1", PrintTime = "2026-08-14 10:00:00" },
+                new PrintRecord { OrderId = "missing-2", PrintTime = "2026-08-14 11:00:00" }
+            };
+
+            var paths = BusinessHistoryCsvExporter.Export(directory, records, Array.Empty<PackagingOrder>(), Array.Empty<string>(), new DateTime(2026, 8, 14));
+            var rows = File.ReadAllLines(Assert.Single(paths), Encoding.UTF8);
+
+            Assert.Equal(3, rows.Length);
+            Assert.Equal("____20260814.csv", Path.GetFileName(paths[0]));
         }
 
         [Fact]
