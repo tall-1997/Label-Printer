@@ -19,6 +19,15 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
+        public void OrderKeyCannotCollideWhenValuesContainSeparators()
+        {
+            var left = PackagingOrder.BuildKey("A|B", "C", "Black", "100");
+            var right = PackagingOrder.BuildKey("A", "B|C", "Black", "100");
+
+            Assert.NotEqual(left, right);
+        }
+
+        [Fact]
         public void OrderCascadeFiltersEachLevelByItsPredecessors()
         {
             var orders = new[]
@@ -196,6 +205,21 @@ namespace BarTenderPrinter.Tests
             var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"));
             history.Records.Clear();
             history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "FAIL", "Printer", 1);
+            Assert.False(history.ContainsAnyValue("Template", "C:\\a.btw", "template-1", "X"));
+        }
+
+        [Fact]
+        public void UncertainHistoryRecordReservesValueUntilReviewed()
+        {
+            var dir = CreateTempDirectory();
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), Path.Combine(dir, "records.db"));
+
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "UNCERTAIN", "Printer", 1));
+
+            Assert.True(history.ContainsAnyValue("Template", "C:\\a.btw", "template-1", "X"));
+            Assert.Null(history.GetLatestSuccessful("Template", "C:\\a.btw", "template-1"));
+
+            Assert.True(history.Delete(history.Records[0].RecordId, "admin", "reviewed"));
             Assert.False(history.ContainsAnyValue("Template", "C:\\a.btw", "template-1", "X"));
         }
 
@@ -593,11 +617,13 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
-        public void PreviewCacheKeyChangesWithTemplateOrFields()
+        public void PreviewCacheKeyChangesWithTemplateContentOrFields()
         {
             var template = CreateTemplateFile();
             var original = BarTenderService.BuildPreviewCacheKey(template, new Dictionary<string, string> { ["IMEI"] = "123" });
-            File.SetLastWriteTimeUtc(template, File.GetLastWriteTimeUtc(template).AddSeconds(2));
+            var timestamp = File.GetLastWriteTimeUtc(template);
+            File.WriteAllText(template, "changed template content");
+            File.SetLastWriteTimeUtc(template, timestamp);
             var templateChanged = BarTenderService.BuildPreviewCacheKey(template, new Dictionary<string, string> { ["IMEI"] = "123" });
             var fieldChanged = BarTenderService.BuildPreviewCacheKey(template, new Dictionary<string, string> { ["IMEI"] = "456" });
 

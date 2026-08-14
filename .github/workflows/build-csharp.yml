@@ -19,9 +19,14 @@ on:
       - '.github/workflows/build-csharp.yml'
   workflow_dispatch:
 
+concurrency:
+  group: build-csharp-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

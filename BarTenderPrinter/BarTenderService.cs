@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -21,7 +22,6 @@ namespace BarTenderPrinter
         private string _previewSdkPath;
         private string _previewHostPath;
         private string _previewUnavailableReason = "正在检测 BarTender .NET SDK";
-        private string _previewCacheKey = "";
         private bool _connected;
         private bool _offlineMode;
         private readonly SemaphoreSlim _operationLock = new SemaphoreSlim(1, 1);
@@ -370,12 +370,12 @@ namespace BarTenderPrinter
             try
             {
                 var cacheKey = BuildPreviewCacheKey(templatePath, fieldValues);
-                var outputPath = Path.Combine(AppPaths.PreviewDirectory, "current-preview.png");
-                if (string.Equals(cacheKey, _previewCacheKey, StringComparison.Ordinal) && IsValidPreviewImage(outputPath))
+                var outputPath = Path.Combine(AppPaths.PreviewDirectory, $"preview-cache-{cacheKey}.png");
+                if (IsValidPreviewImage(outputPath))
                     return outputPath;
 
                 var previewPath = ExportPreviewWithHost(templatePath, fieldValues, outputPath);
-                _previewCacheKey = cacheKey;
+                RemoveStalePreviewCacheFiles(previewPath);
                 return previewPath;
             }
             catch (Exception ex)
@@ -454,6 +454,19 @@ namespace BarTenderPrinter
             catch (Exception ex) { LoggerService.Warn($"清理预览临时文件失败: {Path.GetFileName(path)}; {ex.Message}"); }
         }
 
+        private static void RemoveStalePreviewCacheFiles(string currentPath)
+        {
+            try
+            {
+                foreach (var path in Directory.GetFiles(AppPaths.PreviewDirectory, "preview-cache-*.png"))
+                    if (!string.Equals(path, currentPath, StringComparison.OrdinalIgnoreCase)) TryDeletePreviewFile(path);
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Warn($"清理过期预览缓存失败: {ex.Message}");
+            }
+        }
+
         private sealed class PreviewHostRequest
         {
             public string SdkPath { get; set; }
@@ -474,10 +487,11 @@ namespace BarTenderPrinter
         internal static string BuildPreviewCacheKey(string templatePath, Dictionary<string, string> fieldValues)
         {
             var builder = new StringBuilder(Path.GetFullPath(templatePath));
-            builder.Append('\0').Append(File.GetLastWriteTimeUtc(templatePath).Ticks);
+            using (var stream = File.OpenRead(templatePath))
+                builder.Append('\0').Append(Convert.ToHexString(SHA256.HashData(stream)));
             foreach (var item in fieldValues.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
                 builder.Append('\0').Append(item.Key).Append('\0').Append(item.Value ?? "");
-            return builder.ToString();
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()))).ToLowerInvariant();
         }
 
         private void TryLoadPreviewSdk()
@@ -708,7 +722,18 @@ namespace BarTenderPrinter
                 }
                 finally { ReleaseComObject(printSetup); }
 
-                object printResult = btFormat.PrintOut(false, false);
+                object printResult;
+                try
+                {
+                    printResult = btFormat.PrintOut(false, false);
+                }
+                catch (Exception ex)
+                {
+                    CloseFormat(btFormat);
+                    return new PrintResult(false,
+                        "打印提交结果未知，请检查 BarTender 和打印机队列后再处理，系统不会自动重试。",
+                        $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};submission=uncertain;message={ex.Message}");
+                }
                 if (printResult is bool boolResult && !boolResult)
                 {
                     CloseFormat(btFormat);

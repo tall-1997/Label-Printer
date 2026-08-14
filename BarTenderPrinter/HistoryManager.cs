@@ -512,7 +512,7 @@ namespace BarTenderPrinter
 
         private void IndexRecord(PrintRecord record)
         {
-            if (record.IsExcluded || !IsSuccessfulStatus(record.Status)) return;
+            if (record.IsExcluded || !ShouldReserveValues(record.Status)) return;
             var key = GetTemplateKey(record);
             if (!_templateValueIndexes.TryGetValue(key, out var values))
             {
@@ -527,6 +527,11 @@ namespace BarTenderPrinter
         {
             return string.Equals(status, "PASS", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(status, "REPRINT_PASS", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool ShouldReserveValues(string status)
+        {
+            return IsSuccessfulStatus(status) || string.Equals(status, "UNCERTAIN", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool Append(PrintRecord record)

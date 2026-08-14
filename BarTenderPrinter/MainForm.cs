@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.81";
+        private readonly string _version = "v5.7.82";
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -39,6 +39,7 @@ namespace BarTenderPrinter
         private string _localDataStoragePath = "";
         private string _localDataColumnName = "";
         private string _localDataTargetField = "";
+        private string _localDataLoadError = "";
         private bool _useLocalDataValidation = false;
         private bool _duplicateValidationEnabled = true;
         private bool _isInitializing = true;
@@ -905,7 +906,7 @@ namespace BarTenderPrinter
             _btnNextHistoryPage = new Button { Text = "下一页", Location = new Point(990, 1), Size = new Size(60, 24) };
             _lblHistoryPage = new Label { Text = "第 1 页", Location = new Point(1055, 5), Size = new Size(80, 18) };
             _cmbHistoryStatus = new ComboBox { Location = new Point(1140, 2), Size = new Size(90, 25), DropDownStyle = ComboBoxStyle.DropDownList };
-            _cmbHistoryStatus.Items.AddRange(new object[] { "全部状态", "PASS", "FAIL", "REPRINT_PASS", "REPRINT_FAIL" });
+            _cmbHistoryStatus.Items.AddRange(new object[] { "全部状态", "PASS", "FAIL", "UNCERTAIN", "REPRINT_PASS", "REPRINT_FAIL" });
             _cmbHistoryStatus.SelectedIndex = 0;
             _txtHistoryDate = new TextBox { Location = new Point(1180, 2), Size = new Size(90, 25), PlaceholderText = "yyyy-MM-dd" };
             _btnPrevHistoryPage.Click += (s, e) => { if (_historyPageIndex > 0) { _historyPageIndex--; LoadHistory(); } };
@@ -930,6 +931,7 @@ namespace BarTenderPrinter
             if (account == null) return;
             _currentAccount = account;
             _txtOperator.Text = account.UserName;
+            _txtOperator.ReadOnly = true;
             _cmbRole.SelectedItem = account.Role;
             UpdateSession();
             AuditLogger.Append(GetOperatorName(), "Login", $"role={account.Role}");
@@ -2465,14 +2467,29 @@ namespace BarTenderPrinter
 
         private static HashSet<string> GetTemplateLocalData(TemplateSettings settings)
         {
+            return GetTemplateLocalData(settings, out _);
+        }
+
+        private static HashSet<string> GetTemplateLocalData(TemplateSettings settings, out string loadError)
+        {
+            loadError = "";
             try
             {
-                if (!string.IsNullOrWhiteSpace(settings?.LocalDataStoragePath) && File.Exists(settings.LocalDataStoragePath))
+                if (!string.IsNullOrWhiteSpace(settings?.LocalDataStoragePath))
+                {
+                    if (!File.Exists(settings.LocalDataStoragePath))
+                    {
+                        loadError = $"本地校验数据快照不存在: {settings.LocalDataStoragePath}";
+                        return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    }
                     return new HashSet<string>(File.ReadLines(settings.LocalDataStoragePath).Where(line => !string.IsNullOrWhiteSpace(line)).Select(line => line.Trim()), StringComparer.OrdinalIgnoreCase);
+                }
             }
             catch (Exception ex)
             {
                 LoggerService.Warn($"读取本地校验数据快照失败: {ex.Message}");
+                loadError = $"本地校验数据快照读取失败: {ex.Message}";
+                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             }
             return new HashSet<string>(settings?.LocalData ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
         }
@@ -3571,6 +3588,7 @@ namespace BarTenderPrinter
             _localDataStoragePath = "";
             _localDataColumnName = "";
             _localDataTargetField = "";
+            _localDataLoadError = "";
             _localData.Clear();
             _isLoadingConfig = true;
             try
@@ -4359,6 +4377,7 @@ namespace BarTenderPrinter
                 return;
             }
             _localData = data;
+            _localDataLoadError = "";
             _localDataPath = path;
             _localDataStoragePath = SaveValidationDataSnapshot(_activeOrder?.OrderId ?? "global", _activeOrderTemplate?.Id ?? "global", _selectedTemplatePath, data);
             _localDataColumnName = columnName;
@@ -4457,7 +4476,8 @@ namespace BarTenderPrinter
         {
             if (_isInitializing || _isLoadingConfig)
             {
-                _useLocalDataValidation = chkUseLocalData.Checked && _localData.Count > 0;
+                if (string.IsNullOrWhiteSpace(_localDataLoadError))
+                    _useLocalDataValidation = chkUseLocalData.Checked && _localData.Count > 0;
                 return;
             }
             if (chkUseLocalData.Checked && _localData.Count == 0)
@@ -4479,8 +4499,9 @@ namespace BarTenderPrinter
         private void UpdateLocalDataValidationAvailability()
         {
             var hasLocalData = _localData.Count > 0;
-            chkUseLocalData.Enabled = hasLocalData;
-            if (!hasLocalData)
+            var hasLoadError = !string.IsNullOrWhiteSpace(_localDataLoadError);
+            chkUseLocalData.Enabled = hasLocalData && !hasLoadError;
+            if (!hasLocalData && !hasLoadError)
             {
                 _useLocalDataValidation = false;
                 chkUseLocalData.Checked = false;
@@ -4599,7 +4620,17 @@ namespace BarTenderPrinter
         private bool ValidateLocalData(Dictionary<string, string> fieldValues, HashSet<string> localData = null, IEnumerable<DataSourceItem> sources = null)
         {
             localData ??= _localData;
-            if (localData.Count == 0) return true;
+            if (!string.IsNullOrWhiteSpace(_localDataLoadError))
+            {
+                MessageBox.Show(this, _localDataLoadError + "\n请重新导入校验数据后再打印。", "本地校验不可用", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AddLog(_localDataLoadError, "ERROR");
+                return false;
+            }
+            if (localData.Count == 0)
+            {
+                MessageBox.Show(this, "本地校验已启用，但没有可用校验数据。请重新导入后再打印。", "本地校验不可用", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
             sources ??= _dataSources;
             var notInLocal = ValidationService.FindLocalDataMismatches(fieldValues, localData, sources);
             if (notInLocal.Count > 0)
@@ -4641,6 +4672,8 @@ namespace BarTenderPrinter
 
         private string GetOperatorName()
         {
+            if (_currentAccount != null && !string.IsNullOrWhiteSpace(_currentAccount.UserName))
+                return _currentAccount.UserName;
             var value = _txtOperator?.Text?.Trim();
             return string.IsNullOrWhiteSpace(value) ? Environment.UserName ?? "" : value;
         }
@@ -4703,7 +4736,7 @@ namespace BarTenderPrinter
             _pendingPrintJobCount++;
             SetPrintEnvironmentEnabled(false);
             SetStatus($"打印队列: {_pendingPrintJobCount}");
-            AddLog($"打印作业已入队: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}={kv.Value}"))}", "INFO");
+            AddLog($"打印作业已入队: {string.Join(", ", fieldValues.Select(kv => $"{kv.Key}=<redacted,len={(kv.Value ?? "").Length}>"))}", "INFO");
             _ = ProcessQueuedPrintAsync(templateName, templatePath, templateId, fieldValues, printer, copies,
                 operatorName, templateVersion, orderName, orderId, templateFields,
                 enabled.Where(ShouldTrackPendingValue).Select(source => source.Field).ToList(), sourceSnapshot);
@@ -4725,10 +4758,13 @@ namespace BarTenderPrinter
                 result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
             }
             var historySaved = true;
+            var historyStatus = result.Success
+                ? "PASS"
+                : result.DiagnosticDetails?.IndexOf("submission=uncertain", StringComparison.OrdinalIgnoreCase) >= 0 ? "UNCERTAIN" : "FAIL";
             try
             {
                 historySaved = _printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
-                    result.Success ? "PASS" : "FAIL", printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
+                    historyStatus, printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
                     orderName, orderId, templateFields);
             }
             catch (Exception ex)
@@ -4743,7 +4779,7 @@ namespace BarTenderPrinter
                 {
                     RemovePendingPrintValues(templateId, pendingFields, fieldValues);
                     _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
-                    if (result.Success)
+                    if (result.Success && historySaved)
                     {
                         var currentSources = _dataSources.Where(source => source.Enabled).ToList();
                         var contextMatches = string.Equals(orderId, _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
@@ -4755,12 +4791,16 @@ namespace BarTenderPrinter
                         else
                             AddLog("打印作业已提交，当前页面上下文已变化，跳过输入状态推进。", "WARNING");
                         AddLog("打印作业已提交", "SUCCESS");
-                        if (!historySaved)
-                            AddLog("打印作业已提交，但历史记录保存失败；输入状态已经推进。", "ERROR");
+                    }
+                    else if (result.Success)
+                    {
+                        AddLog("打印作业已提交，但历史记录保存失败；输入值和自动递增状态已保留，请人工核对后处理。", "ERROR");
                     }
                     else
                     {
-                        AddLog($"打印提交失败: {result.ErrorMessage}", "ERROR");
+                        AddLog(historyStatus == "UNCERTAIN"
+                            ? $"打印结果待核查: {result.ErrorMessage}"
+                            : $"打印提交失败: {result.ErrorMessage}", "ERROR");
                         if (!historySaved)
                             AddLog("失败打印历史记录保存失败。", "ERROR");
                     }
@@ -5253,7 +5293,11 @@ namespace BarTenderPrinter
             if (_btnOrderPage != null) _btnOrderPage.Enabled = enabled;
             if (_btnPrintPage != null) _btnPrintPage.Enabled = enabled;
             if (_btnLogin != null) _btnLogin.Enabled = enabled;
-            if (_txtOperator != null) _txtOperator.Enabled = enabled;
+            if (_txtOperator != null)
+            {
+                _txtOperator.Enabled = enabled;
+                _txtOperator.ReadOnly = _currentAccount != null;
+            }
             if (_cmbRole != null) _cmbRole.Enabled = false;
             if (enabled) RefreshPrintActionState();
         }
@@ -5518,8 +5562,8 @@ namespace BarTenderPrinter
                 _localDataStoragePath = settings.LocalDataStoragePath ?? "";
                 _localDataColumnName = settings.LocalDataColumnName ?? "";
                 _localDataTargetField = settings.LocalDataTargetField ?? "";
-                _localData = GetTemplateLocalData(settings);
-                if (_localData.Count == 0) _useLocalDataValidation = false;
+                _localData = GetTemplateLocalData(settings, out _localDataLoadError);
+                if (_localData.Count == 0 && string.IsNullOrWhiteSpace(_localDataLoadError)) _useLocalDataValidation = false;
                 UpdateLocalDataValidationAvailability();
                 chkUseLocalData.Checked = _useLocalDataValidation;
                 chkDuplicateValidation.Checked = _duplicateValidationEnabled;
@@ -5533,7 +5577,9 @@ namespace BarTenderPrinter
                 }
                 else if (cmbPrinter.Items.Count > 0)
                     cmbPrinter.SelectedIndex = 0;
-                UpdateLocalDataLabel(_localData.Count > 0 ? $"已恢复: {_localData.Count} 条 {(_localDataTargetField.Length > 0 ? "->" + _localDataTargetField : "")}" : "");
+                UpdateLocalDataLabel(!string.IsNullOrWhiteSpace(_localDataLoadError)
+                    ? "校验数据加载失败"
+                    : _localData.Count > 0 ? $"已恢复: {_localData.Count} 条 {(_localDataTargetField.Length > 0 ? "->" + _localDataTargetField : "")}" : "");
                 RebuildInputFields();
                 UpdateEffectiveSummary();
             }
@@ -5700,6 +5746,7 @@ namespace BarTenderPrinter
                 _localDataStoragePath = "";
                 _localDataColumnName = "";
                 _localDataTargetField = "";
+                _localDataLoadError = "";
                 UpdateLocalDataLabel("");
                 var copies = 1; int.TryParse(IniReadValue("General", "Copies", path), out copies); numCopies.Value = Math.Max(1, Math.Min(99, copies));
                 bool.TryParse(IniReadValue("General", "InputValidation", path), out _useLocalDataValidation);

@@ -25,6 +25,7 @@ OutputDir=..\installer-output
 OutputBaseFilename=BarTenderPrinter-Setup-v{#MyAppVersion}-win-x64
 CloseApplications=yes
 RestartApplications=no
+ChangesAssociations=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

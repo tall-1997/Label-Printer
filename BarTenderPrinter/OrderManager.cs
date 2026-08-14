@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace BarTenderPrinter
@@ -25,14 +26,11 @@ namespace BarTenderPrinter
 
         public static string BuildKey(string customer, string productModel, string color, string orderNumber)
         {
-            return string.Join("|", new[]
-            {
-                Normalize(customer),
-                Normalize(productModel),
-                Normalize(color),
-                Normalize(orderNumber)
-            });
+            return string.Concat(new[] { customer, productModel, color, orderNumber }
+                .Select(value => EncodeKeyPart(Normalize(value))));
         }
+
+        private static string EncodeKeyPart(string value) => $"{Encoding.UTF8.GetByteCount(value)}:{value}";
 
         private static string Normalize(string value) => (value ?? "").Trim();
     }

@@ -7,13 +7,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without v prefix, for example 5.7.81'
+        description: 'Release version without v prefix, for example 5.7.82'
         required: true
         type: string
+
+concurrency:
+  group: release-csharp
+  cancel-in-progress: false
 
 jobs:
   build-and-release:
     runs-on: windows-latest
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -64,9 +69,9 @@ jobs:
           if (!$installer -or $installer.Length -le 0) {
             throw "Installer was not generated"
           }
-          $exeVersion = (Get-Item "publish/BarTenderPrinter.exe").VersionInfo.ProductVersion
-          if (!$exeVersion.StartsWith("${{ steps.version.outputs.SEMVER }}")) {
-            throw "EXE version $exeVersion does not match ${{ steps.version.outputs.SEMVER }}"
+          $fileVersion = (Get-Item "publish/BarTenderPrinter.exe").VersionInfo.FileVersion
+          if ($fileVersion -ne "${{ steps.version.outputs.SEMVER }}.0") {
+            throw "EXE file version $fileVersion does not match ${{ steps.version.outputs.SEMVER }}.0"
           }
           if (!(Test-Path "publish/BarTenderPreviewHost.exe")) {
             throw "BarTenderPreviewHost.exe is missing from publish output"
@@ -83,23 +88,23 @@ jobs:
 
             ### 更新内容
 
-            #### 账户与补打印安全
-            - 超级管理员账号固定为 `superadmin`，默认密码固定为 `admin123`
-            - 新建和现有超级管理员账户启动时统一应用固定凭据与 Admin 角色
-            - 账户文件继续使用 PBKDF2-SHA256 哈希存储密码
-            - 补打印增加 Supervisor/Admin 登录、原因记录和打印机可用性校验
-            - 打印前校验模板文件、打印机和打印份数
+            #### 打印可靠性
+            - 打印提交阶段异常记录为 `UNCERTAIN`，阻止自动重试和重复实体标签
+            - `UNCERTAIN` 字段值持续参与重复校验，人工核查并排除记录后释放占用
+            - 历史保存失败时保留输入值和自动递增状态，支持人工核对
+            - 应用增加单实例保护，防止多个进程并发写入和重复打印
 
-            #### 历史与文件可靠性
-            - 打印历史和审计记录增加 HMAC-SHA256 完整性校验
-            - 历史独立副本迁移到用户数据目录，主存储成功后归档异常降级为日志告警
-            - 原子文件写入增加跨进程互斥、遗弃锁恢复和唯一临时文件
-            - CSV 导出增加公式注入防护，日志增加换行净化和自动轮转
+            #### 校验与审计
+            - 本地校验快照丢失或读取失败时阻断打印并提示重新导入
+            - 操作员身份绑定当前登录账户，避免审计身份被编辑
+            - 打印日志隐藏业务字段明文，仅记录字段名和数据长度
+            - 订单复合键改用长度前缀编码，消除分隔符碰撞
 
-            #### 预览与交互
-            - 预览字段名称改为大小写无关匹配，并兼容旧版 BarTender 缩略图 API
-            - 打印与补打印仅在订单、模板和字段上下文一致时刷新预览
-            - 过期校验数据导入结果自动丢弃，无效订单筛选组合自动清空
+            #### 预览与工程质量
+            - 预览缓存基于模板内容 SHA-256 和字段快照，模板内容变化立即失效
+            - 自动清理过期预览缓存，日志轮转文件名增加唯一标识
+            - CI 增加并发控制、执行超时和 EXE 文件版本精确校验
+            - 安装器刷新 Windows 文件关联通知
 
             #### 测试与发布
             - CI 覆盖主分支和 Pull Request 构建、核心测试与安装包版本校验

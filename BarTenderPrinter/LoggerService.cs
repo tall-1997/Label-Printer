@@ -75,7 +75,8 @@ namespace BarTenderPrinter
             try
             {
                 if (!File.Exists(LogFile) || new FileInfo(LogFile).Length < MaxLogBytes) return;
-                var archive = Path.Combine(Path.GetDirectoryName(LogFile) ?? AppPaths.DataDirectory, "bartender-printer." + DateTime.Now.ToString("yyyyMMddHHmmss") + ".log");
+                var archive = Path.Combine(Path.GetDirectoryName(LogFile) ?? AppPaths.DataDirectory,
+                    "bartender-printer." + DateTime.Now.ToString("yyyyMMddHHmmssfff") + "." + Guid.NewGuid().ToString("N") + ".log");
                 File.Move(LogFile, archive);
             }
             catch { }
