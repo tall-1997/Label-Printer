@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace BarTenderPrinter
@@ -40,7 +41,11 @@ namespace BarTenderPrinter
 
         public static void WriteAllLines(string path, IEnumerable<string> lines, Encoding encoding = null)
         {
-            WriteAllText(path, string.Join(System.Environment.NewLine, lines ?? new string[0]), encoding);
+            var materialized = (lines ?? new string[0]).ToList();
+            var content = materialized.Count == 0
+                ? ""
+                : string.Join(System.Environment.NewLine, materialized) + System.Environment.NewLine;
+            WriteAllText(path, content, encoding);
         }
     }
 }
