@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.83** - C# WinForms 安装版
+**v5.7.87** - C# WinForms 安装版
 
 ## 功能特性
 
@@ -85,7 +85,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender Printer v5.7.83  By---池鱼  [日志] [关于] [导出日志] │
+│ BarTender Printer v5.7.87  By---池鱼  [日志] [关于] [导出日志] │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -136,6 +136,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
+| [v5.7.87](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.87) | ~50 MB | 打印协调、历史灾难恢复与并发可靠性增强版 |
 | [v5.7.83](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.83) | ~50 MB | 响应式布局、多 DPI 与待核查状态显示修复版 |
 | [v5.7.82](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.82) | ~50 MB | 打印可靠性与审计加固版 |
 | [v5.7.81](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.81) | ~50 MB | 超级管理员固定凭据版 |
@@ -226,7 +227,14 @@ Label-Printer/
 # 使用 Visual Studio 打开
 BarTenderPrinter/BarTenderPrinter.csproj
 
-# 或使用 dotnet 命令行
+# 恢复依赖并在 Windows 上运行测试
+dotnet restore BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj
+dotnet test BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release
+
+# 在 Linux 上验证 Windows 目标项目编译
+DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 dotnet build BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release -p:EnableWindowsTargeting=true
+
+# 发布 Windows x64 自包含应用
 dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
 
 # 使用 Inno Setup 6 构建当前用户安装包
