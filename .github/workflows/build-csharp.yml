@@ -7,16 +7,40 @@ on:
       - 'BarTenderPrinter/**'
       - 'BarTenderPrinter.Tests/**'
       - 'BarTenderPreviewHost/**'
+      - 'BarTenderPrinter.Domain/**'
+      - 'BarTenderPrinter.Domain.Tests/**'
+      - 'BarTenderPrinter.Devices/**'
+      - 'BarTenderPrinter.Devices.Tests/**'
+      - 'BarTenderPrinter.Persistence/**'
+      - 'BarTenderPrinter.Persistence.Tests/**'
+      - 'BarTenderPrinter.MesApi/**'
+      - 'BarTenderPrinter.MesApi.Tests/**'
+      - 'BarTenderPrinter.MesClient.Tests/**'
+      - 'BarTenderPrinter.Printing.Tests/**'
       - 'installer/**'
+      - 'scripts/Test-ReleaseArtifact.ps1'
       - '.github/workflows/build-csharp.yml'
+      - '.github/workflows/release-csharp.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'BarTenderPrinter/**'
       - 'BarTenderPrinter.Tests/**'
       - 'BarTenderPreviewHost/**'
+      - 'BarTenderPrinter.Domain/**'
+      - 'BarTenderPrinter.Domain.Tests/**'
+      - 'BarTenderPrinter.Devices/**'
+      - 'BarTenderPrinter.Devices.Tests/**'
+      - 'BarTenderPrinter.Persistence/**'
+      - 'BarTenderPrinter.Persistence.Tests/**'
+      - 'BarTenderPrinter.MesApi/**'
+      - 'BarTenderPrinter.MesApi.Tests/**'
+      - 'BarTenderPrinter.MesClient.Tests/**'
+      - 'BarTenderPrinter.Printing.Tests/**'
       - 'installer/**'
+      - 'scripts/Test-ReleaseArtifact.ps1'
       - '.github/workflows/build-csharp.yml'
+      - '.github/workflows/release-csharp.yml'
   workflow_dispatch:
 
 concurrency:
@@ -24,7 +48,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test-linux-service:
+    name: Linux center service and cross-platform tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: bartender_ci
+          POSTGRES_USER: bartender_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bartender_ci -d bartender_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      BARTENDER_TEST_POSTGRES: Host=localhost;Port=5432;Database=bartender_ci;Username=bartender_ci
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '1'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run cross-platform tests
+        shell: bash
+        run: |
+          dotnet test BarTenderPrinter.Domain.Tests/BarTenderPrinter.Domain.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.Devices.Tests/BarTenderPrinter.Devices.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.Printing.Tests/BarTenderPrinter.Printing.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.MesClient.Tests/BarTenderPrinter.MesClient.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.Persistence.Tests/BarTenderPrinter.Persistence.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.MesApi.Tests/BarTenderPrinter.MesApi.Tests.csproj -c Release
+
+      - name: Build center service
+        run: dotnet build BarTenderPrinter.MesApi/BarTenderPrinter.MesApi.csproj -c Release
+
   build-windows:
+    name: Windows WinForms and BarTender tests
+    needs: test-linux-service
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -41,6 +110,10 @@ jobs:
 
       - name: Publish self-contained application
         run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Verify release artifact contents
+        shell: pwsh
+        run: ./scripts/Test-ReleaseArtifact.ps1 -PublishDirectory publish
 
       - name: Build installer
         shell: pwsh

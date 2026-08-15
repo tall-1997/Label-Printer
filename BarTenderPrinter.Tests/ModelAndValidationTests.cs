@@ -660,17 +660,17 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
-        public async System.Threading.Tasks.Task PrintCoordinatorConvertsPrintExceptionAndStillRecordsHistory()
+        public async System.Threading.Tasks.Task PrintCoordinatorMarksPrintExceptionUncertainAndStillRecordsHistory()
         {
             var history = new FakeHistoryRepository();
             var coordinator = new PrintJobCoordinator(new FakeBarTenderService(new InvalidOperationException("offline")), history, new PrintWorkflow());
 
             var completion = await coordinator.ExecuteAsync(CreatePrintJobRequest(PrintJobKind.Print));
 
-            Assert.Equal(PrintSubmissionState.Failed, completion.PrintResult.State);
-            Assert.Equal("FAIL", completion.HistoryStatus);
+            Assert.Equal(PrintSubmissionState.Uncertain, completion.PrintResult.State);
+            Assert.Equal("UNCERTAIN", completion.HistoryStatus);
             Assert.True(completion.HistorySaved);
-            Assert.Equal("FAIL", history.LastStatus);
+            Assert.Equal("UNCERTAIN", history.LastStatus);
         }
 
         [Fact]
@@ -1070,7 +1070,7 @@ namespace BarTenderPrinter.Tests
 
         private static PrintJobRequest CreatePrintJobRequest(PrintJobKind kind)
         {
-            return new PrintJobRequest
+            var request = new PrintJobRequest
             {
                 Kind = kind,
                 TemplateName = "label.btw",
@@ -1080,6 +1080,14 @@ namespace BarTenderPrinter.Tests
                 Printer = "Printer",
                 Copies = 1
             };
+            if (kind == PrintJobKind.Reprint)
+            {
+                request.OriginalJobId = "original-job";
+                request.ApprovalId = "approval-1";
+                request.ReprintReason = "damaged";
+                request.ReprintSequence = 1;
+            }
+            return request;
         }
 
         private sealed class FakeBarTenderService : IBarTenderService

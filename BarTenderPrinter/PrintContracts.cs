@@ -2,6 +2,14 @@ namespace BarTenderPrinter
 {
     public sealed class PrintHistoryEntry
     {
+        public string JobId { get; set; } = "";
+        public string IdempotencyKey { get; set; } = "";
+        public string BatchId { get; set; } = "";
+        public string BatchItemId { get; set; } = "";
+        public LabelType LabelType { get; set; }
+        public string OriginalJobId { get; set; } = "";
+        public string ApprovalId { get; set; } = "";
+        public int ReprintSequence { get; set; }
         public string TemplateName { get; set; } = "";
         public string TemplatePath { get; set; } = "";
         public string TemplateId { get; set; } = "";
@@ -24,6 +32,15 @@ namespace BarTenderPrinter
         Reprint
     }
 
+    public enum LabelType
+    {
+        Unspecified,
+        Body,
+        ColorBox,
+        Carton,
+        Pallet
+    }
+
     public enum PrintSubmissionState
     {
         Submitted,
@@ -43,11 +60,12 @@ namespace BarTenderPrinter
         {
         }
 
-        public PrintResult(PrintSubmissionState state, string message, string diagnostics = "")
+        [System.Text.Json.Serialization.JsonConstructor]
+        public PrintResult(PrintSubmissionState state, string errorMessage, string diagnosticDetails = "")
         {
             State = state;
-            ErrorMessage = message ?? "";
-            DiagnosticDetails = diagnostics ?? "";
+            ErrorMessage = errorMessage ?? "";
+            DiagnosticDetails = diagnosticDetails ?? "";
         }
     }
 }

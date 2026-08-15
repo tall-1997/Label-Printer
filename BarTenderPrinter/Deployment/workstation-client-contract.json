@@ -1,0 +1,14 @@
+{
+  "contractVersion": 1,
+  "apiPrefix": "/api",
+  "correlationHeader": "X-Correlation-ID",
+  "authenticationScheme": "Bearer",
+  "printJobStates": [
+    "Received",
+    "Submitting",
+    "Submitted",
+    "Failed",
+    "Uncertain"
+  ],
+  "recoveryEndpoint": "/api/print-jobs/by-idempotency-key/{key}"
+}

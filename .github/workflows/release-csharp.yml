@@ -16,7 +16,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test-linux-service:
+    name: Linux center service and cross-platform tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: bartender_ci
+          POSTGRES_USER: bartender_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bartender_ci -d bartender_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      BARTENDER_TEST_POSTGRES: Host=localhost;Port=5432;Database=bartender_ci;Username=bartender_ci
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '1'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run cross-platform tests
+        shell: bash
+        run: |
+          dotnet test BarTenderPrinter.Domain.Tests/BarTenderPrinter.Domain.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.Devices.Tests/BarTenderPrinter.Devices.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.Printing.Tests/BarTenderPrinter.Printing.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.MesClient.Tests/BarTenderPrinter.MesClient.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.Persistence.Tests/BarTenderPrinter.Persistence.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.MesApi.Tests/BarTenderPrinter.MesApi.Tests.csproj -c Release
+
+      - name: Build center service
+        run: dotnet build BarTenderPrinter.MesApi/BarTenderPrinter.MesApi.csproj -c Release
+
   build-and-release:
+    name: Windows WinForms and BarTender release
+    needs: test-linux-service
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -33,13 +78,17 @@ jobs:
       - name: Resolve release version
         id: version
         shell: pwsh
+        env:
+          RELEASE_EVENT_NAME: ${{ github.event_name }}
+          RELEASE_INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
         run: |
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $semver = '${{ inputs.version }}'
+          if ($env:RELEASE_EVENT_NAME -eq 'workflow_dispatch') {
+            $semver = $env:RELEASE_INPUT_VERSION
             if ($semver -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid release version: $semver" }
             $tag = "v$semver"
           } else {
-            $tag = '${{ github.ref_name }}'
+            $tag = $env:RELEASE_REF_NAME
             if ($tag -notmatch '^v\d+\.\d+\.\d+$') { throw "Invalid release tag: $tag" }
             $semver = $tag.Substring(1)
           }
@@ -51,6 +100,10 @@ jobs:
 
       - name: Publish self-contained application
         run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish -p:Version=${{ steps.version.outputs.SEMVER }} -p:AssemblyVersion=${{ steps.version.outputs.SEMVER }}.0 -p:FileVersion=${{ steps.version.outputs.SEMVER }}.0
+
+      - name: Verify release artifact contents
+        shell: pwsh
+        run: ./scripts/Test-ReleaseArtifact.ps1 -PublishDirectory publish
 
       - name: Build installer
         shell: pwsh
@@ -88,23 +141,25 @@ jobs:
 
             ### 更新内容
 
-            #### 打印可靠性
-            - 普通打印和补打印统一通过 `PrintJobCoordinator` 编排打印提交、状态映射和历史持久化
-            - BarTender 非零数值、未知对象和空返回值采用待核查状态，降低重复实体标签风险
-            - 打印请求在异步边界前生成字段快照，确保实际打印内容与历史记录一致
+            #### MES 工位
+            - 新增订单、组装过站、包装过站、中心打印、追溯和人工核查页面
+            - 支持断线任务保留、幂等领取与回执恢复、关联 ID 和敏感日志脱敏
+            - 中心打印严格使用不可变模板、打印机和字段快照
 
-            #### 历史灾难恢复
-            - SQLite 局部或全部记录损坏时按记录标识从 JSONL 镜像恢复并事务重建主存储
-            - JSONL 恢复副本不完整时保留可读取记录和原始镜像，便于后续人工恢复
-            - 历史集合对外提供线程安全只读快照，添加、查询、清理和统计统一使用同步边界
+            #### 制造与设备
+            - 新增订单号段、制造路线、四级包装和统一生产追溯
+            - 提供模拟电子称稳定读数和模拟 IMEI/SN 写入回读校验
+            - 本地 SQLite 打印账本在 BarTender 提交前保存不可变作业快照
 
-            #### 架构与维护性
-            - 使用 `PrintHistoryEntry` 收敛历史写入接口并隔离可变集合所有权
-            - 主窗口支持注入打印服务、历史仓储和打印工作流，降低 UI 与基础设施耦合
-            - 模板设置加载跳过空记录，空历史时间与状态采用安全默认值
+            #### 质量与仓储
+            - 新增质量抽检、冻结处置、返工审批和受控返工路线
+            - 新增出库扫描、数量确认和订单不可变归档
+            - PostgreSQL v9 提供事务审计、并发幂等和历史数据修复迁移
 
             #### 测试与发布
-            - 增加 SQLite 损坏恢复、镜像保护、异步快照、并发写入和状态分类回归测试
+            - Linux CI 验证领域、设备、打印、客户端、PostgreSQL 和 MES API
+            - Windows CI 验证 WinForms、BarTender 边界、自包含发布和安装包内容
+            - 发布制品自动排除旧 MobileMes 资产、证书、数据库、日志和敏感配置
 
             ### 系统要求
             - Windows 10/11 x64

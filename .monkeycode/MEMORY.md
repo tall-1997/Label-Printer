@@ -20,3 +20,10 @@ This file records user instructions, preferences, and teachings for reference in
 - Instructions:
   - Do not use MonkeyCode AI related tools, services, branding, or generated integrations during project work.
   - Use local development tools, existing project scripts, and standard Git/GitHub workflows.
+
+[Complete queued work autonomously]
+- Date: 2026-08-15
+- Context: User-defined collaboration preference for multi-stage implementation
+- Instructions:
+  - Complete all remaining planned tasks in one continuous execution.
+  - Do not pause for clarification or send progress reports when the existing specification provides sufficient direction.

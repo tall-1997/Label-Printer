@@ -11,7 +11,7 @@ namespace BarTenderPrinter
 {
     public class PrintRecord
     {
-        public int SchemaVersion { get; set; } = 3;
+        public int SchemaVersion { get; set; } = 4;
         public string RecordId { get; set; }
         public string Imei { get; set; }
         public string TemplateName { get; set; }
@@ -35,10 +35,18 @@ namespace BarTenderPrinter
         public string ExcludedBy { get; set; }
         public string ExclusionReason { get; set; }
         public string ExclusionBatchId { get; set; }
+        public string JobId { get; set; }
+        public string IdempotencyKey { get; set; }
+        public string BatchId { get; set; }
+        public string BatchItemId { get; set; }
+        public LabelType LabelType { get; set; }
+        public string OriginalJobId { get; set; }
+        public string ApprovalId { get; set; }
+        public int ReprintSequence { get; set; }
 
         public PrintRecord()
         {
-            SchemaVersion = 3;
+            SchemaVersion = 4;
             RecordId = Guid.NewGuid().ToString("N");
             Imei = "";
             TemplateName = "";
@@ -61,6 +69,12 @@ namespace BarTenderPrinter
             ExcludedBy = "";
             ExclusionReason = "";
             ExclusionBatchId = "";
+            JobId = "";
+            IdempotencyKey = "";
+            BatchId = "";
+            BatchItemId = "";
+            OriginalJobId = "";
+            ApprovalId = "";
         }
 
         public PrintRecord(string imei, string printTime, string status)
@@ -83,6 +97,12 @@ namespace BarTenderPrinter
             OrderName = "";
             TemplateFields = new List<string>();
             RecordChecksum = "";
+            JobId = "";
+            IdempotencyKey = "";
+            BatchId = "";
+            BatchItemId = "";
+            OriginalJobId = "";
+            ApprovalId = "";
         }
 
         public PrintRecord(string templateName, string templatePath, Dictionary<string, string> fieldValues,
@@ -106,6 +126,12 @@ namespace BarTenderPrinter
             OrderName = "";
             TemplateFields = new List<string>();
             RecordChecksum = "";
+            JobId = "";
+            IdempotencyKey = "";
+            BatchId = "";
+            BatchItemId = "";
+            OriginalJobId = "";
+            ApprovalId = "";
         }
 
         public PrintRecord(string templateName, string templatePath, string templateId, Dictionary<string, string> fieldValues,
@@ -384,6 +410,14 @@ namespace BarTenderPrinter
                 var record = new PrintRecord(entry.TemplateName, entry.TemplatePath, entry.TemplateId, fields,
                     DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), entry.Status, entry.Printer, entry.Copies)
                 {
+                    JobId = entry.JobId ?? "",
+                    IdempotencyKey = entry.IdempotencyKey ?? "",
+                    BatchId = entry.BatchId ?? "",
+                    BatchItemId = entry.BatchItemId ?? "",
+                    LabelType = entry.LabelType,
+                    OriginalJobId = entry.OriginalJobId ?? "",
+                    ApprovalId = entry.ApprovalId ?? "",
+                    ReprintSequence = Math.Max(0, entry.ReprintSequence),
                     OperatorName = entry.OperatorName ?? "",
                     ReprintReason = entry.ReprintReason ?? "",
                     TemplateVersion = entry.TemplateVersion ?? "",
@@ -667,7 +701,7 @@ namespace BarTenderPrinter
 
         private static void ExcludeRecord(PrintRecord record, string operatorName, string reason, string batchId)
         {
-            record.SchemaVersion = 3;
+            record.SchemaVersion = Math.Max(3, record.SchemaVersion);
             record.IsExcluded = true;
             record.ExcludedAtUtc = DateTime.UtcNow.ToString("O");
             record.ExcludedBy = operatorName ?? "";
@@ -977,18 +1011,18 @@ namespace BarTenderPrinter
         {
             if (record == null) return false;
             if (string.IsNullOrWhiteSpace(record.RecordChecksum)) return record.SchemaVersion < 3;
-            return string.Equals(record.RecordChecksum, ComputeChecksum(record, true), StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(record.RecordChecksum, ComputeChecksum(record, false), StringComparison.OrdinalIgnoreCase) ||
+            return string.Equals(record.RecordChecksum, ComputeChecksum(record, true, record.SchemaVersion >= 4), StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(record.RecordChecksum, ComputeChecksum(record, false, record.SchemaVersion >= 4), StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(record.RecordChecksum, ComputeLegacyChecksum(record, true), StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(record.RecordChecksum, ComputeLegacyChecksum(record, false), StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ComputeChecksum(PrintRecord record)
         {
-            return ComputeChecksum(record, record.SchemaVersion >= 3);
+            return ComputeChecksum(record, record.SchemaVersion >= 3, record.SchemaVersion >= 4);
         }
 
-        private static string ComputeChecksum(PrintRecord record, bool includeLifecycle)
+        private static string ComputeChecksum(PrintRecord record, bool includeLifecycle, bool includeMesFields)
         {
             var values = new List<string>
             {
@@ -1004,6 +1038,17 @@ namespace BarTenderPrinter
                 values.Add(record.ExcludedBy ?? "");
                 values.Add(record.ExclusionReason ?? "");
                 values.Add(record.ExclusionBatchId ?? "");
+            }
+            if (includeMesFields)
+            {
+                values.Add(record.JobId ?? "");
+                values.Add(record.IdempotencyKey ?? "");
+                values.Add(record.BatchId ?? "");
+                values.Add(record.BatchItemId ?? "");
+                values.Add(record.LabelType.ToString());
+                values.Add(record.OriginalJobId ?? "");
+                values.Add(record.ApprovalId ?? "");
+                values.Add(record.ReprintSequence.ToString());
             }
             var payload = string.Join("|", values);
             using (var hmac = new HMACSHA256(GetIntegrityKey()))

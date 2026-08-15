@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -62,6 +63,7 @@ namespace BarTenderPrinter
         private Button _btnSidebarToggle;
         private Button _btnPrintPage;
         private Button _btnOrderPage;
+        private Button _btnMesPage;
         private bool _sidebarExpanded;
         private Panel _printPagePanel;
         private Panel _printOrderPanel;
@@ -70,6 +72,8 @@ namespace BarTenderPrinter
         private ComboBox _cmbPrintColor;
         private ComboBox _cmbPrintOrderNumber;
         private Panel _orderPagePanel;
+        private Panel _mesPagePanel;
+        private MesWorkstationService _mesService;
         private Panel _orderContentPanel;
         private ComboBox _txtOrderCustomer;
         private ComboBox _txtOrderModel;
@@ -152,12 +156,19 @@ namespace BarTenderPrinter
         }
 
         public MainForm(string startupTemplatePath = null)
-            : this(startupTemplatePath, new BarTenderService(), new HistoryManager(), new PrintWorkflow())
+            : this(startupTemplatePath, new BarTenderService(), new HistoryManager(), new PrintWorkflow(),
+                new SqlitePrintJobLedger(AppPaths.PrintJobLedgerFile))
         {
         }
 
         internal MainForm(string startupTemplatePath, IBarTenderService barTenderService,
             IHistoryRepository historyRepository, PrintWorkflow printWorkflow)
+            : this(startupTemplatePath, barTenderService, historyRepository, printWorkflow, null)
+        {
+        }
+
+        internal MainForm(string startupTemplatePath, IBarTenderService barTenderService,
+            IHistoryRepository historyRepository, PrintWorkflow printWorkflow, IPrintJobLedger printJobLedger)
         {
             _btService = barTenderService ?? throw new ArgumentNullException(nameof(barTenderService));
             _history = historyRepository ?? throw new ArgumentNullException(nameof(historyRepository));
@@ -169,7 +180,12 @@ namespace BarTenderPrinter
             InstallOrderSidebar();
             ConfigureModernShell();
             _configFile = AppPaths.ConfigFile;
-            _printCoordinator = new PrintJobCoordinator(_btService, _history, _printWorkflow);
+            _printCoordinator = new PrintJobCoordinator(_btService, _history, _printWorkflow, printJobLedger);
+            var mesOptionsStore = new MesConnectionOptionsStore(AppPaths.MesConnectionFile);
+            _mesService = new MesWorkstationService(
+                new MesApiClient(mesOptionsStore.Load(), "", new MesLoggerAdapter()),
+                new MesPendingOperationStore(AppPaths.MesPendingOperationsFile));
+            InstallMesWorkstationPage(mesOptionsStore);
             _applicationState = _applicationStateManager.Load();
             Text = $"BarTender Printer {_version}";
             lblVersion.Text = _version;
@@ -213,6 +229,7 @@ namespace BarTenderPrinter
                 SaveApplicationState();
                 ClosePreviewForm();
                 _historySearchTimer.Dispose();
+                _mesService.Dispose();
                 _btService.Dispose();
             };
             inputPanel.SizeChanged += InputPanel_SizeChanged;
@@ -321,9 +338,13 @@ namespace BarTenderPrinter
             _btnSidebarToggle.FlatAppearance.MouseOverBackColor = MiuiTheme.SidebarHover;
             _btnPrintPage.ForeColor = Color.White;
             _btnOrderPage.ForeColor = MiuiTheme.TextPrimary;
+            _btnMesPage.ForeColor = MiuiTheme.TextPrimary;
             _btnOrderPage.BackColor = MiuiTheme.Sidebar;
+            _btnMesPage.BackColor = MiuiTheme.Sidebar;
             _btnOrderPage.FlatAppearance.BorderSize = 0;
             _btnOrderPage.FlatAppearance.MouseOverBackColor = MiuiTheme.SidebarHover;
+            _btnMesPage.FlatAppearance.BorderSize = 0;
+            _btnMesPage.FlatAppearance.MouseOverBackColor = MiuiTheme.SidebarHover;
 
             MiuiTheme.StyleComboBox(cmbTemplate);
             MiuiTheme.StyleComboBox(cmbPrinter);
@@ -386,6 +407,7 @@ namespace BarTenderPrinter
             var navWidth = Math.Max(ScaleUi(136), SidebarExpandedWidth - ScaleUi(16));
             _btnPrintPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(12), navWidth, ScaleUi(44));
             _btnOrderPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(64), navWidth, ScaleUi(44));
+            _btnMesPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(116), navWidth, ScaleUi(44));
             if (_printOrderPanel != null) _printOrderPanel.Left = sidebarWidth + ScaleUi(12);
             if (_printPagePanel != null)
             {
@@ -397,6 +419,12 @@ namespace BarTenderPrinter
             {
                 _orderPagePanel.Left = sidebarWidth;
                 _orderPagePanel.Width = Math.Max(ScaleUi(320), ClientSize.Width - sidebarWidth);
+            }
+            if (_mesPagePanel != null)
+            {
+                _mesPagePanel.Left = sidebarWidth;
+                _mesPagePanel.Width = Math.Max(ScaleUi(320), ClientSize.Width - sidebarWidth);
+                _mesPagePanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
             }
         }
 
@@ -669,8 +697,11 @@ namespace BarTenderPrinter
         private void ApplyNavigationIcons(bool orderPageActive, float scale = 0F)
         {
             if (scale <= 0F) scale = Math.Max(1F, DeviceDpi / 96F);
-            ReplaceImage(_btnPrintPage, SvgIconRenderer.Render(AppIcon.Print, orderPageActive ? MiuiTheme.TextPrimary : Color.White, ScaleIcon(17, scale)));
+            var printActive = _printPagePanel?.Visible == true;
+            var mesActive = _mesPagePanel?.Visible == true;
+            ReplaceImage(_btnPrintPage, SvgIconRenderer.Render(AppIcon.Print, printActive ? Color.White : MiuiTheme.TextPrimary, ScaleIcon(17, scale)));
             ReplaceImage(_btnOrderPage, SvgIconRenderer.Render(AppIcon.Orders, orderPageActive ? Color.White : MiuiTheme.TextPrimary, ScaleIcon(17, scale)));
+            ReplaceImage(_btnMesPage, SvgIconRenderer.Render(AppIcon.Info, mesActive ? Color.White : MiuiTheme.TextPrimary, ScaleIcon(17, scale)));
         }
 
         private static int ScaleIcon(int logicalSize, float scale)
@@ -706,7 +737,7 @@ namespace BarTenderPrinter
 
         private void DisposeModernImages()
         {
-            foreach (var button in new[] { btnExportLog, btnPrint, btnRefreshPrinter, btnClearSearch, btnClearHistory, btnExportHistory, btnImportHistory, btnReprintHistory, _btnToggleLog, _btnAbout, _btnSidebarToggle, _btnPrintPage, _btnOrderPage })
+            foreach (var button in new[] { btnExportLog, btnPrint, btnRefreshPrinter, btnClearSearch, btnClearHistory, btnExportHistory, btnImportHistory, btnReprintHistory, _btnToggleLog, _btnAbout, _btnSidebarToggle, _btnPrintPage, _btnOrderPage, _btnMesPage })
             {
                 if (button == null) continue;
                 var image = button.Image;
@@ -1064,14 +1095,17 @@ namespace BarTenderPrinter
             _btnSidebarToggle.Click += (s, e) => SetSidebarExpanded(!_sidebarExpanded);
             _btnPrintPage = new Button { Text = "打印页面", Visible = false };
             _btnOrderPage = new Button { Text = "订单管理", Visible = false };
+            _btnMesPage = new Button { Text = "MES 工位", Visible = false };
             _btnPrintPage.Click += (s, e) => { ShowPrintPage(); SetSidebarExpanded(false); };
             _btnOrderPage.Click += (s, e) => { ShowOrderManagementPage(); SetSidebarExpanded(false); };
-            _navPanel.Controls.AddRange(new Control[] { _btnPrintPage, _btnOrderPage });
+            _btnMesPage.Click += (s, e) => { ShowMesWorkstationPage(); SetSidebarExpanded(false); };
+            _navPanel.Controls.AddRange(new Control[] { _btnPrintPage, _btnOrderPage, _btnMesPage });
             Controls.Add(_navPanel);
             _navPanel.BringToFront();
             MiuiTheme.StyleButton(_btnSidebarToggle);
             MiuiTheme.StyleNavigationButton(_btnPrintPage, true);
             MiuiTheme.StyleNavigationButton(_btnOrderPage, false);
+            MiuiTheme.StyleNavigationButton(_btnMesPage, false);
             ApplyNavigationIcons(false);
             LayoutSidebar();
 
@@ -1185,6 +1219,101 @@ namespace BarTenderPrinter
             RebuildPrintPageLayout();
             RefreshPrintOrderSelector(PrintOrderFilterLevel.All, false);
         }
+
+        private void InstallMesWorkstationPage(MesConnectionOptionsStore optionsStore)
+        {
+            _mesPagePanel = new Panel
+            {
+                Location = new Point(0, titlePanel.Bottom),
+                Size = new Size(ClientSize.Width, WorkspaceBottom - titlePanel.Bottom),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                Visible = false,
+                BackColor = BackColor
+            };
+            _mesPagePanel.Controls.Add(new MesWorkstationPanel(_mesService, optionsStore, ExecuteMesPrintJobAsync, AddLog,
+                delta => _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount + delta)));
+            Controls.Add(_mesPagePanel);
+        }
+
+        private void ShowMesWorkstationPage()
+        {
+            if (_orderPagePanel.Visible && !ConfirmOrderEditorChanges()) return;
+            if (_chkPreview != null)
+            {
+                _chkPreview.Checked = false;
+                _chkPreview.Visible = false;
+            }
+            _printPagePanel.Visible = false;
+            _orderPagePanel.Visible = false;
+            _mesPagePanel.Visible = true;
+            _mesPagePanel.BringToFront();
+            _navPanel.BringToFront();
+            titlePanel.BringToFront();
+            MiuiTheme.StyleNavigationButton(_btnPrintPage, false);
+            MiuiTheme.StyleNavigationButton(_btnOrderPage, false);
+            MiuiTheme.StyleNavigationButton(_btnMesPage, true);
+            ApplyNavigationIcons(false);
+        }
+
+        private async Task<PrintJobCompletion> ExecuteMesPrintJobAsync(MesPrintJob job)
+        {
+            if (job == null) throw new ArgumentNullException(nameof(job));
+            _pendingPrintJobCount++;
+            try
+            {
+            MesPrintRequestSnapshot snapshot;
+            try
+            {
+                snapshot = MesPrintRequestSnapshot.Parse(job.RequestJson);
+            }
+            catch (JsonException ex)
+            {
+                return CreateMesPrintFailure(job, "MES_PRINT_REQUEST_INVALID", ex.Message);
+            }
+
+            if (string.IsNullOrWhiteSpace(snapshot.TemplatePath) || !File.Exists(snapshot.TemplatePath) ||
+                string.IsNullOrWhiteSpace(snapshot.Printer) || snapshot.Fields.Count == 0)
+                return CreateMesPrintFailure(job, "MES_PRINT_IMMUTABLE_FIELDS_REQUIRED",
+                    "MES 打印作业缺少不可变的有效模板路径、打印机或字段快照。");
+
+            Enum.TryParse(job.LabelType, true, out LabelType labelType);
+            return await _printCoordinator.ExecuteAsync(new PrintJobRequest
+            {
+                JobId = job.JobId,
+                IdempotencyKey = job.IdempotencyKey,
+                BatchId = snapshot.BatchId,
+                BatchItemId = snapshot.BatchItemId,
+                LabelType = labelType,
+                Kind = PrintJobKind.Print,
+                TemplateName = Path.GetFileName(snapshot.TemplatePath),
+                TemplatePath = snapshot.TemplatePath,
+                TemplateId = job.TemplateId,
+                TemplateVersion = job.TemplateVersion,
+                FieldValues = snapshot.Fields.ToDictionary(pair => pair.Key, pair => pair.Value,
+                    StringComparer.OrdinalIgnoreCase),
+                Printer = snapshot.Printer,
+                Copies = snapshot.Copies,
+                OperatorName = GetOperatorName(),
+                OrderName = _activeOrder?.DisplayName ?? "",
+                OrderId = _activeOrder?.OrderId ?? "",
+                TemplateFields = snapshot.Fields.Keys.ToList()
+            });
+            }
+            finally
+            {
+                _pendingPrintJobCount--;
+            }
+        }
+
+        private static PrintJobCompletion CreateMesPrintFailure(MesPrintJob job, string code, string message) =>
+            new PrintJobCompletion
+            {
+                JobId = job.JobId,
+                IdempotencyKey = job.IdempotencyKey,
+                PrintResult = new PrintResult(PrintSubmissionState.Failed, message, code),
+                CompletionStatus = message,
+                LedgerState = PrintJobLedgerState.Failed.ToString()
+            };
 
         private ComboBox AddPrintOrderCombo(string labelText, int x, int y, int width)
         {
@@ -1317,6 +1446,7 @@ namespace BarTenderPrinter
             _sidebarExpanded = expanded;
             _btnPrintPage.Visible = expanded;
             _btnOrderPage.Visible = expanded;
+            _btnMesPage.Visible = expanded;
             _navPanel.Visible = expanded;
             LayoutSidebar();
             RebuildPrintPageLayout();
@@ -1331,6 +1461,7 @@ namespace BarTenderPrinter
             if (_activeOrderTemplate != null && !ResolveTemplateUpdate(_activeOrder, _activeOrderTemplate)) return;
             if (!SaveSelectedOrderTemplateDraft()) return;
             _orderPagePanel.Visible = false;
+            _mesPagePanel.Visible = false;
             _printPagePanel.Visible = true;
             _printPagePanel.BringToFront();
             _navPanel.BringToFront();
@@ -1338,6 +1469,7 @@ namespace BarTenderPrinter
             if (_chkPreview != null) _chkPreview.Visible = true;
             MiuiTheme.StyleNavigationButton(_btnPrintPage, true);
             MiuiTheme.StyleNavigationButton(_btnOrderPage, false);
+            MiuiTheme.StyleNavigationButton(_btnMesPage, false);
             ApplyNavigationIcons(false);
         }
 
@@ -1349,10 +1481,12 @@ namespace BarTenderPrinter
                 _chkPreview.Visible = false;
             }
             _printPagePanel.Visible = false;
+            _mesPagePanel.Visible = false;
             _orderPagePanel.Visible = true;
             _orderPagePanel.BringToFront();
             MiuiTheme.StyleNavigationButton(_btnOrderPage, true);
             MiuiTheme.StyleNavigationButton(_btnPrintPage, false);
+            MiuiTheme.StyleNavigationButton(_btnMesPage, false);
             ApplyNavigationIcons(true);
             if (_activeOrder != null)
             {
@@ -4876,6 +5010,7 @@ namespace BarTenderPrinter
         {
             var completion = await _printCoordinator.ExecuteAsync(new PrintJobRequest
             {
+                JobId = Guid.NewGuid().ToString("N"),
                 Kind = PrintJobKind.Print,
                 TemplateName = templateName,
                 TemplatePath = templatePath,
@@ -5336,8 +5471,13 @@ namespace BarTenderPrinter
             string reason, string operatorName, string operatorRole, string currentVersion)
         {
             var actualTemplateVersion = string.IsNullOrWhiteSpace(currentVersion) ? record.TemplateVersion : currentVersion;
+            var approvalId = Guid.NewGuid().ToString("N");
             var completion = await _printCoordinator.ExecuteAsync(new PrintJobRequest
             {
+                JobId = Guid.NewGuid().ToString("N"),
+                OriginalJobId = string.IsNullOrWhiteSpace(record.JobId) ? record.RecordId : record.JobId,
+                ApprovalId = approvalId,
+                ReprintSequence = Math.Max(1, record.ReprintSequence + 1),
                 Kind = PrintJobKind.Reprint,
                 TemplateName = record.TemplateName,
                 TemplatePath = record.TemplatePath,
@@ -5365,7 +5505,7 @@ namespace BarTenderPrinter
                         AddLog(completion.CompletionStatus, "ERROR");
                     else if (result.Success)
                     {
-                        AuditLogger.Append(operatorName, "Reprint", $"record={record.RecordId};role={operatorRole};reason={reason}");
+                        AuditLogger.Append(operatorName, "Reprint", $"approval={approvalId};record={record.RecordId};role={operatorRole};reason={reason}");
                         AddLog("补打印作业已提交", "SUCCESS");
                         if (_chkPreview?.Checked == true &&
                             string.Equals(record.OrderId ?? "", _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
