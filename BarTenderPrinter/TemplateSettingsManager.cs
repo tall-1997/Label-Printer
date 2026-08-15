@@ -120,7 +120,7 @@ namespace BarTenderPrinter
             string normalizedPath;
             try { normalizedPath = Path.GetFullPath(templatePath ?? "").TrimEnd(Path.DirectorySeparatorChar); }
             catch { normalizedPath = (templatePath ?? "").Trim(); }
-            return $"GlobalTemplate||{templateName?.Trim()}|{normalizedPath}";
+            return $"GlobalTemplate|||{templateName?.Trim()}|{normalizedPath}";
         }
 
         private static string GetKey(TemplateSettings settings)

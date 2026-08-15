@@ -123,6 +123,8 @@ namespace BarTenderPrinter
         private readonly string _recordsSqliteFile;
         private readonly string _historyRecordsDirectory;
         private readonly object _sync = new object();
+        private static readonly object IntegrityKeySync = new object();
+        private static byte[] _integrityKey;
         private readonly List<PrintRecord> _records = new List<PrintRecord>();
         private readonly Dictionary<string, HashSet<string>> _templateValueIndexes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         private bool _usesCurrentFormat;
@@ -1031,11 +1033,15 @@ namespace BarTenderPrinter
 
         private static byte[] GetIntegrityKey()
         {
-            var path = Path.Combine(AppPaths.DataDirectory, "history-integrity.key");
-            if (File.Exists(path)) return Convert.FromBase64String(File.ReadAllText(path).Trim());
-            var key = RandomNumberGenerator.GetBytes(32);
-            AtomicFileWriter.WriteAllText(path, Convert.ToBase64String(key), Encoding.UTF8);
-            return key;
+            lock (IntegrityKeySync)
+            {
+                if (_integrityKey != null) return _integrityKey;
+                var path = Path.Combine(AppPaths.DataDirectory, "history-integrity.key");
+                if (File.Exists(path)) return _integrityKey = Convert.FromBase64String(File.ReadAllText(path).Trim());
+                var key = RandomNumberGenerator.GetBytes(32);
+                AtomicFileWriter.WriteAllText(path, Convert.ToBase64String(key), Encoding.UTF8);
+                return _integrityKey = key;
+            }
         }
     }
 }

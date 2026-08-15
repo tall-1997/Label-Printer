@@ -594,25 +594,25 @@ namespace BarTenderPrinter.Tests
         }
 
         [Theory]
-        [InlineData(true, "", PrintJobKind.Print, "PASS")]
-        [InlineData(false, "submission=uncertain", PrintJobKind.Print, "UNCERTAIN")]
-        [InlineData(false, "error", PrintJobKind.Print, "FAIL")]
-        [InlineData(true, "", PrintJobKind.Reprint, "REPRINT_PASS")]
-        [InlineData(false, "submission=uncertain", PrintJobKind.Reprint, "REPRINT_UNCERTAIN")]
-        [InlineData(false, "error", PrintJobKind.Reprint, "REPRINT_FAIL")]
-        public void PrintWorkflowMapsHistoryStatus(bool success, string diagnostics, PrintJobKind kind, string expected)
+        [InlineData(PrintSubmissionState.Submitted, PrintJobKind.Print, "PASS")]
+        [InlineData(PrintSubmissionState.Uncertain, PrintJobKind.Print, "UNCERTAIN")]
+        [InlineData(PrintSubmissionState.Failed, PrintJobKind.Print, "FAIL")]
+        [InlineData(PrintSubmissionState.Submitted, PrintJobKind.Reprint, "REPRINT_PASS")]
+        [InlineData(PrintSubmissionState.Uncertain, PrintJobKind.Reprint, "REPRINT_UNCERTAIN")]
+        [InlineData(PrintSubmissionState.Failed, PrintJobKind.Reprint, "REPRINT_FAIL")]
+        public void PrintWorkflowMapsHistoryStatus(PrintSubmissionState state, PrintJobKind kind, string expected)
         {
-            var result = new PrintResult(success, "message", diagnostics);
+            var result = new PrintResult(state, "message");
             Assert.Equal(expected, new PrintWorkflow().GetHistoryStatus(result, kind));
         }
 
         [Theory]
-        [InlineData(false, true, "submission=uncertain", PrintJobKind.Print, "打印结果待核查")]
-        [InlineData(false, false, "submission=uncertain", PrintJobKind.Reprint, "补打印结果待核查，历史保存失败")]
-        [InlineData(true, false, "", PrintJobKind.Print, "打印作业已提交，历史保存失败")]
-        public void PrintWorkflowBuildsCompletionStatus(bool success, bool historySaved, string diagnostics, PrintJobKind kind, string expected)
+        [InlineData(PrintSubmissionState.Uncertain, true, PrintJobKind.Print, "打印结果待核查")]
+        [InlineData(PrintSubmissionState.Uncertain, false, PrintJobKind.Reprint, "补打印结果待核查，历史保存失败")]
+        [InlineData(PrintSubmissionState.Submitted, false, PrintJobKind.Print, "打印作业已提交，历史保存失败")]
+        public void PrintWorkflowBuildsCompletionStatus(PrintSubmissionState state, bool historySaved, PrintJobKind kind, string expected)
         {
-            var result = new PrintResult(success, "message", diagnostics);
+            var result = new PrintResult(state, "message");
             Assert.Equal(expected, new PrintWorkflow().GetCompletionStatus(result, historySaved, kind));
         }
 
