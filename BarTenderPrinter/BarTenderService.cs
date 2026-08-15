@@ -730,14 +730,22 @@ namespace BarTenderPrinter
                 catch (Exception ex)
                 {
                     CloseFormat(btFormat);
-                    return new PrintResult(false,
+                    return new PrintResult(PrintSubmissionState.Uncertain,
                         "打印提交结果未知，请检查 BarTender 和打印机队列后再处理，系统不会自动重试。",
                         $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};submission=uncertain;message={ex.Message}");
                 }
-                if (printResult is bool boolResult && !boolResult)
+                var submissionState = ClassifyPrintOutResult(printResult);
+                if (submissionState == PrintSubmissionState.Failed)
                 {
                     CloseFormat(btFormat);
-                    return new PrintResult(false, "BarTender 打印返回失败", $"template={templatePath};printer={printer};copies={copies};result=false");
+                    return new PrintResult(PrintSubmissionState.Failed, "BarTender 打印返回失败", $"template={templatePath};printer={printer};copies={copies};result={printResult}");
+                }
+                if (submissionState == PrintSubmissionState.Uncertain)
+                {
+                    CloseFormat(btFormat);
+                    return new PrintResult(PrintSubmissionState.Uncertain,
+                        "BarTender 返回了无法识别的打印结果，请检查 BarTender 和打印机队列后再处理。",
+                        $"template={templatePath};printer={printer};copies={copies};submission=uncertain;resultType={printResult?.GetType().FullName ?? "null"};result={printResult}");
                 }
                 LoggerService.Info("打印作业已提交");
 
@@ -751,6 +759,27 @@ namespace BarTenderPrinter
                 if (IsComBusyError(ex)) throw;
                 return new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
             }
+        }
+
+        internal static PrintSubmissionState ClassifyPrintOutResult(object result)
+        {
+            if (result is bool boolResult)
+                return boolResult ? PrintSubmissionState.Submitted : PrintSubmissionState.Failed;
+            if (result == null) return PrintSubmissionState.Uncertain;
+            var type = result.GetType();
+            if (type.IsEnum || result is byte || result is sbyte || result is short || result is ushort ||
+                result is int || result is uint || result is long || result is ulong)
+            {
+                try
+                {
+                    return Convert.ToDecimal(result) == 0 ? PrintSubmissionState.Submitted : PrintSubmissionState.Uncertain;
+                }
+                catch (Exception)
+                {
+                    return PrintSubmissionState.Uncertain;
+                }
+            }
+            return PrintSubmissionState.Uncertain;
         }
 
         private static bool IsComBusyError(Exception ex)

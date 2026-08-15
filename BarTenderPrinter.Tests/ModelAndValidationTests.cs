@@ -203,7 +203,6 @@ namespace BarTenderPrinter.Tests
         {
             var dir = CreateTempDirectory();
             var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"));
-            history.Records.Clear();
             history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "FAIL", "Printer", 1);
             Assert.False(history.ContainsAnyValue("Template", "C:\\a.btw", "template-1", "X"));
         }
@@ -228,10 +227,9 @@ namespace BarTenderPrinter.Tests
         {
             var dir = CreateTempDirectory();
             var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), Path.Combine(dir, "records.db"));
-            history.Records.Clear();
-            history.Records.Add(new PrintRecord("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "PASS-1" }, "1", "PASS", "P", 1));
-            history.Records.Add(new PrintRecord("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "FAIL-2" }, "2", "FAIL", "P", 1));
-            history.Records.Add(new PrintRecord("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "PASS-3" }, "3", "REPRINT_PASS", "P", 1));
+            history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "PASS-1" }, "PASS", "P", 1);
+            history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "FAIL-2" }, "FAIL", "P", 1);
+            history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "PASS-3" }, "REPRINT_PASS", "P", 1);
 
             var record = history.GetLatestSuccessful("Template", "C:\\a.btw", "template-1");
 
@@ -243,9 +241,8 @@ namespace BarTenderPrinter.Tests
         {
             var dir = CreateTempDirectory();
             var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), Path.Combine(dir, "records.db"));
-            history.Records.Clear();
-            history.Records.Add(new PrintRecord("Template A", "C:\\a.btw", "template-a", new Dictionary<string, string> { ["IMEI"] = "A" }, "1", "PASS", "P", 1));
-            history.Records.Add(new PrintRecord("Template B", "C:\\b.btw", "template-b", new Dictionary<string, string> { ["IMEI"] = "B" }, "2", "PASS", "P", 1));
+            history.Add("Template A", "C:\\a.btw", "template-a", new Dictionary<string, string> { ["IMEI"] = "A" }, "PASS", "P", 1);
+            history.Add("Template B", "C:\\b.btw", "template-b", new Dictionary<string, string> { ["IMEI"] = "B" }, "PASS", "P", 1);
 
             var record = history.GetLatestSuccessful("Template A", "C:\\a.btw", "template-a");
 
@@ -257,8 +254,7 @@ namespace BarTenderPrinter.Tests
         {
             var dir = CreateTempDirectory();
             var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), Path.Combine(dir, "records.db"));
-            history.Records.Clear();
-            history.Records.Add(new PrintRecord("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "FAIL" }, "1", "FAIL", "P", 1));
+            history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "FAIL" }, "FAIL", "P", 1);
 
             Assert.Null(history.GetLatestSuccessful("Template", "C:\\a.btw", "template-1"));
         }
@@ -304,6 +300,91 @@ namespace BarTenderPrinter.Tests
             var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db);
             Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "PASS", "Printer", 1));
             Assert.True(File.Exists(db));
+        }
+
+        [Fact]
+        public void HistoryManagerRecoversCorruptSqliteRowFromJsonlMirror()
+        {
+            var dir = CreateTempDirectory();
+            var db = Path.Combine(dir, "records.db");
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db);
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "A" }, "PASS", "Printer", 1));
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "B" }, "PASS", "Printer", 1));
+            var corruptId = history.Records[0].RecordId;
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE PrintRecords SET Json = '{' WHERE RecordId = $RecordId";
+                command.Parameters.AddWithValue("$RecordId", corruptId);
+                command.ExecuteNonQuery();
+            }
+
+            var reloaded = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db);
+            reloaded.Load();
+
+            Assert.Equal(2, reloaded.Records.Count);
+            Assert.Equal(new[] { "A", "B" }, reloaded.Records.Select(record => record.FieldValues["IMEI"]).OrderBy(value => value));
+            var loadedLines = File.ReadAllLines(Path.Combine(dir, "records.jsonl"));
+            Assert.Equal(2, loadedLines.Length);
+
+            var rebuilt = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db);
+            rebuilt.Load();
+            Assert.Equal(2, rebuilt.Records.Count);
+        }
+
+        [Fact]
+        public void HistoryManagerRecoversFullyCorruptSqliteFromJsonlMirror()
+        {
+            var dir = CreateTempDirectory();
+            var db = Path.Combine(dir, "records.db");
+            var jsonl = Path.Combine(dir, "records.jsonl");
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), jsonl, db);
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "A" }, "PASS", "Printer", 1));
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "B" }, "PASS", "Printer", 1));
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE PrintRecords SET Json = '{'";
+                command.ExecuteNonQuery();
+            }
+
+            var reloaded = new HistoryManager(Path.Combine(dir, "records.csv"), jsonl, db);
+            reloaded.Load();
+
+            Assert.Equal(2, reloaded.Records.Count);
+            Assert.Equal(new[] { "A", "B" }, reloaded.Records.Select(record => record.FieldValues["IMEI"]).OrderBy(value => value));
+        }
+
+        [Fact]
+        public void HistoryManagerPreservesJsonlWhenCorruptSqliteRecordCannotBeRecovered()
+        {
+            var dir = CreateTempDirectory();
+            var db = Path.Combine(dir, "records.db");
+            var jsonl = Path.Combine(dir, "records.jsonl");
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), jsonl, db);
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "A" }, "PASS", "Printer", 1));
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "B" }, "PASS", "Printer", 1));
+            var corruptId = history.Records[0].RecordId;
+            var healthyMirrorLine = File.ReadAllLines(jsonl).Single(line => !line.Contains(corruptId, StringComparison.Ordinal));
+            File.WriteAllText(jsonl, healthyMirrorLine + Environment.NewLine);
+            var mirrorBeforeLoad = File.ReadAllText(jsonl);
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE PrintRecords SET Json = '{' WHERE RecordId = $RecordId";
+                command.Parameters.AddWithValue("$RecordId", corruptId);
+                command.ExecuteNonQuery();
+            }
+
+            var reloaded = new HistoryManager(Path.Combine(dir, "records.csv"), jsonl, db);
+            reloaded.Load();
+
+            Assert.Single(reloaded.Records);
+            Assert.Equal("B", reloaded.Records[0].FieldValues["IMEI"]);
+            Assert.Equal(mirrorBeforeLoad, File.ReadAllText(jsonl));
         }
 
         [Fact]
@@ -535,6 +616,120 @@ namespace BarTenderPrinter.Tests
             Assert.Equal(expected, new PrintWorkflow().GetCompletionStatus(result, historySaved, kind));
         }
 
+        [Theory]
+        [InlineData(true, PrintSubmissionState.Submitted)]
+        [InlineData(false, PrintSubmissionState.Failed)]
+        [InlineData(0, PrintSubmissionState.Submitted)]
+        [InlineData(1, PrintSubmissionState.Uncertain)]
+        [InlineData("unknown", PrintSubmissionState.Uncertain)]
+        public void PrintOutResultUsesSuccessWhitelist(object result, PrintSubmissionState expected)
+        {
+            Assert.Equal(expected, BarTenderService.ClassifyPrintOutResult(result));
+        }
+
+        [Fact]
+        public void NullPrintOutResultIsUncertain()
+        {
+            Assert.Equal(PrintSubmissionState.Uncertain, BarTenderService.ClassifyPrintOutResult(null));
+        }
+
+        [Fact]
+        public void ExplicitPrintStateDoesNotDependOnDiagnosticsText()
+        {
+            var result = new PrintResult(PrintSubmissionState.Uncertain, "unknown", "diagnostics changed");
+
+            Assert.False(result.Success);
+            Assert.Equal(PrintSubmissionState.Uncertain, new PrintWorkflow().Classify(result));
+        }
+
+        [Fact]
+        public async System.Threading.Tasks.Task PrintCoordinatorPersistsMappedReprintResult()
+        {
+            var history = new FakeHistoryRepository();
+            var coordinator = new PrintJobCoordinator(
+                new FakeBarTenderService(new PrintResult(PrintSubmissionState.Uncertain, "unknown")),
+                history, new PrintWorkflow());
+
+            var completion = await coordinator.ExecuteAsync(CreatePrintJobRequest(PrintJobKind.Reprint));
+
+            Assert.Equal(PrintSubmissionState.Uncertain, completion.PrintResult.State);
+            Assert.Equal("REPRINT_UNCERTAIN", completion.HistoryStatus);
+            Assert.True(completion.HistorySaved);
+            Assert.Equal("REPRINT_UNCERTAIN", history.LastStatus);
+            Assert.Equal("补打印结果待核查", completion.CompletionStatus);
+        }
+
+        [Fact]
+        public async System.Threading.Tasks.Task PrintCoordinatorConvertsPrintExceptionAndStillRecordsHistory()
+        {
+            var history = new FakeHistoryRepository();
+            var coordinator = new PrintJobCoordinator(new FakeBarTenderService(new InvalidOperationException("offline")), history, new PrintWorkflow());
+
+            var completion = await coordinator.ExecuteAsync(CreatePrintJobRequest(PrintJobKind.Print));
+
+            Assert.Equal(PrintSubmissionState.Failed, completion.PrintResult.State);
+            Assert.Equal("FAIL", completion.HistoryStatus);
+            Assert.True(completion.HistorySaved);
+            Assert.Equal("FAIL", history.LastStatus);
+        }
+
+        [Fact]
+        public async System.Threading.Tasks.Task PrintCoordinatorReportsHistoryExceptionWithoutLosingPrintResult()
+        {
+            var coordinator = new PrintJobCoordinator(
+                new FakeBarTenderService(new PrintResult(PrintSubmissionState.Submitted, "")),
+                new FakeHistoryRepository { AddException = new IOException("disk full") },
+                new PrintWorkflow());
+
+            var completion = await coordinator.ExecuteAsync(CreatePrintJobRequest(PrintJobKind.Print));
+
+            Assert.True(completion.PrintResult.Success);
+            Assert.False(completion.HistorySaved);
+            Assert.Equal("disk full", completion.HistoryError);
+            Assert.Equal("打印作业已提交，历史保存失败", completion.CompletionStatus);
+        }
+
+        [Fact]
+        public async System.Threading.Tasks.Task PrintCoordinatorUsesRequestSnapshotAcrossAsyncBoundary()
+        {
+            var service = new PausingBarTenderService();
+            var history = new FakeHistoryRepository();
+            var coordinator = new PrintJobCoordinator(service, history, new PrintWorkflow());
+            var request = CreatePrintJobRequest(PrintJobKind.Print);
+            request.TemplateFields.Add("IMEI");
+
+            var execution = coordinator.ExecuteAsync(request);
+            await service.PrintStarted;
+            request.FieldValues["IMEI"] = "changed";
+            request.TemplateFields[0] = "changed";
+            service.CompletePrint();
+            var completion = await execution;
+
+            Assert.True(completion.HistorySaved);
+            Assert.Equal("123", service.CapturedFieldValues["IMEI"]);
+            Assert.Equal("123", history.LastEntry.FieldValues["IMEI"]);
+            Assert.Equal("IMEI", history.LastEntry.TemplateFields[0]);
+        }
+
+        [Fact]
+        public async System.Threading.Tasks.Task HistoryManagerSerializesConcurrentAdds()
+        {
+            var dir = CreateTempDirectory();
+            var db = Path.Combine(dir, "records.db");
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db);
+            var additions = Enumerable.Range(0, 12).Select(index => System.Threading.Tasks.Task.Run(() =>
+                history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = $"VALUE-{index}" }, "PASS", "Printer", 1)));
+
+            var results = await System.Threading.Tasks.Task.WhenAll(additions);
+
+            Assert.All(results, Assert.True);
+            Assert.Equal(12, history.Records.Count);
+            var reloaded = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), db);
+            reloaded.Load();
+            Assert.Equal(12, reloaded.Records.Count);
+            Assert.True(reloaded.ContainsAnyValue("Template", "C:\\a.btw", "template-1", "VALUE-11"));
+        }
+
         [Fact]
         public void TemplateSessionRoundTripPreservesIdentityAndClonesSources()
         {
@@ -607,6 +802,48 @@ namespace BarTenderPrinter.Tests
             Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "REPRINT_UNCERTAIN", "Printer", 1));
 
             Assert.True(history.ContainsAnyValue("Template", "C:\\a.btw", "template-1", "X"));
+        }
+
+        [Fact]
+        public void HistoryStatisticsIgnoreRecordsWithoutPrintTime()
+        {
+            var dir = CreateTempDirectory();
+            var jsonl = Path.Combine(dir, "records.jsonl");
+            File.WriteAllText(jsonl, System.Text.Json.JsonSerializer.Serialize(new PrintRecord
+            {
+                SchemaVersion = 2,
+                PrintTime = null,
+                Status = "PASS",
+                RecordChecksum = ""
+            }) + Environment.NewLine);
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), jsonl, Path.Combine(dir, "records.db"));
+            history.Load();
+
+            Assert.Equal(0, history.TodayCount());
+            Assert.Equal(0, history.TodayCount("", "", ""));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        public void MissingHistoryStatusIsUncertain(string status)
+        {
+            var record = new PrintRecord("Template", "C:\\a.btw", new Dictionary<string, string>(), "now", status, "Printer", 1);
+
+            Assert.Equal("UNCERTAIN", record.Status);
+        }
+
+        [Fact]
+        public void TemplateSettingsManagerSkipsNullEntriesAndKeepsValidSettings()
+        {
+            var path = Path.Combine(CreateTempDirectory(), "template-settings.json");
+            File.WriteAllText(path, "[null,{\"TemplateName\":\"label.btw\",\"TemplatePath\":\"C:\\\\label.btw\"}]");
+
+            var manager = new TemplateSettingsManager(path);
+
+            Assert.True(manager.TryGet("label.btw", "C:\\label.btw", out var settings));
+            Assert.Equal("label.btw", settings.TemplateName);
         }
 
         [Fact]
@@ -829,6 +1066,105 @@ namespace BarTenderPrinter.Tests
             File.WriteAllBytes(path, new byte[] { 0x4D });
 
             Assert.False(BarTenderService.IsX64Pe(path));
+        }
+
+        private static PrintJobRequest CreatePrintJobRequest(PrintJobKind kind)
+        {
+            return new PrintJobRequest
+            {
+                Kind = kind,
+                TemplateName = "label.btw",
+                TemplatePath = "C:\\label.btw",
+                TemplateId = "template-1",
+                FieldValues = new Dictionary<string, string> { ["IMEI"] = "123" },
+                Printer = "Printer",
+                Copies = 1
+            };
+        }
+
+        private sealed class FakeBarTenderService : IBarTenderService
+        {
+            private readonly PrintResult _result;
+            private readonly Exception _exception;
+
+            public FakeBarTenderService(PrintResult result) => _result = result;
+            public FakeBarTenderService(Exception exception) => _exception = exception;
+
+            public bool IsConnected => true;
+            public bool IsOfflineMode => false;
+            public bool IsPreviewAvailable => false;
+            public string PreviewUnavailableReason => "";
+            public bool Connect() => true;
+            public List<string> GetTemplateDataSources(string templatePath) => new List<string>();
+            public void RunDiagnostics(string templatePath) { }
+            public PrintResult Print(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies) => _result;
+            public System.Threading.Tasks.Task<PrintResult> PrintAsync(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
+            {
+                return _exception == null
+                    ? System.Threading.Tasks.Task.FromResult(_result)
+                    : System.Threading.Tasks.Task.FromException<PrintResult>(_exception);
+            }
+            public System.Threading.Tasks.Task<string> ExportPreviewAsync(string templatePath, Dictionary<string, string> fieldValues) => System.Threading.Tasks.Task.FromResult("");
+            public string[] GetAvailableTemplates(string directory) => Array.Empty<string>();
+            public string[] GetPrinters() => Array.Empty<string>();
+            public void Disconnect() { }
+            public void Dispose() { }
+        }
+
+        private sealed class PausingBarTenderService : IBarTenderService
+        {
+            private readonly System.Threading.Tasks.TaskCompletionSource<bool> _printStarted = new System.Threading.Tasks.TaskCompletionSource<bool>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly System.Threading.Tasks.TaskCompletionSource<PrintResult> _printCompletion = new System.Threading.Tasks.TaskCompletionSource<PrintResult>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public System.Threading.Tasks.Task PrintStarted => _printStarted.Task;
+            public Dictionary<string, string> CapturedFieldValues { get; private set; }
+            public bool IsConnected => true;
+            public bool IsOfflineMode => false;
+            public bool IsPreviewAvailable => false;
+            public string PreviewUnavailableReason => "";
+            public bool Connect() => true;
+            public List<string> GetTemplateDataSources(string templatePath) => new List<string>();
+            public void RunDiagnostics(string templatePath) { }
+            public PrintResult Print(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies) => throw new NotSupportedException();
+            public System.Threading.Tasks.Task<PrintResult> PrintAsync(string templatePath, Dictionary<string, string> fieldValues, string printer, int copies)
+            {
+                CapturedFieldValues = fieldValues;
+                _printStarted.SetResult(true);
+                return _printCompletion.Task;
+            }
+            public void CompletePrint() => _printCompletion.SetResult(new PrintResult(PrintSubmissionState.Submitted, ""));
+            public System.Threading.Tasks.Task<string> ExportPreviewAsync(string templatePath, Dictionary<string, string> fieldValues) => System.Threading.Tasks.Task.FromResult("");
+            public string[] GetAvailableTemplates(string directory) => Array.Empty<string>();
+            public string[] GetPrinters() => Array.Empty<string>();
+            public void Disconnect() { }
+            public void Dispose() { }
+        }
+
+        private sealed class FakeHistoryRepository : IHistoryRepository
+        {
+            public IReadOnlyList<PrintRecord> Records { get; } = new List<PrintRecord>();
+            public Exception AddException { get; set; }
+            public string LastStatus { get; private set; } = "";
+            public PrintHistoryEntry LastEntry { get; private set; }
+
+            public void Load() { }
+            public bool Add(PrintHistoryEntry entry)
+            {
+                if (AddException != null) throw AddException;
+                LastEntry = entry;
+                LastStatus = entry.Status;
+                return true;
+            }
+            public bool Clear(string templateName, string templatePath, string templateId, string operatorName = "", string reason = "") => true;
+            public bool Delete(string recordId, string operatorName = "", string reason = "") => true;
+            public PrintRecord GetById(string recordId) => null;
+            public PrintRecord GetLatestSuccessful(string templateName, string templatePath, string templateId) => null;
+            public List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit = 0, bool newestFirst = false, int offset = 0) => new List<PrintRecord>();
+            public List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit, bool newestFirst, int offset, string status, string datePrefix, string printer, string orderQuery) => new List<PrintRecord>();
+            public int Count(string templateName, string templatePath, string templateId) => 0;
+            public int TodayCount(string templateName, string templatePath, string templateId) => 0;
+            public bool ContainsAnyValue(string templateName, string templatePath, string templateId, string value) => false;
+            public void Export(string path, IEnumerable<PrintRecord> records) { }
         }
 
         private static string CreateTemplateFile()

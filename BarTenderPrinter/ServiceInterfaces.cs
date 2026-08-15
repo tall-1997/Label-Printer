@@ -23,9 +23,9 @@ namespace BarTenderPrinter
 
     public interface IHistoryRepository
     {
-        List<PrintRecord> Records { get; }
+        IReadOnlyList<PrintRecord> Records { get; }
         void Load();
-        bool Add(string templateName, string templatePath, string templateId, Dictionary<string, string> fieldValues, string status, string printer, int copies, string operatorName = "", string reprintReason = "", string templateVersion = "", string diagnosticDetails = "", string orderName = "", string orderId = "", List<string> templateFields = null);
+        bool Add(PrintHistoryEntry entry);
         bool Clear(string templateName, string templatePath, string templateId, string operatorName = "", string reason = "");
         bool Delete(string recordId, string operatorName = "", string reason = "");
         PrintRecord GetById(string recordId);

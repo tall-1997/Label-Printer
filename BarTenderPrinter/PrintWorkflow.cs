@@ -2,8 +2,6 @@ namespace BarTenderPrinter
 {
     public class PrintWorkflow
     {
-        private const string UncertainDiagnostic = "submission=uncertain";
-
         public string BuildTemplateVersion(OrderTemplate template)
         {
             if (template == null) return "";
@@ -11,21 +9,14 @@ namespace BarTenderPrinter
             return $"ticks={template.SourceLastWriteTimeUtcTicks};len={template.SourceLength};sha={hash}";
         }
 
-        public bool RecordPrintResult(IHistoryRepository history, string templateName, string templatePath, string templateId,
-            System.Collections.Generic.Dictionary<string, string> fieldValues, string status, string printer, int copies,
-            string operatorName, string reprintReason, string templateVersion, string diagnosticDetails,
-            string orderName, string orderId, System.Collections.Generic.List<string> templateFields)
+        public bool RecordPrintResult(IHistoryRepository history, PrintHistoryEntry entry)
         {
-            return history.Add(templateName, templatePath, templateId, fieldValues, status, printer, copies,
-                operatorName, reprintReason, templateVersion, diagnosticDetails, orderName, orderId, templateFields);
+            return history.Add(entry);
         }
 
         public PrintSubmissionState Classify(PrintResult result)
         {
-            if (result?.Success == true) return PrintSubmissionState.Submitted;
-            return result?.DiagnosticDetails?.IndexOf(UncertainDiagnostic, System.StringComparison.OrdinalIgnoreCase) >= 0
-                ? PrintSubmissionState.Uncertain
-                : PrintSubmissionState.Failed;
+            return result?.State ?? PrintSubmissionState.Failed;
         }
 
         public string GetHistoryStatus(PrintResult result, PrintJobKind kind)

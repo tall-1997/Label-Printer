@@ -15,11 +15,12 @@ namespace BarTenderPrinter
 {
     public partial class MainForm : Form
     {
-        private readonly IBarTenderService _btService = new BarTenderService();
-        private readonly IHistoryRepository _history = new HistoryManager();
+        private readonly IBarTenderService _btService;
+        private readonly IHistoryRepository _history;
         private readonly TemplateSettingsManager _templateSettings = new TemplateSettingsManager();
         private readonly OrderManager _orders = new OrderManager();
-        private readonly PrintWorkflow _printWorkflow = new PrintWorkflow();
+        private readonly PrintWorkflow _printWorkflow;
+        private readonly PrintJobCoordinator _printCoordinator;
         private readonly OrderEditorController _orderEditor = new OrderEditorController();
         private readonly IDialogService _dialogs = new DialogService();
         private readonly ApplicationStateManager _applicationStateManager = new ApplicationStateManager();
@@ -151,7 +152,16 @@ namespace BarTenderPrinter
         }
 
         public MainForm(string startupTemplatePath = null)
+            : this(startupTemplatePath, new BarTenderService(), new HistoryManager(), new PrintWorkflow())
         {
+        }
+
+        internal MainForm(string startupTemplatePath, IBarTenderService barTenderService,
+            IHistoryRepository historyRepository, PrintWorkflow printWorkflow)
+        {
+            _btService = barTenderService ?? throw new ArgumentNullException(nameof(barTenderService));
+            _history = historyRepository ?? throw new ArgumentNullException(nameof(historyRepository));
+            _printWorkflow = printWorkflow ?? throw new ArgumentNullException(nameof(printWorkflow));
             _startupTemplatePath = NormalizeStartupTemplatePath(startupTemplatePath);
             InitializeComponent();
             InstallP2Controls();
@@ -159,6 +169,7 @@ namespace BarTenderPrinter
             InstallOrderSidebar();
             ConfigureModernShell();
             _configFile = AppPaths.ConfigFile;
+            _printCoordinator = new PrintJobCoordinator(_btService, _history, _printWorkflow);
             _applicationState = _applicationStateManager.Load();
             Text = $"BarTender Printer {_version}";
             lblVersion.Text = _version;
@@ -4863,29 +4874,26 @@ namespace BarTenderPrinter
             string templateVersion, string orderName, string orderId, List<string> templateFields,
             List<string> pendingFields, List<DataSourceItem> sourceSnapshot)
         {
-            PrintResult result;
-            try
+            var completion = await _printCoordinator.ExecuteAsync(new PrintJobRequest
             {
-                result = await _btService.PrintAsync(templatePath, fieldValues, printer, copies);
-            }
-            catch (Exception ex)
-            {
-                LoggerService.Error("打印失败", ex);
-                result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
-            }
-            var historySaved = true;
-            var historyStatus = _printWorkflow.GetHistoryStatus(result, PrintJobKind.Print);
-            try
-            {
-                historySaved = _printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
-                    historyStatus, printer, copies, operatorName, "", templateVersion, result.DiagnosticDetails,
-                    orderName, orderId, templateFields);
-            }
-            catch (Exception ex)
-            {
-                historySaved = false;
-                LoggerService.Error("保存打印历史失败", ex);
-            }
+                Kind = PrintJobKind.Print,
+                TemplateName = templateName,
+                TemplatePath = templatePath,
+                TemplateId = templateId,
+                FieldValues = fieldValues,
+                Printer = printer,
+                Copies = copies,
+                OperatorName = operatorName,
+                TemplateVersion = templateVersion,
+                OrderName = orderName,
+                OrderId = orderId,
+                TemplateFields = templateFields
+            });
+            var result = completion.PrintResult;
+            var historySaved = completion.HistorySaved;
+            var historyStatus = completion.HistoryStatus;
+            if (!string.IsNullOrWhiteSpace(completion.HistoryError))
+                LoggerService.Error($"保存打印历史失败: {completion.HistoryError}");
             if (!PostToUi(() =>
             {
                 Dictionary<string, string> previewValues = null;
@@ -4942,7 +4950,7 @@ namespace BarTenderPrinter
                     SetPrintEnvironmentEnabled(_pendingPrintJobCount == 0);
                     SetStatus(_pendingPrintJobCount > 0
                         ? $"打印队列: {_pendingPrintJobCount}"
-                        : _printWorkflow.GetCompletionStatus(result, historySaved, PrintJobKind.Print));
+                        : completion.CompletionStatus);
                 }
                 if (_pendingPrintJobCount == 0 && _chkPreview?.Checked == true)
                     _ = RefreshPreviewAsync(previewValues);
@@ -5321,58 +5329,70 @@ namespace BarTenderPrinter
             _pendingPrintJobCount++;
             SetPrintEnvironmentEnabled(false);
             SetStatus($"打印队列: {_pendingPrintJobCount}");
-            Task.Run(() =>
+            _ = ProcessReprintAsync(record, values, printer, reason, operatorName, operatorRole, currentVersion);
+        }
+
+        private async Task ProcessReprintAsync(PrintRecord record, Dictionary<string, string> values, string printer,
+            string reason, string operatorName, string operatorRole, string currentVersion)
+        {
+            var actualTemplateVersion = string.IsNullOrWhiteSpace(currentVersion) ? record.TemplateVersion : currentVersion;
+            var completion = await _printCoordinator.ExecuteAsync(new PrintJobRequest
             {
-                PrintResult result;
-                try { result = _btService.Print(record.TemplatePath, values, printer, record.Copies); }
-                catch (Exception ex) { result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={record.TemplatePath};printer={printer};copies={record.Copies};message={ex.Message}"); }
-                if (!PostToUi(() =>
+                Kind = PrintJobKind.Reprint,
+                TemplateName = record.TemplateName,
+                TemplatePath = record.TemplatePath,
+                TemplateId = record.TemplateId,
+                FieldValues = values,
+                Printer = printer,
+                Copies = record.Copies,
+                OperatorName = operatorName,
+                ReprintReason = reason,
+                TemplateVersion = actualTemplateVersion,
+                OrderName = record.OrderName,
+                OrderId = record.OrderId,
+                TemplateFields = record.TemplateFields
+            });
+            var result = completion.PrintResult;
+            if (!string.IsNullOrWhiteSpace(completion.HistoryError))
+                LoggerService.Error($"保存补打印历史失败: {completion.HistoryError}");
+            if (!PostToUi(() =>
+            {
+                Dictionary<string, string> previewValues = null;
+                try
                 {
-                    var historySaved = true;
-                    Dictionary<string, string> previewValues = null;
-                    try
+                    if (result.Success && completion.HistorySaved) RestoreAutoIncrementInputsToPendingValues();
+                    if (!completion.HistorySaved)
+                        AddLog(completion.CompletionStatus, "ERROR");
+                    else if (result.Success)
                     {
-                        var historyStatus = _printWorkflow.GetHistoryStatus(result, PrintJobKind.Reprint);
-                        var actualTemplateVersion = string.IsNullOrWhiteSpace(currentVersion) ? record.TemplateVersion : currentVersion;
-                        historySaved = _printWorkflow.RecordPrintResult(_history, record.TemplateName, record.TemplatePath, record.TemplateId, values,
-                            historyStatus, printer, record.Copies,
-                            operatorName, reason, actualTemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
-                        if (result.Success && historySaved) RestoreAutoIncrementInputsToPendingValues();
-                        if (!historySaved)
-                            AddLog(result.Success ? "补打印作业已提交，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
-                        else if (result.Success)
-                        {
-                            AuditLogger.Append(operatorName, "Reprint", $"record={record.RecordId};role={operatorRole};reason={reason}");
-                            AddLog("补打印作业已提交", "SUCCESS");
-                            if (_chkPreview?.Checked == true &&
-                                string.Equals(record.OrderId ?? "", _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
-                                string.Equals(record.TemplateId ?? "", GetCurrentTemplateId(), StringComparison.Ordinal) &&
-                                string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
-                                previewValues = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
-                        }
-                        else
-                            AddLog(_printWorkflow.Classify(result) == PrintSubmissionState.Uncertain
-                                ? $"补打印结果待核查: {result.ErrorMessage}"
-                                : $"历史记录补打印失败: {result.ErrorMessage}", "ERROR");
+                        AuditLogger.Append(operatorName, "Reprint", $"record={record.RecordId};role={operatorRole};reason={reason}");
+                        AddLog("补打印作业已提交", "SUCCESS");
+                        if (_chkPreview?.Checked == true &&
+                            string.Equals(record.OrderId ?? "", _activeOrder?.OrderId ?? "", StringComparison.Ordinal) &&
+                            string.Equals(record.TemplateId ?? "", GetCurrentTemplateId(), StringComparison.Ordinal) &&
+                            string.Equals(record.TemplatePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
+                            previewValues = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
                     }
-                    finally
-                    {
-                        _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
-                        SetPrintEnvironmentEnabled(_pendingPrintJobCount == 0);
-                        LoadHistory();
-                        RefreshStats();
-                        SetStatus(_pendingPrintJobCount > 0
-                            ? $"打印队列: {_pendingPrintJobCount}"
-                            : _printWorkflow.GetCompletionStatus(result, historySaved, PrintJobKind.Reprint));
-                    }
-                    if (_pendingPrintJobCount == 0 && previewValues != null)
-                        _ = RefreshPreviewAsync(previewValues);
-                }))
+                    else
+                        AddLog(_printWorkflow.Classify(result) == PrintSubmissionState.Uncertain
+                            ? $"补打印结果待核查: {result.ErrorMessage}"
+                            : $"历史记录补打印失败: {result.ErrorMessage}", "ERROR");
+                }
+                finally
                 {
                     _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
-                    LoggerService.Warn("补打印完成 UI 回调投递失败，已释放打印队列计数。界面状态将在下次可用时刷新。");
+                    SetPrintEnvironmentEnabled(_pendingPrintJobCount == 0);
+                    LoadHistory();
+                    RefreshStats();
+                    SetStatus(_pendingPrintJobCount > 0 ? $"打印队列: {_pendingPrintJobCount}" : completion.CompletionStatus);
                 }
-            });
+                if (_pendingPrintJobCount == 0 && previewValues != null)
+                    _ = RefreshPreviewAsync(previewValues);
+            }))
+            {
+                _pendingPrintJobCount = Math.Max(0, _pendingPrintJobCount - 1);
+                LoggerService.Warn("补打印完成 UI 回调投递失败，已释放打印队列计数。界面状态将在下次可用时刷新。");
+            }
         }
 
         private sealed class ReprintRequest

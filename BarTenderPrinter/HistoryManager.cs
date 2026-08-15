@@ -47,7 +47,7 @@ namespace BarTenderPrinter
             OrderId = "";
             FieldValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             PrintTime = "";
-            Status = "PASS";
+            Status = "UNCERTAIN";
             Printer = "";
             Copies = 1;
             OperatorName = "";
@@ -73,7 +73,7 @@ namespace BarTenderPrinter
             OrderId = "";
             FieldValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             PrintTime = printTime ?? "";
-            Status = status ?? "PASS";
+            Status = string.IsNullOrWhiteSpace(status) ? "UNCERTAIN" : status;
             Printer = "";
             Copies = 1;
             OperatorName = "";
@@ -96,7 +96,7 @@ namespace BarTenderPrinter
             FieldValues = new Dictionary<string, string>(fieldValues ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
             Imei = string.Join("|", FieldValues.Values);
             PrintTime = printTime ?? "";
-            Status = status ?? "PASS";
+            Status = string.IsNullOrWhiteSpace(status) ? "UNCERTAIN" : status;
             Printer = printer ?? "";
             Copies = Math.Max(1, copies);
             OperatorName = "";
@@ -122,12 +122,20 @@ namespace BarTenderPrinter
         private readonly string _recordsJsonlFile;
         private readonly string _recordsSqliteFile;
         private readonly string _historyRecordsDirectory;
+        private readonly object _sync = new object();
+        private readonly List<PrintRecord> _records = new List<PrintRecord>();
         private readonly Dictionary<string, HashSet<string>> _templateValueIndexes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         private bool _usesCurrentFormat;
         private const string Header = "record_id,template_name,template_path,template_id,field_values,print_time,status,printer,copies,operator,reprint_reason,template_version,diagnostic_details,order_name";
         private const string TemplateIdHeader = "record_id,template_name,template_path,template_id,field_values,print_time,status,printer,copies";
         private const string PreviousHeader = "record_id,template_name,template_path,field_values,print_time,status,printer,copies";
-        public List<PrintRecord> Records { get; private set; }
+        public IReadOnlyList<PrintRecord> Records
+        {
+            get
+            {
+                lock (_sync) return _records.ToList().AsReadOnly();
+            }
+        }
 
         public HistoryManager()
             : this(AppPaths.RecordsFile, AppPaths.RecordsJsonlFile, AppPaths.RecordsSqliteFile, AppPaths.HistoryRecordsDirectory, true)
@@ -158,15 +166,26 @@ namespace BarTenderPrinter
             _historyRecordsDirectory = string.IsNullOrWhiteSpace(historyRecordsDirectory)
                 ? Path.Combine(Path.GetDirectoryName(_recordsSqliteFile) ?? AppContext.BaseDirectory, "history-records")
                 : historyRecordsDirectory;
-            Records = new List<PrintRecord>();
         }
 
         public void Load()
         {
-            Records.Clear();
+            lock (_sync) LoadCore();
+        }
+
+        private void LoadCore()
+        {
+            _records.Clear();
             _templateValueIndexes.Clear();
             EnsureDatabase();
-            if (LoadSqlite()) { EnsureRecordArchives(); SyncJsonlMirror(); return; }
+            var sqliteResult = LoadSqlite();
+            if (sqliteResult.RejectedCount > 0)
+            {
+                RecoverRejectedSqliteRecords(sqliteResult.RejectedRecordIds);
+                EnsureRecordArchives();
+                return;
+            }
+            if (sqliteResult.LoadedCount > 0) { EnsureRecordArchives(); SyncJsonlMirror(); return; }
             if (IsLegacyMigrationComplete()) return;
             if (File.Exists(_recordsJsonlFile))
             {
@@ -218,7 +237,7 @@ namespace BarTenderPrinter
                     DiagnosticDetails = parts.Count > 12 ? parts[12] : "",
                     OrderName = parts.Count > 13 ? parts[13] : ""
                 };
-                Records.Add(record);
+                _records.Add(record);
                 IndexRecord(record);
             }
             else if (parts.Count >= 8)
@@ -229,13 +248,13 @@ namespace BarTenderPrinter
                 {
                     RecordId = string.IsNullOrEmpty(parts[0]) ? Guid.NewGuid().ToString("N") : parts[0]
                 };
-                Records.Add(record);
+                _records.Add(record);
                 IndexRecord(record);
             }
             else if (!usesPreviousFormat && parts.Count >= 3)
             {
                 var record = new PrintRecord(parts[0], parts[1], parts[2]);
-                Records.Add(record);
+                _records.Add(record);
                 IndexRecord(record);
             }
         }
@@ -260,7 +279,7 @@ namespace BarTenderPrinter
                             LoggerService.Warn($"跳过校验失败的历史记录: {record.RecordId}");
                             continue;
                         }
-                        Records.Add(record);
+                        _records.Add(record);
                         IndexRecord(record);
                     }
                     catch (Exception ex)
@@ -280,6 +299,11 @@ namespace BarTenderPrinter
         }
 
         public bool Save()
+        {
+            lock (_sync) return SaveCore();
+        }
+
+        private bool SaveCore()
         {
             var tempFile = _recordsFile + ".tmp";
             try
@@ -309,13 +333,16 @@ namespace BarTenderPrinter
 
         public bool Add(string imei, string status)
         {
-            var record = new PrintRecord(imei, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), status);
-            StampChecksum(record);
-            Records.Add(record);
-            IndexRecord(record);
-            if (!Append(record)) { Records.Remove(record); RebuildIndexes(); return false; }
-            WriteRecordArchive(record);
-            return true;
+            lock (_sync)
+            {
+                var record = new PrintRecord(imei, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), status);
+                StampChecksum(record);
+                _records.Add(record);
+                IndexRecord(record);
+                if (!Append(record)) { _records.Remove(record); RebuildIndexes(); return false; }
+                WriteRecordArchive(record);
+                return true;
+            }
         }
 
         public bool Add(string templateName, string templatePath, Dictionary<string, string> fieldValues,
@@ -327,76 +354,111 @@ namespace BarTenderPrinter
         public bool Add(string templateName, string templatePath, string templateId, Dictionary<string, string> fieldValues,
             string status, string printer, int copies, string operatorName = "", string reprintReason = "", string templateVersion = "", string diagnosticDetails = "", string orderName = "", string orderId = "", List<string> templateFields = null)
         {
-            var record = new PrintRecord(templateName, templatePath, templateId, fieldValues,
-                DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), status, printer, copies)
+            return Add(new PrintHistoryEntry
             {
-                OperatorName = operatorName ?? "",
-                ReprintReason = reprintReason ?? "",
-                TemplateVersion = templateVersion ?? "",
-                DiagnosticDetails = diagnosticDetails ?? "",
-                OrderName = orderName ?? "",
-                OrderId = orderId ?? "",
-                TemplateFields = templateFields ?? new List<string>()
-            };
-            StampChecksum(record);
-            Records.Add(record);
-            IndexRecord(record);
-            if (!Append(record)) { Records.Remove(record); RebuildIndexes(); return false; }
-            WriteRecordArchive(record);
-            return true;
+                TemplateName = templateName,
+                TemplatePath = templatePath,
+                TemplateId = templateId,
+                FieldValues = fieldValues,
+                Status = status,
+                Printer = printer,
+                Copies = copies,
+                OperatorName = operatorName,
+                ReprintReason = reprintReason,
+                TemplateVersion = templateVersion,
+                DiagnosticDetails = diagnosticDetails,
+                OrderName = orderName,
+                OrderId = orderId,
+                TemplateFields = templateFields
+            });
+        }
+
+        public bool Add(PrintHistoryEntry entry)
+        {
+            if (entry == null) throw new ArgumentNullException(nameof(entry));
+            lock (_sync)
+            {
+                var fields = new Dictionary<string, string>(entry.FieldValues ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
+                var record = new PrintRecord(entry.TemplateName, entry.TemplatePath, entry.TemplateId, fields,
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), entry.Status, entry.Printer, entry.Copies)
+                {
+                    OperatorName = entry.OperatorName ?? "",
+                    ReprintReason = entry.ReprintReason ?? "",
+                    TemplateVersion = entry.TemplateVersion ?? "",
+                    DiagnosticDetails = entry.DiagnosticDetails ?? "",
+                    OrderName = entry.OrderName ?? "",
+                    OrderId = entry.OrderId ?? "",
+                    TemplateFields = new List<string>(entry.TemplateFields ?? Array.Empty<string>())
+                };
+                StampChecksum(record);
+                _records.Add(record);
+                IndexRecord(record);
+                if (!Append(record)) { _records.Remove(record); RebuildIndexes(); return false; }
+                WriteRecordArchive(record);
+                return true;
+            }
         }
 
         public bool IsPrinted(string imei)
         {
-            return Records.Any(r => !r.IsExcluded && r.Imei == imei);
+            lock (_sync) return _records.Any(r => !r.IsExcluded && r.Imei == imei);
         }
 
         public bool ContainsAnyValue(string value)
         {
-            return Records.Any(r => !r.IsExcluded && GetValues(r).Contains(value, StringComparer.OrdinalIgnoreCase));
+            lock (_sync) return _records.Any(r => !r.IsExcluded && GetValues(r).Contains(value, StringComparer.OrdinalIgnoreCase));
         }
 
         public bool ContainsAnyValue(string templateName, string templatePath, string value)
         {
             if (string.IsNullOrEmpty(value)) return false;
-            return _templateValueIndexes.TryGetValue(GetTemplateKey(templateName, templatePath), out var values) && values.Contains(value);
+            lock (_sync) return _templateValueIndexes.TryGetValue(GetTemplateKey(templateName, templatePath), out var values) && values.Contains(value);
         }
 
         public bool ContainsAnyValue(string templateName, string templatePath, string templateId, string value)
         {
             if (string.IsNullOrEmpty(value)) return false;
-            if (!string.IsNullOrWhiteSpace(templateId) && _templateValueIndexes.TryGetValue(GetTemplateKey(templateId), out var values) && values.Contains(value)) return true;
-            return ContainsAnyValue(templateName, templatePath, value);
+            lock (_sync)
+            {
+                if (!string.IsNullOrWhiteSpace(templateId) && _templateValueIndexes.TryGetValue(GetTemplateKey(templateId), out var values) && values.Contains(value)) return true;
+                return _templateValueIndexes.TryGetValue(GetTemplateKey(templateName, templatePath), out values) && values.Contains(value);
+            }
         }
 
         public PrintRecord GetById(string recordId)
         {
-            return Records.FirstOrDefault(record => !record.IsExcluded && string.Equals(record.RecordId, recordId, StringComparison.Ordinal));
+            lock (_sync) return _records.FirstOrDefault(record => !record.IsExcluded && string.Equals(record.RecordId, recordId, StringComparison.Ordinal));
         }
 
         public bool Delete(string recordId, string operatorName = "", string reason = "")
         {
-            var record = Records.FirstOrDefault(item => !item.IsExcluded && string.Equals(item.RecordId, recordId, StringComparison.Ordinal));
-            if (record == null) return false;
-            var snapshot = CloneExclusion(record);
-            ExcludeRecord(record, operatorName, reason, Guid.NewGuid().ToString("N"));
-            RebuildIndexes();
-            if (!Save()) { RestoreExclusion(record, snapshot); RebuildIndexes(); return false; }
-            return true;
+            lock (_sync)
+            {
+                var record = _records.FirstOrDefault(item => !item.IsExcluded && string.Equals(item.RecordId, recordId, StringComparison.Ordinal));
+                if (record == null) return false;
+                var snapshot = CloneExclusion(record);
+                ExcludeRecord(record, operatorName, reason, Guid.NewGuid().ToString("N"));
+                RebuildIndexes();
+                if (!SaveCore()) { RestoreExclusion(record, snapshot); RebuildIndexes(); return false; }
+                return true;
+            }
         }
 
         public bool Clear()
         {
-            var active = Records.Where(record => !record.IsExcluded).ToList();
-            if (active.Count == 0) return true;
-            var snapshots = active.ToDictionary(record => record.RecordId, CloneExclusion);
-            var batchId = Guid.NewGuid().ToString("N");
-            foreach (var record in active) ExcludeRecord(record, "", "清空全部历史控件", batchId);
-            RebuildIndexes();
-            if (Save()) return true;
-            foreach (var record in active) RestoreExclusion(record, snapshots[record.RecordId]);
-            RebuildIndexes();
-            return false;
+            lock (_sync)
+            {
+                var active = _records.Where(record => !record.IsExcluded).ToList();
+                if (active.Count == 0) return true;
+                var snapshots = active.ToDictionary(record => record.RecordId, CloneExclusion);
+                var batchId = Guid.NewGuid().ToString("N");
+                foreach (var record in active) ExcludeRecord(record, "", "清空全部历史控件", batchId);
+                RebuildIndexes();
+                if (SaveCore()) return true;
+                foreach (var record in active) RestoreExclusion(record, snapshots[record.RecordId]);
+                RebuildIndexes();
+                return false;
+            }
         }
 
         public bool Clear(string templateName, string templatePath)
@@ -406,16 +468,19 @@ namespace BarTenderPrinter
 
         public bool Clear(string templateName, string templatePath, string templateId, string operatorName = "", string reason = "")
         {
-            var active = Records.Where(record => !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId)).ToList();
-            if (active.Count == 0) return true;
-            var snapshots = active.ToDictionary(record => record.RecordId, CloneExclusion);
-            var batchId = Guid.NewGuid().ToString("N");
-            foreach (var record in active) ExcludeRecord(record, operatorName, reason, batchId);
-            RebuildIndexes();
-            if (Save()) return true;
-            foreach (var record in active) RestoreExclusion(record, snapshots[record.RecordId]);
-            RebuildIndexes();
-            return false;
+            lock (_sync)
+            {
+                var active = _records.Where(record => !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId)).ToList();
+                if (active.Count == 0) return true;
+                var snapshots = active.ToDictionary(record => record.RecordId, CloneExclusion);
+                var batchId = Guid.NewGuid().ToString("N");
+                foreach (var record in active) ExcludeRecord(record, operatorName, reason, batchId);
+                RebuildIndexes();
+                if (SaveCore()) return true;
+                foreach (var record in active) RestoreExclusion(record, snapshots[record.RecordId]);
+                RebuildIndexes();
+                return false;
+            }
         }
 
         public List<PrintRecord> Search(string templateName, string templatePath, string keyword, bool exact)
@@ -425,7 +490,7 @@ namespace BarTenderPrinter
 
         public PrintRecord GetLatestSuccessful(string templateName, string templatePath, string templateId)
         {
-            return Records.AsEnumerable().Reverse().FirstOrDefault(record =>
+            lock (_sync) return _records.AsEnumerable().Reverse().FirstOrDefault(record =>
                 !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId) && IsSuccessfulStatus(record.Status));
         }
 
@@ -436,8 +501,13 @@ namespace BarTenderPrinter
 
         public List<PrintRecord> Search(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit, bool newestFirst, int offset, string status, string datePrefix, string printer, string orderQuery)
         {
+            lock (_sync) return SearchCore(templateName, templatePath, templateId, keyword, exact, limit, newestFirst, offset, status, datePrefix, printer, orderQuery);
+        }
+
+        private List<PrintRecord> SearchCore(string templateName, string templatePath, string templateId, string keyword, bool exact, int limit, bool newestFirst, int offset, string status, string datePrefix, string printer, string orderQuery)
+        {
             var query = (keyword ?? "").Trim();
-            var source = newestFirst ? Records.AsEnumerable().Reverse() : Records.AsEnumerable();
+            var source = newestFirst ? _records.AsEnumerable().Reverse() : _records.AsEnumerable();
             var matches = new List<PrintRecord>();
             var skipped = 0;
             foreach (var record in source)
@@ -473,13 +543,13 @@ namespace BarTenderPrinter
 
         public int Count(string templateName, string templatePath, string templateId)
         {
-            return Records.Count(record => !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId));
+            lock (_sync) return _records.Count(record => !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId));
         }
 
         public int TodayCount(string templateName, string templatePath, string templateId)
         {
             var today = DateTime.Now.ToString("yyyy-MM-dd");
-            return Records.Count(record => !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId) && record.PrintTime.StartsWith(today));
+            lock (_sync) return _records.Count(record => !record.IsExcluded && IsTemplateMatch(record, templateName, templatePath, templateId) && record.PrintTime?.StartsWith(today) == true);
         }
 
         public void Export(string path, IEnumerable<PrintRecord> records)
@@ -500,12 +570,12 @@ namespace BarTenderPrinter
         public int TodayCount()
         {
             var today = DateTime.Now.ToString("yyyy-MM-dd");
-            return Records.Count(r => !r.IsExcluded && r.PrintTime.StartsWith(today));
+            lock (_sync) return _records.Count(r => !r.IsExcluded && r.PrintTime?.StartsWith(today) == true);
         }
 
         public int TotalCount()
         {
-            return Records.Count(record => !record.IsExcluded);
+            lock (_sync) return _records.Count(record => !record.IsExcluded);
         }
 
         private static List<string> ParseCsvLine(string line) => CsvUtils.ParseLine(line);
@@ -737,29 +807,94 @@ namespace BarTenderPrinter
             }
         }
 
-        private bool LoadSqlite()
+        private sealed class SqliteLoadResult
         {
+            public int LoadedCount { get; set; }
+            public HashSet<string> RejectedRecordIds { get; } = new HashSet<string>(StringComparer.Ordinal);
+            public int RejectedCount => RejectedRecordIds.Count;
+        }
+
+        private SqliteLoadResult LoadSqlite()
+        {
+            var result = new SqliteLoadResult();
             using (var connection = OpenConnection())
             using (var command = connection.CreateCommand())
             {
-                command.CommandText = "SELECT Json FROM PrintRecords ORDER BY PrintTime";
+                command.CommandText = "SELECT RecordId, Json FROM PrintRecords ORDER BY PrintTime";
                 using (var reader = command.ExecuteReader())
                 {
-                    var loaded = false;
                     while (reader.Read())
                     {
-                        var record = JsonSerializer.Deserialize<PrintRecord>(reader.GetString(0));
-                        if (record == null || !IsChecksumValid(record)) continue;
+                        var recordId = reader.IsDBNull(0) ? "<unknown>" : reader.GetString(0);
+                        PrintRecord record;
+                        try
+                        {
+                            record = JsonSerializer.Deserialize<PrintRecord>(reader.GetString(1));
+                        }
+                        catch (Exception ex)
+                        {
+                            LoggerService.Error($"跳过损坏的历史记录: {recordId}", ex);
+                            result.RejectedRecordIds.Add(recordId);
+                            continue;
+                        }
+                        if (record == null)
+                        {
+                            LoggerService.Warn($"跳过空历史记录: {recordId}");
+                            result.RejectedRecordIds.Add(recordId);
+                            continue;
+                        }
+                        if (!IsChecksumValid(record))
+                        {
+                            LoggerService.Warn($"跳过完整性校验失败的历史记录: {recordId}");
+                            result.RejectedRecordIds.Add(recordId);
+                            continue;
+                        }
                         record.FieldValues ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                         record.TemplateFields ??= new List<string>();
-                        Records.Add(record);
+                        _records.Add(record);
                         IndexRecord(record);
-                        loaded = true;
+                        result.LoadedCount++;
                     }
                     _usesCurrentFormat = true;
-                    return loaded;
+                    return result;
                 }
             }
+        }
+
+        private void RecoverRejectedSqliteRecords(IReadOnlyCollection<string> rejectedRecordIds)
+        {
+            var sqliteRecords = _records.ToList();
+            if (!File.Exists(_recordsJsonlFile))
+            {
+                LoggerService.Warn("SQLite 历史存在损坏记录，JSONL 恢复副本不存在，已保留可读取记录且不会覆盖镜像。");
+                return;
+            }
+
+            _records.Clear();
+            _templateValueIndexes.Clear();
+            LoadJsonl();
+            var recoveredIds = new HashSet<string>(_records.Select(record => record.RecordId ?? ""), StringComparer.Ordinal);
+            if (rejectedRecordIds.Any(recordId => !recoveredIds.Contains(recordId)))
+            {
+                _records.Clear();
+                _records.AddRange(sqliteRecords);
+                RebuildIndexes();
+                LoggerService.Warn("SQLite 历史存在损坏记录，JSONL 恢复副本不完整，已保留可读取记录且不会覆盖镜像。");
+                return;
+            }
+            foreach (var record in sqliteRecords)
+            {
+                if (_records.Any(item => string.Equals(item.RecordId, record.RecordId, StringComparison.Ordinal))) continue;
+                _records.Add(record);
+                IndexRecord(record);
+            }
+            if (_records.Count == 0)
+            {
+                LoggerService.Warn("SQLite 与 JSONL 历史均无法恢复，历史镜像保持原样以供人工处理。");
+                return;
+            }
+            if (SaveCore())
+                LoggerService.Warn("SQLite 历史存在损坏记录，已使用 JSONL 恢复副本重建主存储。");
         }
 
         private void SaveSqlite(IEnumerable<PrintRecord> records)
