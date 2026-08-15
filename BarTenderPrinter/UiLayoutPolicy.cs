@@ -28,15 +28,8 @@ namespace BarTenderPrinter
             return Math.Max(minimumHeight, Math.Min(preferredHeight, maximumHeight));
         }
 
-        public static string GetPrintCompletionStatus(bool success, bool historySaved, bool uncertain)
-        {
-            if (success) return historySaved ? "就绪" : "打印作业已提交，历史保存失败";
-            if (uncertain) return historySaved ? "打印结果待核查" : "打印结果待核查，历史保存失败";
-            return historySaved ? "打印提交失败" : "打印提交失败，历史保存失败";
-        }
-
         public static bool IsUncertainStatus(string status) =>
-            string.Equals(status, "UNCERTAIN", StringComparison.OrdinalIgnoreCase);
+            status?.EndsWith("UNCERTAIN", StringComparison.OrdinalIgnoreCase) == true;
 
         public static (int MainWidth, int PreviewWidth) CalculateTileWidths(int availableWidth, int desiredPreviewWidth, int minimumMainWidth, int minimumPreviewWidth)
         {

@@ -513,14 +513,100 @@ namespace BarTenderPrinter.Tests
         }
 
         [Theory]
-        [InlineData(true, true, false, "就绪")]
-        [InlineData(true, false, false, "打印作业已提交，历史保存失败")]
-        [InlineData(false, true, true, "打印结果待核查")]
-        [InlineData(false, false, true, "打印结果待核查，历史保存失败")]
-        [InlineData(false, true, false, "打印提交失败")]
-        public void PrintCompletionStatusPreservesUncertainOutcome(bool success, bool historySaved, bool uncertain, string expected)
+        [InlineData(true, "", PrintJobKind.Print, "PASS")]
+        [InlineData(false, "submission=uncertain", PrintJobKind.Print, "UNCERTAIN")]
+        [InlineData(false, "error", PrintJobKind.Print, "FAIL")]
+        [InlineData(true, "", PrintJobKind.Reprint, "REPRINT_PASS")]
+        [InlineData(false, "submission=uncertain", PrintJobKind.Reprint, "REPRINT_UNCERTAIN")]
+        [InlineData(false, "error", PrintJobKind.Reprint, "REPRINT_FAIL")]
+        public void PrintWorkflowMapsHistoryStatus(bool success, string diagnostics, PrintJobKind kind, string expected)
         {
-            Assert.Equal(expected, UiLayoutPolicy.GetPrintCompletionStatus(success, historySaved, uncertain));
+            var result = new PrintResult(success, "message", diagnostics);
+            Assert.Equal(expected, new PrintWorkflow().GetHistoryStatus(result, kind));
+        }
+
+        [Theory]
+        [InlineData(false, true, "submission=uncertain", PrintJobKind.Print, "打印结果待核查")]
+        [InlineData(false, false, "submission=uncertain", PrintJobKind.Reprint, "补打印结果待核查，历史保存失败")]
+        [InlineData(true, false, "", PrintJobKind.Print, "打印作业已提交，历史保存失败")]
+        public void PrintWorkflowBuildsCompletionStatus(bool success, bool historySaved, string diagnostics, PrintJobKind kind, string expected)
+        {
+            var result = new PrintResult(success, "message", diagnostics);
+            Assert.Equal(expected, new PrintWorkflow().GetCompletionStatus(result, historySaved, kind));
+        }
+
+        [Fact]
+        public void TemplateSessionRoundTripPreservesIdentityAndClonesSources()
+        {
+            var settings = new TemplateSettings
+            {
+                Scope = "OrderTemplate",
+                OrderId = "order-1",
+                TemplateId = "template-1",
+                TemplateName = "label.btw",
+                TemplatePath = "C:\\label.btw",
+                TemplateFields = new List<string> { "IMEI" },
+                DataSources = new List<DataSourceItem> { new DataSourceItem { Field = "IMEI", LockedValue = "123" } }
+            };
+
+            var clone = TemplateSessionState.FromSettings(settings).ToSettings();
+            clone.DataSources[0].LockedValue = "456";
+
+            Assert.Equal("OrderTemplate", clone.Scope);
+            Assert.Equal("order-1", clone.OrderId);
+            Assert.Equal("template-1", clone.TemplateId);
+            Assert.Equal("123", settings.DataSources[0].LockedValue);
+        }
+
+        [Fact]
+        public void DataSourceCloneCopiesValuesWithoutSharingInstance()
+        {
+            var source = new DataSourceItem
+            {
+                Name = "IMEI",
+                Field = "IMEI1",
+                Enabled = true,
+                AutoIncrement = true,
+                AutoStep = -1,
+                IsLocked = true,
+                LockAfterInput = true,
+                LockedValue = "123",
+                AutoIncrementLocked = true,
+                ExpectedLength = 15,
+                LengthRevision = 4,
+                LengthEdited = true,
+                UseLocalDataValidation = true
+            };
+
+            var clone = source.Clone();
+            clone.LockedValue = "456";
+
+            Assert.NotSame(source, clone);
+            Assert.Equal("IMEI1", clone.Field);
+            Assert.Equal(-1, clone.AutoStep);
+            Assert.Equal(15, clone.ExpectedLength);
+            Assert.True(clone.UseLocalDataValidation);
+            Assert.Equal("123", source.LockedValue);
+        }
+
+        [Fact]
+        public void NaturalStringComparerOrdersNumericSegmentsByValue()
+        {
+            var values = new List<string> { "Label10", "Label2", "Label1" };
+
+            values.Sort(NaturalStringComparer.Instance);
+
+            Assert.Equal(new[] { "Label1", "Label2", "Label10" }, values);
+        }
+
+        [Fact]
+        public void ReprintUncertainHistoryReservesValueUntilReviewed()
+        {
+            var dir = CreateTempDirectory();
+            var history = new HistoryManager(Path.Combine(dir, "records.csv"), Path.Combine(dir, "records.jsonl"), Path.Combine(dir, "records.db"));
+            Assert.True(history.Add("Template", "C:\\a.btw", "template-1", new Dictionary<string, string> { ["IMEI"] = "X" }, "REPRINT_UNCERTAIN", "Printer", 1));
+
+            Assert.True(history.ContainsAnyValue("Template", "C:\\a.btw", "template-1", "X"));
         }
 
         [Fact]

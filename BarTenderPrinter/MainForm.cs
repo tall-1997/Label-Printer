@@ -26,7 +26,7 @@ namespace BarTenderPrinter
         private readonly System.Windows.Forms.Timer _historySearchTimer = new System.Windows.Forms.Timer { Interval = 180 };
         private readonly string _startupTemplatePath;
         private readonly string _configFile;
-        private readonly string _version = "v5.7.83";
+        private readonly string _version = GetApplicationVersion();
 
         private List<DataSourceItem> _dataSources = new List<DataSourceItem>();
         private TextBox[] _inputTextBoxes = new TextBox[0];
@@ -144,6 +144,12 @@ namespace BarTenderPrinter
         private int SidebarCollapsedWidth => 0;
         private int SidebarExpandedWidth => ScaleUi(168);
 
+        private static string GetApplicationVersion()
+        {
+            var version = typeof(MainForm).Assembly.GetName().Version;
+            return version == null ? "v0.0.0" : $"v{version.Major}.{version.Minor}.{version.Build}";
+        }
+
         public MainForm(string startupTemplatePath = null)
         {
             _startupTemplatePath = NormalizeStartupTemplatePath(startupTemplatePath);
@@ -155,6 +161,7 @@ namespace BarTenderPrinter
             _configFile = AppPaths.ConfigFile;
             _applicationState = _applicationStateManager.Load();
             Text = $"BarTender Printer {_version}";
+            lblVersion.Text = _version;
             MiuiTheme.ApplyTheme(this);
             DpiChanged += (s, e) =>
             {
@@ -938,7 +945,7 @@ namespace BarTenderPrinter
             _btnNextHistoryPage = new Button { Text = "下一页", Location = new Point(990, 1), Size = new Size(60, 24) };
             _lblHistoryPage = new Label { Text = "第 1 页", Location = new Point(1055, 5), Size = new Size(80, 18) };
             _cmbHistoryStatus = new ComboBox { Location = new Point(1140, 2), Size = new Size(90, 25), DropDownStyle = ComboBoxStyle.DropDownList };
-            _cmbHistoryStatus.Items.AddRange(new object[] { "全部状态", "PASS", "FAIL", "UNCERTAIN", "REPRINT_PASS", "REPRINT_FAIL" });
+            _cmbHistoryStatus.Items.AddRange(new object[] { "全部状态", "PASS", "FAIL", "UNCERTAIN", "REPRINT_PASS", "REPRINT_FAIL", "REPRINT_UNCERTAIN" });
             _cmbHistoryStatus.SelectedIndex = 0;
             _txtHistoryDate = new TextBox { Location = new Point(1180, 2), Size = new Size(90, 25), PlaceholderText = "yyyy-MM-dd" };
             _btnPrevHistoryPage.Click += (s, e) => { if (_historyPageIndex > 0) { _historyPageIndex--; LoadHistory(); } };
@@ -2341,31 +2348,7 @@ namespace BarTenderPrinter
 
         private static TemplateSettings CloneTemplateSettings(TemplateSettings settings)
         {
-            settings ??= new TemplateSettings();
-            return new TemplateSettings
-            {
-                SchemaVersion = settings.SchemaVersion,
-                Scope = settings.Scope,
-                OrderId = settings.OrderId,
-                TemplateId = settings.TemplateId,
-                TemplateName = settings.TemplateName,
-                TemplatePath = settings.TemplatePath,
-                Printer = settings.Printer,
-                Copies = settings.Copies,
-                InputValidation = settings.InputValidation,
-                DuplicateValidation = settings.DuplicateValidation,
-                LengthValidation = settings.LengthValidation,
-                GlobalExpectedLength = settings.GlobalExpectedLength,
-                GlobalLengthRevision = settings.GlobalLengthRevision,
-                LengthRevisionCounter = settings.LengthRevisionCounter,
-                LocalDataPath = settings.LocalDataPath,
-                LocalDataStoragePath = settings.LocalDataStoragePath,
-                LocalDataColumnName = settings.LocalDataColumnName,
-                LocalDataTargetField = settings.LocalDataTargetField,
-                TemplateFields = (settings.TemplateFields ?? new List<string>()).ToList(),
-                LocalData = (settings.LocalData ?? new List<string>()).ToList(),
-                DataSources = (settings.DataSources ?? new List<DataSourceItem>()).Select(CloneDataSource).ToList()
-            };
+            return TemplateSessionState.FromSettings(settings).ToSettings();
         }
 
         private void RefreshOrderTemplateCards()
@@ -3257,7 +3240,19 @@ namespace BarTenderPrinter
             AddLog("正在连接 BarTender...", "INFO");
             try
             {
-                var historyTask = Task.Run(() => _history.Load());
+                var historyTask = Task.Run(() =>
+                {
+                    try
+                    {
+                        _history.Load();
+                        return "";
+                    }
+                    catch (Exception ex)
+                    {
+                        LoggerService.Error("初始化历史记录失败", ex);
+                        return ex.Message;
+                    }
+                });
                 var connectTask = Task.Run(() => _btService.Connect());
                 var printersTask = Task.Run(() => _btService.GetPrinters());
                 var templatesTask = Task.Run(() => GetTemplateFiles(_templatesFolder));
@@ -3271,6 +3266,8 @@ namespace BarTenderPrinter
                 RestoreStartupContext();
                 LoadHistory();
                 RefreshStats();
+                if (!string.IsNullOrWhiteSpace(historyTask.Result))
+                    AddLog($"历史记录初始化失败，历史功能暂不可用: {historyTask.Result}", "ERROR");
                 _isInitializing = false;
 
                 RestoreApplicationStateControls();
@@ -4877,9 +4874,7 @@ namespace BarTenderPrinter
                 result = new PrintResult(false, ex.Message, $"type={ex.GetType().Name};template={templatePath};printer={printer};copies={copies};message={ex.Message}");
             }
             var historySaved = true;
-            var historyStatus = result.Success
-                ? "PASS"
-                : result.DiagnosticDetails?.IndexOf("submission=uncertain", StringComparison.OrdinalIgnoreCase) >= 0 ? "UNCERTAIN" : "FAIL";
+            var historyStatus = _printWorkflow.GetHistoryStatus(result, PrintJobKind.Print);
             try
             {
                 historySaved = _printWorkflow.RecordPrintResult(_history, templateName, templatePath, templateId, fieldValues,
@@ -4947,7 +4942,7 @@ namespace BarTenderPrinter
                     SetPrintEnvironmentEnabled(_pendingPrintJobCount == 0);
                     SetStatus(_pendingPrintJobCount > 0
                         ? $"打印队列: {_pendingPrintJobCount}"
-                        : UiLayoutPolicy.GetPrintCompletionStatus(result.Success, historySaved, historyStatus == "UNCERTAIN"));
+                        : _printWorkflow.GetCompletionStatus(result, historySaved, PrintJobKind.Print));
                 }
                 if (_pendingPrintJobCount == 0 && _chkPreview?.Checked == true)
                     _ = RefreshPreviewAsync(previewValues);
@@ -5337,9 +5332,11 @@ namespace BarTenderPrinter
                     Dictionary<string, string> previewValues = null;
                     try
                     {
+                        var historyStatus = _printWorkflow.GetHistoryStatus(result, PrintJobKind.Reprint);
+                        var actualTemplateVersion = string.IsNullOrWhiteSpace(currentVersion) ? record.TemplateVersion : currentVersion;
                         historySaved = _printWorkflow.RecordPrintResult(_history, record.TemplateName, record.TemplatePath, record.TemplateId, values,
-                            result.Success ? "REPRINT_PASS" : "REPRINT_FAIL", printer, record.Copies,
-                            operatorName, reason, record.TemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
+                            historyStatus, printer, record.Copies,
+                            operatorName, reason, actualTemplateVersion, result.DiagnosticDetails, record.OrderName, record.OrderId, record.TemplateFields);
                         if (result.Success && historySaved) RestoreAutoIncrementInputsToPendingValues();
                         if (!historySaved)
                             AddLog(result.Success ? "补打印作业已提交，但历史记录保存失败。" : "补打印失败，且失败历史记录保存失败。", "ERROR");
@@ -5354,7 +5351,9 @@ namespace BarTenderPrinter
                                 previewValues = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
                         }
                         else
-                            AddLog($"历史记录补打印失败: {result.ErrorMessage}", "ERROR");
+                            AddLog(_printWorkflow.Classify(result) == PrintSubmissionState.Uncertain
+                                ? $"补打印结果待核查: {result.ErrorMessage}"
+                                : $"历史记录补打印失败: {result.ErrorMessage}", "ERROR");
                     }
                     finally
                     {
@@ -5362,7 +5361,9 @@ namespace BarTenderPrinter
                         SetPrintEnvironmentEnabled(_pendingPrintJobCount == 0);
                         LoadHistory();
                         RefreshStats();
-                        SetStatus(_pendingPrintJobCount > 0 ? $"打印队列: {_pendingPrintJobCount}" : result.Success ? (historySaved ? "补打印作业已提交" : "补打印作业已提交，历史保存失败") : (historySaved ? "补打印失败" : "补打印失败，历史保存失败"));
+                        SetStatus(_pendingPrintJobCount > 0
+                            ? $"打印队列: {_pendingPrintJobCount}"
+                            : _printWorkflow.GetCompletionStatus(result, historySaved, PrintJobKind.Reprint));
                     }
                     if (_pendingPrintJobCount == 0 && previewValues != null)
                         _ = RefreshPreviewAsync(previewValues);
@@ -5600,34 +5601,27 @@ namespace BarTenderPrinter
         #region Config
 
         private void btnSaveConfig_Click(object sender, EventArgs e)
-        { SaveConfig(); SaveCurrentTemplateSettings(); MessageBox.Show(this, "配置已保存"); AddLog("配置已保存", "SUCCESS"); }
+        {
+            var configSaved = SaveConfig();
+            var templateSaved = SaveCurrentTemplateSettings();
+            if (configSaved && templateSaved)
+            {
+                MessageBox.Show(this, "配置已保存");
+                AddLog("配置已保存", "SUCCESS");
+                return;
+            }
+            MessageBox.Show(this, "配置保存失败，请检查日志和文件权限。", "保存配置", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            AddLog("配置保存失败，请检查文件权限和可用磁盘空间。", "ERROR");
+        }
         private void btnLoadConfig_Click(object sender, EventArgs e)
         { LoadConfig(_configFile); PopulateTemplateList(_templatesFolder); RebuildInputFields(); MessageBox.Show(this, "配置已加载"); }
 
-        private void SaveCurrentTemplateSettings()
+        private bool SaveCurrentTemplateSettings()
         {
-            if (string.IsNullOrEmpty(_selectedTemplatePath)) return;
+            if (string.IsNullOrEmpty(_selectedTemplatePath)) return true;
             try
             {
-                var settings = new TemplateSettings
-                {
-                    TemplateName = Path.GetFileName(_selectedTemplatePath),
-                    TemplatePath = _selectedTemplatePath,
-                    Printer = cmbPrinter.SelectedItem?.ToString() ?? "",
-                    Copies = (int)numCopies.Value,
-                    InputValidation = _useLocalDataValidation,
-                    DuplicateValidation = _duplicateValidationEnabled,
-                    LengthValidation = _lengthValidationEnabled,
-                    GlobalExpectedLength = _globalExpectedLength,
-                    GlobalLengthRevision = _globalLengthRevision,
-                    LengthRevisionCounter = _lengthRevisionCounter,
-                    LocalDataPath = _localDataPath,
-                    LocalDataStoragePath = _localDataStoragePath,
-                    LocalDataColumnName = _localDataColumnName,
-                    LocalDataTargetField = _localDataTargetField,
-                    LocalData = string.IsNullOrWhiteSpace(_localDataStoragePath) ? _localData.ToList() : new List<string>(),
-                    DataSources = _dataSources.Select(CloneDataSource).ToList()
-                };
+                var settings = BuildTemplateSettings(_selectedTemplatePath, _dataSources);
                 if (_activeOrderTemplate != null && string.Equals(_activeOrderTemplate.SourcePath, _selectedTemplatePath, StringComparison.OrdinalIgnoreCase))
                 {
                     _activeOrderTemplate.Settings = settings;
@@ -5637,10 +5631,12 @@ namespace BarTenderPrinter
                 {
                     _templateSettings.Save(settings);
                 }
+                return true;
             }
             catch (Exception ex)
             {
                 LoggerService.Error("保存模板设置失败", ex);
+                return false;
             }
         }
 
@@ -5728,22 +5724,7 @@ namespace BarTenderPrinter
 
         private static DataSourceItem CloneDataSource(DataSourceItem source)
         {
-            return new DataSourceItem
-            {
-                Name = source.Name,
-                Field = source.Field,
-                Enabled = source.Enabled,
-                AutoIncrement = source.AutoIncrement,
-                AutoStep = source.AutoStep,
-                IsLocked = source.IsLocked,
-                LockAfterInput = source.LockAfterInput,
-                LockedValue = source.LockedValue,
-                AutoIncrementLocked = source.AutoIncrementLocked,
-                ExpectedLength = source.ExpectedLength,
-                LengthRevision = source.LengthRevision,
-                LengthEdited = source.LengthEdited,
-                UseLocalDataValidation = source.UseLocalDataValidation
-            };
+            return source?.Clone();
         }
 
         private void SaveApplicationState()
@@ -5765,12 +5746,12 @@ namespace BarTenderPrinter
             }
         }
 
-        private void SaveConfig()
+        private bool SaveConfig()
         {
-            var dir = Path.GetDirectoryName(_configFile); if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            var tempFile = _configFile + ".tmp";
             try
             {
+                var dir = Path.GetDirectoryName(_configFile);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
                 try
                 {
                     if (File.Exists(_configFile)) File.Copy(_configFile, _configFile + ".bak", true);
@@ -5814,11 +5795,12 @@ namespace BarTenderPrinter
                     });
                 }
                 AtomicFileWriter.WriteAllText(_configFile, sb.ToString(), Encoding.Unicode);
+                return true;
             }
             catch (Exception ex)
             {
                 LoggerService.Warn($"保存配置失败: {ex.Message}");
-                try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+                return false;
             }
         }
 
@@ -6409,73 +6391,4 @@ namespace BarTenderPrinter
         }
     }
 
-    public sealed class NaturalStringComparer : IComparer<string>
-    {
-        public static readonly NaturalStringComparer Instance = new NaturalStringComparer();
-
-        public int Compare(string left, string right)
-        {
-            if (ReferenceEquals(left, right)) return 0;
-            if (left == null) return -1;
-            if (right == null) return 1;
-
-            int leftIndex = 0;
-            int rightIndex = 0;
-            while (leftIndex < left.Length && rightIndex < right.Length)
-            {
-                if (char.IsDigit(left[leftIndex]) && char.IsDigit(right[rightIndex]))
-                {
-                    int leftEnd = leftIndex;
-                    int rightEnd = rightIndex;
-                    while (leftEnd < left.Length && char.IsDigit(left[leftEnd])) leftEnd++;
-                    while (rightEnd < right.Length && char.IsDigit(right[rightEnd])) rightEnd++;
-
-                    int leftSignificant = leftIndex;
-                    int rightSignificant = rightIndex;
-                    while (leftSignificant < leftEnd - 1 && left[leftSignificant] == '0') leftSignificant++;
-                    while (rightSignificant < rightEnd - 1 && right[rightSignificant] == '0') rightSignificant++;
-
-                    int leftDigits = leftEnd - leftSignificant;
-                    int rightDigits = rightEnd - rightSignificant;
-                    if (leftDigits != rightDigits) return leftDigits.CompareTo(rightDigits);
-
-                    for (int i = 0; i < leftDigits; i++)
-                    {
-                        int digitComparison = left[leftSignificant + i].CompareTo(right[rightSignificant + i]);
-                        if (digitComparison != 0) return digitComparison;
-                    }
-
-                    int runLengthComparison = (leftEnd - leftIndex).CompareTo(rightEnd - rightIndex);
-                    if (runLengthComparison != 0) return runLengthComparison;
-                    leftIndex = leftEnd;
-                    rightIndex = rightEnd;
-                    continue;
-                }
-
-                int characterComparison = char.ToUpperInvariant(left[leftIndex]).CompareTo(char.ToUpperInvariant(right[rightIndex]));
-                if (characterComparison != 0) return characterComparison;
-                leftIndex++;
-                rightIndex++;
-            }
-
-            return (left.Length - leftIndex).CompareTo(right.Length - rightIndex);
-        }
-    }
-
-    public class DataSourceItem
-    {
-        public string Name { get; set; }
-        public string Field { get; set; }
-        public bool Enabled { get; set; }
-        public bool AutoIncrement { get; set; }
-        public int AutoStep { get; set; } = 1; // +1 for increment, -1 for decrement
-        public bool IsLocked { get; set; }
-        public bool LockAfterInput { get; set; }
-        public string LockedValue { get; set; } = "";
-        public bool AutoIncrementLocked { get; set; }
-        public int ExpectedLength { get; set; }
-        public long LengthRevision { get; set; }
-        public bool LengthEdited { get; set; }
-        public bool UseLocalDataValidation { get; set; }
-    }
 }

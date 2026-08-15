@@ -88,22 +88,7 @@ namespace BarTenderPrinter
             var result = new List<DataSourceItem>();
             foreach (var source in sources ?? new List<DataSourceItem>())
             {
-                result.Add(new DataSourceItem
-                {
-                    Name = source.Name,
-                    Field = source.Field,
-                    Enabled = source.Enabled,
-                    AutoIncrement = source.AutoIncrement,
-                    AutoStep = source.AutoStep,
-                    IsLocked = source.IsLocked,
-                    LockAfterInput = source.LockAfterInput,
-                    LockedValue = source.LockedValue,
-                    AutoIncrementLocked = source.AutoIncrementLocked,
-                    ExpectedLength = source.ExpectedLength,
-                    LengthRevision = source.LengthRevision,
-                    LengthEdited = source.LengthEdited,
-                    UseLocalDataValidation = source.UseLocalDataValidation
-                });
+                if (source != null) result.Add(source.Clone());
             }
             return result;
         }

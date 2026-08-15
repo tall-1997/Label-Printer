@@ -531,7 +531,7 @@ namespace BarTenderPrinter
 
         private static bool ShouldReserveValues(string status)
         {
-            return IsSuccessfulStatus(status) || string.Equals(status, "UNCERTAIN", StringComparison.OrdinalIgnoreCase);
+            return IsSuccessfulStatus(status) || status?.EndsWith("UNCERTAIN", StringComparison.OrdinalIgnoreCase) == true;
         }
 
         private bool Append(PrintRecord record)
