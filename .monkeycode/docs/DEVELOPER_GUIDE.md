@@ -31,6 +31,17 @@ DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 dotnet build BarTenderPrinter.MesApi/Bar
 
 中心服务通过 `ConnectionStrings__MesDatabase` 接收 PostgreSQL 连接字符串。Bearer 工位会话通过 `MesSecurity__Sessions__{index}__Token`、`UserId`、`StationId`、`ShiftId` 和 `Roles__{index}` 注入；令牌由部署环境的受保护配置提供。
 
+## MES Web
+
+MES Web 使用 React 19、TypeScript、Vite 和 MUI。`package-lock.json` 固定完整依赖图，React Router 使用已修复安全公告的 7.18.2 版本。CI 按锁定版本安装全局 Web 工具链并将全局模块目录链接到项目，随后执行：
+
+```bash
+npm --prefix BarTenderPrinter.MesWeb test
+npm --prefix BarTenderPrinter.MesWeb run build
+```
+
+生产构建写入 `BarTenderPrinter.MesApi/wwwroot`，由 ASP.NET Core 同源托管。
+
 ## 打印核心测试
 
 ```bash
@@ -63,7 +74,7 @@ BARTENDER_TEST_POSTGRES='Host=localhost;Database=bartender_test;Username=project
 BARTENDER_TEST_POSTGRES='Host=localhost;Database=bartender_test;Username=project_user;Password=project_password' DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 dotnet test BarTenderPrinter.MesApi.Tests/BarTenderPrinter.MesApi.Tests.csproj --nologo
 ```
 
-测试宿主注入临时工位会话，覆盖 401、403、完整会话、角色策略、审计与脱敏、订单状态、主数据、号码处置、称重与写号、四类自动标签作业、过站包装、质量处置、返工、出库、归档修复、CSV、打印恢复和统一追溯。本轮结果为 29 个用例通过。
+测试宿主注入临时工位会话，覆盖 401、403、完整会话、Capability、v1 与旧 API 兼容、角色策略、审计与脱敏、订单状态、主数据、号码处置、称重与写号、四类自动标签作业、过站包装、质量处置、返工、出库、归档修复、CSV、打印恢复和统一追溯。本轮结果为 39 个用例通过。
 
 ## Linux 交叉构建 WinForms
 
@@ -81,11 +92,11 @@ dotnet test BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release
 
 ## 构建顺序
 
-共享 Domain 输出会被多个项目引用，验证时应串行执行各测试项目以避免并行进程写入共享输出目录。当前已确认的跨平台执行结果为 Domain 43、Devices 36、Printing 7、MesClient 32、Persistence 26、MesApi 34，共 178 项。Windows `BarTenderPrinter.Tests` 继续由 Windows runner 执行。MES API 集成测试禁用测试类并行执行，避免共享 PostgreSQL 队列状态互相干扰。
+共享 Domain 输出会被多个项目引用，验证时应串行执行各测试项目以避免并行进程写入共享输出目录。当前已确认的跨平台执行结果为 Domain 43、Application 2、Devices 36、Printing 7、MesClient 32、Persistence 26、MesApi 39、StationAgent 1，共 186 项。Windows `BarTenderPrinter.Tests` 继续由 Windows runner 执行。MES API 集成测试禁用测试类并行执行，避免共享 PostgreSQL 队列状态互相干扰。
 
 ## CI 分层
 
-CI 的目标数据库基线为 PostgreSQL 16。流水线依次执行 Domain、Devices、Printing、MesClient、Persistence 和 MesApi 六个跨平台测试项目；Windows 阶段执行 `BarTenderPrinter.Tests`、发布 `win-x64` 客户端并验证制品。工作流配置升级 PostgreSQL 镜像时应与本指南保持一致。
+CI 的目标数据库基线为 PostgreSQL 16。流水线依次执行 Web、Domain、Application、StationAgent、Devices、Printing、MesClient、Persistence 和 MesApi 测试及生产构建；Windows 阶段执行 `BarTenderPrinter.Tests`、发布 `win-x64` 客户端并验证制品。工作流配置升级 PostgreSQL 镜像时应与本指南保持一致。
 
 ## 启动迁移与配置模板
 

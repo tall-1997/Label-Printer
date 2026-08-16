@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using BarTenderPrinter.Application.Auditing;
 using BarTenderPrinter.MesApi;
 using BarTenderPrinter.Persistence;
 using Npgsql;
@@ -69,7 +70,7 @@ public sealed class SecurityAndAuditApiTests
     [Fact]
     public void AuditSnapshotRedactsIdentifiersAndNestedDiagnostics()
     {
-        var json = AuditSnapshot.Serialize(new
+        var json = AuditSanitizer.Serialize(new
         {
             Imei = "861234567890123",
             SerialNumber = "SN001",
@@ -88,7 +89,7 @@ public sealed class SecurityAndAuditApiTests
     [Fact]
     public void AuditSnapshotSummarizesDiagnosticVariantsAndRetainsWhitelistedMetadata()
     {
-        var json = AuditSnapshot.Serialize(new
+        var json = AuditSanitizer.Serialize(new
         {
             State = "Failed",
             Diagnostic = "secret diagnostic",

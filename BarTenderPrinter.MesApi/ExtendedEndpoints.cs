@@ -53,7 +53,7 @@ public static class ExtendedEndpoints
         var result = await repository.CreateLotAsync(lot, DateTimeOffset.UtcNow, cancellationToken,
             value => AuditSnapshot.Create(context, "InspectionLotCreated", "InspectionLot", value.Id, null, value),
             key, Hash(new { request.OrderId, request.InspectionType, request.SampleRule, request.SampleUnitIds }));
-        return Results.Created($"/api/inspection-lots/{result.Id}", result);
+        return Results.Created(ApiRoute.Location(context, $"/inspection-lots/{result.Id}"), result);
     }
 
     private static async Task<IResult> AddInspectionResult(string lotId, AddInspectionResultRequest request,
@@ -119,7 +119,7 @@ public static class ExtendedEndpoints
             value => AuditSnapshot.Create(context, "ReworkOrderCreated", "ReworkOrder", value.Id, null, value),
             Key(context, request.IdempotencyKey), Hash(new { request.ProductionUnitId, request.RouteId,
                 request.ReasonCode, request.StartOperationId, request.Sequence }));
-        return Results.Created($"/api/rework-orders/{result.Id}", result);
+        return Results.Created(ApiRoute.Location(context, $"/rework-orders/{result.Id}"), result);
     }
 
     private static Task<IResult> ApproveReworkOrder(string id, ReworkCommandRequest request, ReworkOrderRepository repository,
@@ -157,7 +157,7 @@ public static class ExtendedEndpoints
             value => AuditSnapshot.Create(context, "ShipmentCreated", "Shipment", value.Id, null, value),
             Key(context, request.IdempotencyKey), Hash(new { request.OrderId, request.Customer,
                 request.PlannedQuantity, request.DeliveryReference }));
-        return Results.Created($"/api/shipments/{result.Id}", result);
+        return Results.Created(ApiRoute.Location(context, $"/shipments/{result.Id}"), result);
     }
 
     private static async Task<IResult> AddShipmentCarton(string id, AddShipmentCartonRequest request,
@@ -247,7 +247,7 @@ public static class ExtendedEndpoints
             Hash(new { Type = type, Source = Convert.ToHexString(SHA256.HashData(source)) }), DateTimeOffset.UtcNow,
             cancellationToken, value => AuditSnapshot.Create(context, "CsvImportStaged", "CsvImportBatch", value.Id,
                 null, value));
-        return Results.Created($"/api/csv-imports/{result.Id}", result);
+        return Results.Created(ApiRoute.Location(context, $"/csv-imports/{result.Id}"), result);
     }
 
     private static async Task<IResult> GetCsvImport(string id, CsvExchangeRepository repository, HttpContext context,
@@ -281,14 +281,10 @@ public static class ExtendedEndpoints
         "text/csv; charset=utf-8", fileName);
     private static bool CanReveal(HttpContext context) => context.User.IsInRole("QualityManager") ||
         context.User.IsInRole("ArchiveAdministrator");
-    private static IdempotencyKey Key(HttpContext context, string fallback)
-    {
-        var header = context.Request.Headers["Idempotency-Key"].ToString();
-        return new IdempotencyKey(string.IsNullOrWhiteSpace(header) ? fallback : header);
-    }
+    private static IdempotencyKey Key(HttpContext context, string fallback) =>
+        RequestIdentity.Key(context, fallback);
 
     private static StationSession Session(HttpContext context) =>
         context.Items[typeof(StationSession)] as StationSession ?? StationSessionAccessor.Get(context.User);
-    private static string Hash<T>(T value) => Convert.ToHexString(
-        SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value)))).ToLowerInvariant();
+    private static string Hash<T>(T value) => RequestIdentity.Hash(value);
 }

@@ -140,6 +140,8 @@ PostgreSQL 16 schema 由 v1-v17 迁移管理。v1-v9 建立订单、号段、生
 
 统一错误响应包含稳定 `code`、操作员可读 `message`、`correlationId`、`retryable` 和可选 `details`。响应头同时返回 `X-Correlation-ID`。认证、权限、参数绑定、业务冲突和服务异常使用同一错误结构。
 
+新版业务接口统一注册在 `/api/v1`，迁移期 `/api` 入口映射到同一组 handler。两套入口共享认证、角色策略、请求验证、幂等、审计和 Repository；创建响应的 `Location` 使用当前调用入口对应的版本前缀。
+
 ### GET /health
 
 返回中心服务健康状态：

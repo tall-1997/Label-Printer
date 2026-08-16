@@ -29,6 +29,12 @@ publish/
 *.suo
 __pycache__/
 *.py[cod]
+**/node_modules/
+BarTenderPrinter.MesWeb/dist/
+BarTenderPrinter.MesApi/wwwroot/
+BarTenderPrinter.MesWeb/*.tsbuildinfo
+BarTenderPrinter.MesWeb/vite.config.js
+BarTenderPrinter.MesWeb/vite.config.d.ts
 
 # Workspace-local scratch data
 .monkeycode-tmp-files/

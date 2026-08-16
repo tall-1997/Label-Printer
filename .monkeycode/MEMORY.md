@@ -22,9 +22,10 @@ This file records user instructions, preferences, and teachings for reference in
   - Use local development tools, existing project scripts, and standard Git/GitHub workflows.
 
 [Complete queued work autonomously]
-- Date: 2026-08-15
-- Context: User-defined collaboration preference for multi-stage implementation and full feature migration
+- Date: 2026-08-16
+- Context: User-defined collaboration preference for multi-stage implementation and all remaining project tasks
 - Instructions:
-  - Complete all requested and remaining planned tasks in one continuous execution, including implementation, tests, and delivery verification.
+  - Complete all requested and remaining planned tasks in one continuous execution, including implementation, tests, documentation, and delivery verification.
   - Do not pause for confirmation, clarification, or intermediate approval when repository context and existing specifications provide sufficient direction.
+  - Do not send progress reports during execution; report only the final outcome.
   - Resolve overlapping implementations autonomously by selecting the option with stronger correctness, maintainability, and project consistency.

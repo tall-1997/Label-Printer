@@ -1,17 +1,19 @@
 # BarTender Printer
 
-基于 .NET 8、PostgreSQL 16 和 Seagull BarTender COM 接口的包装 MES 客户端与中心服务。系统覆盖订单状态、生产主数据、号码生命周期、组装包装、称重与写号任务、四类标签自动作业、质量处置、返工、出库、归档修复、CSV 数据交换、追溯及恢复操作。
+基于 React 19、TypeScript、.NET 8、PostgreSQL 16 和 Seagull BarTender COM 接口的制造执行与标签打印协同平台。系统覆盖订单状态、生产主数据、号码生命周期、组装包装、称重与写号任务、四类标签自动作业、质量处置、返工、出库、归档修复、CSV 数据交换、追溯及恢复操作。
 
 ![界面预览](assets/preview.png)
 
 ## 最新版本
 
-**v5.7.91** - C# WinForms 完整 MES 工作流版
+**v5.7.92** - MES Web 平台与 Station Agent 架构版
 
 ## 功能特性
 
 ### 核心功能
 - **完整 MIUIX WinForms 页面**：打印、订单管理和 MES 工位统一使用 MIUIX 风格主题与响应式页面结构
+- **全新 MES Web 平台**：React/Vite 管理端和扫码工位端使用统一业务域导航、设计令牌、明暗主题与响应式布局
+- **平台 Application 层**：Capability 与平台会话投影脱离 HTTP 层，为命令、查询、幂等和审计编排提供独立边界
 - **订单状态闭环**：支持草稿、发布、生产、暂停、恢复和关闭，并以乐观并发版本保护状态转换
 - **生产主数据**：维护生产单元、标准/返工路线、有序工序、工位资格和四级包装单元
 - **号码生命周期**：支持 IMEI、SN、PSN、MSN、卡通箱号和卡板号的保留、分配、冻结、释放、报废及历史查询
@@ -89,7 +91,8 @@
 | 项目 | 说明 |
 |------|------|
 | 语言 | C# (.NET 8.0) |
-| UI | WinForms + MIUIX 风格配色 |
+| Web UI | React 19 + TypeScript + Vite + MUI 7 |
+| 桌面回退 | WinForms + MIUIX 风格配色 |
 | 中心服务 | ASP.NET Core Minimal API |
 | 中心存储 | PostgreSQL 16，v1-v17 版本化迁移 |
 | 设备 | 模拟适配器 + 真实适配接口 |
@@ -104,7 +107,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender Printer v5.7.91  By---池鱼  [日志] [关于] [导出日志] │
+│ BarTender Printer v5.7.92  By---池鱼  [日志] [关于] [导出日志] │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -155,7 +158,7 @@
 
 ## 跨平台测试
 
-当前已确认结果：Domain 43、Devices 36、Printing 7、MesClient 32、Persistence 26、MesApi 34，共 178 项跨平台测试通过。Domain 测试覆盖基础契约、订单、生产、号段、包装、称重、质量、返工、出库和归档。
+当前已确认结果：Domain 43、Application 5、Devices 36、Printing 7、MesClient 32、Persistence 26、MesApi 39、StationAgent 4，共 192 项跨平台测试通过。Domain 测试覆盖基础契约、订单、生产、号段、包装、称重、质量、返工、出库和归档。
 
 ## 下载
 
@@ -163,6 +166,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
+| [v5.7.92](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.92) | ~50 MB | React MES Web、Application 用例层、Station Agent 离线账本与 API v1 兼容版 |
 | [v5.7.91](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.91) | ~50 MB | 完整 MES 工作流、PostgreSQL v17、CSV 交换、工位隔离与安全加固版 |
 | [v5.7.88](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.88) | ~50 MB | MES 工位、设备模拟、质量返工、出库归档与中心追溯集成版 |
 | [v5.7.87](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.87) | ~50 MB | 打印协调、历史灾难恢复与并发可靠性增强版 |
@@ -229,6 +233,11 @@
 ```
 Label-Printer/
 ├── BarTenderPrinter/          # C# WinForms 项目
+├── BarTenderPrinter.MesWeb/   # React MES 管理端与工位端
+├── BarTenderPrinter.Application/ # 应用用例与平台能力
+├── BarTenderPrinter.Application.Tests/
+├── BarTenderPrinter.StationAgent/ # Windows 本机硬件与离线宿主
+├── BarTenderPrinter.StationAgent.Tests/
 │   ├── BarTenderPrinter.csproj
 │   ├── Program.cs
 │   ├── MainForm.cs            # 主窗体逻辑
@@ -276,6 +285,8 @@ iscc installer/BarTenderPrinter.iss
 ```
 
 MES API 通过 `ConnectionStrings__MesDatabase` 接收 PostgreSQL 16 连接字符串，通过 `MesSecurity__Sessions__{index}` 配置 Bearer 工位会话。配置模板只保留占位符，实际令牌和密码由部署环境注入。
+
+MES Web 开发命令为 `npm --prefix BarTenderPrinter.MesWeb run dev`，默认将 `/api` 和 `/health` 转发到 `http://127.0.0.1:8000`。生产构建命令为 `npm --prefix BarTenderPrinter.MesWeb run build`，构建结果写入 `BarTenderPrinter.MesApi/wwwroot` 并由中心服务同源托管。
 
 ### Python 版
 ```bash

@@ -676,6 +676,7 @@ public sealed class PostgresMigrator(NpgsqlDataSource dataSource)
 
     public async Task MigrateAsync(CancellationToken cancellationToken = default)
     {
+        ValidateMigrationCatalog(Migrations.Select(migration => migration.Version));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await ExecuteAsync(connection, transaction, "SELECT pg_advisory_xact_lock($1)", cancellationToken, MigrationLockId);
@@ -695,6 +696,13 @@ public sealed class PostgresMigrator(NpgsqlDataSource dataSource)
                 migration.Version, DateTimeOffset.UtcNow);
         }
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    internal static void ValidateMigrationCatalog(IEnumerable<int> versions)
+    {
+        var actual = versions.ToArray();
+        if (actual.Length == 0 || !actual.SequenceEqual(Enumerable.Range(1, actual.Length)))
+            throw new InvalidOperationException("Migration 版本必须从 1 开始严格连续且唯一。");
     }
 
     private static async Task RepairArchiveHashesAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,

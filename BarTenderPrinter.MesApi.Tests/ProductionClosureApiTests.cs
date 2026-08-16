@@ -152,6 +152,17 @@ public sealed class ProductionClosureApiTests
         var accepted = await planner.SendAsync(matching);
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
 
+        using var reorderedReplay = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/orders/{orderId}/transitions")
+        {
+            Content = new StringContent("{\"expectedVersion\":0,\"targetStatus\":\"Published\"}",
+                System.Text.Encoding.UTF8, "application/json")
+        };
+        reorderedReplay.Headers.Add("Idempotency-Key", headerKey);
+        var replay = await planner.SendAsync(reorderedReplay);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal((await Json(accepted)).GetProperty("version").GetInt64(),
+            (await Json(replay)).GetProperty("version").GetInt64());
+
         using var mismatching = new HttpRequestMessage(HttpMethod.Post, $"/api/orders/{orderId}/transitions")
         {
             Content = JsonContent.Create(new TransitionOrderRequest(ProductionOrderStatus.InProduction, 1, Unique("body")))
@@ -166,6 +177,15 @@ public sealed class ProductionClosureApiTests
             new { targetStatus = "InProduction", expectedVersion = 1L });
         Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
         Assert.Equal("VALIDATION_FAILED", (await missing.Content.ReadFromJsonAsync<ApiError>())?.Code);
+
+        using var duplicateHeaders = new HttpRequestMessage(HttpMethod.Post, $"/api/orders/{orderId}/transitions")
+        {
+            Content = JsonContent.Create(new { targetStatus = "InProduction", expectedVersion = 1L })
+        };
+        duplicateHeaders.Headers.TryAddWithoutValidation("Idempotency-Key", [Unique("first"), Unique("second")]);
+        var duplicateRejected = await planner.SendAsync(duplicateHeaders);
+        Assert.Equal(HttpStatusCode.BadRequest, duplicateRejected.StatusCode);
+        Assert.Equal("VALIDATION_FAILED", (await duplicateRejected.Content.ReadFromJsonAsync<ApiError>())?.Code);
     }
 
     private static HttpClient Client(MesApiFactory factory, string token)

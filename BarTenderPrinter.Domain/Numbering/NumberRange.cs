@@ -56,21 +56,21 @@ public sealed record NumberAllocation(
 
     public void Release()
     {
-        if (Status != NumberAllocationStatus.Reserved)
+        if (!NumberAllocationPolicy.CanTransition(Status, NumberAllocationStatus.Released))
             throw new InvalidOperationException("只有已保留号码可以释放。");
         Status = NumberAllocationStatus.Released;
     }
 
     public void Scrap()
     {
-        if (Status is NumberAllocationStatus.Released or NumberAllocationStatus.Scrapped)
+        if (!NumberAllocationPolicy.CanTransition(Status, NumberAllocationStatus.Scrapped))
             throw new InvalidOperationException("当前号码状态无法报废。");
         Status = NumberAllocationStatus.Scrapped;
     }
 
     public void Freeze()
     {
-        if (Status is not (NumberAllocationStatus.Reserved or NumberAllocationStatus.Assigned))
+        if (!NumberAllocationPolicy.CanTransition(Status, NumberAllocationStatus.Frozen))
             throw new InvalidOperationException("当前号码状态无法冻结。");
         Status = NumberAllocationStatus.Frozen;
     }

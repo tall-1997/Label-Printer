@@ -9,12 +9,17 @@ on:
       - 'BarTenderPreviewHost/**'
       - 'BarTenderPrinter.Domain/**'
       - 'BarTenderPrinter.Domain.Tests/**'
+      - 'BarTenderPrinter.Application/**'
+      - 'BarTenderPrinter.Application.Tests/**'
       - 'BarTenderPrinter.Devices/**'
       - 'BarTenderPrinter.Devices.Tests/**'
       - 'BarTenderPrinter.Persistence/**'
       - 'BarTenderPrinter.Persistence.Tests/**'
       - 'BarTenderPrinter.MesApi/**'
       - 'BarTenderPrinter.MesApi.Tests/**'
+      - 'BarTenderPrinter.MesWeb/**'
+      - 'BarTenderPrinter.StationAgent/**'
+      - 'BarTenderPrinter.StationAgent.Tests/**'
       - 'BarTenderPrinter.MesClient.Tests/**'
       - 'BarTenderPrinter.Printing.Tests/**'
       - 'installer/**'
@@ -29,12 +34,17 @@ on:
       - 'BarTenderPreviewHost/**'
       - 'BarTenderPrinter.Domain/**'
       - 'BarTenderPrinter.Domain.Tests/**'
+      - 'BarTenderPrinter.Application/**'
+      - 'BarTenderPrinter.Application.Tests/**'
       - 'BarTenderPrinter.Devices/**'
       - 'BarTenderPrinter.Devices.Tests/**'
       - 'BarTenderPrinter.Persistence/**'
       - 'BarTenderPrinter.Persistence.Tests/**'
       - 'BarTenderPrinter.MesApi/**'
       - 'BarTenderPrinter.MesApi.Tests/**'
+      - 'BarTenderPrinter.MesWeb/**'
+      - 'BarTenderPrinter.StationAgent/**'
+      - 'BarTenderPrinter.StationAgent.Tests/**'
       - 'BarTenderPrinter.MesClient.Tests/**'
       - 'BarTenderPrinter.Printing.Tests/**'
       - 'installer/**'
@@ -78,10 +88,29 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install MES Web toolchain
+        shell: bash
+        run: |
+          npm install -g react@19.1.1 react-dom@19.1.1 react-router-dom@7.18.2 @mui/material@7.3.2 @mui/icons-material@7.3.2 @emotion/react@11.14.0 @emotion/styled@11.14.1 typescript@5.9.2 vite@7.1.5 @vitejs/plugin-react@5.0.2 vitest@3.2.4 jsdom@26.1.0 @testing-library/react@16.3.0 @testing-library/jest-dom@6.8.0 @types/react@19.1.12 @types/react-dom@19.1.9
+          ln -s "$(npm root -g)" BarTenderPrinter.MesWeb/node_modules
+
+      - name: Test and build MES Web
+        shell: bash
+        run: |
+          npm --prefix BarTenderPrinter.MesWeb test
+          npm --prefix BarTenderPrinter.MesWeb run build
+
       - name: Run cross-platform tests
         shell: bash
         run: |
           dotnet test BarTenderPrinter.Domain.Tests/BarTenderPrinter.Domain.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.Application.Tests/BarTenderPrinter.Application.Tests.csproj -c Release
+          dotnet test BarTenderPrinter.StationAgent.Tests/BarTenderPrinter.StationAgent.Tests.csproj -c Release
           dotnet test BarTenderPrinter.Devices.Tests/BarTenderPrinter.Devices.Tests.csproj -c Release
           dotnet test BarTenderPrinter.Printing.Tests/BarTenderPrinter.Printing.Tests.csproj -c Release
           dotnet test BarTenderPrinter.MesClient.Tests/BarTenderPrinter.MesClient.Tests.csproj -c Release
@@ -89,7 +118,9 @@ jobs:
           dotnet test BarTenderPrinter.MesApi.Tests/BarTenderPrinter.MesApi.Tests.csproj -c Release
 
       - name: Build center service
-        run: dotnet build BarTenderPrinter.MesApi/BarTenderPrinter.MesApi.csproj -c Release
+        run: |
+          dotnet build BarTenderPrinter.MesApi/BarTenderPrinter.MesApi.csproj -c Release
+          dotnet build BarTenderPrinter.StationAgent/BarTenderPrinter.StationAgent.csproj -c Release
 
   build-windows:
     name: Windows WinForms and BarTender tests

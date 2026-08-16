@@ -567,14 +567,7 @@ public sealed class MesCoreRepository(NpgsqlDataSource dataSource)
     }
 
     private static bool AllowedNumberTransition(NumberAllocationStatus current, NumberAllocationStatus target) =>
-        (current, target) is
-            (NumberAllocationStatus.Reserved, NumberAllocationStatus.Released) or
-            (NumberAllocationStatus.Reserved, NumberAllocationStatus.Scrapped) or
-            (NumberAllocationStatus.Reserved, NumberAllocationStatus.Frozen) or
-            (NumberAllocationStatus.Assigned, NumberAllocationStatus.Scrapped) or
-            (NumberAllocationStatus.Assigned, NumberAllocationStatus.Frozen) or
-            (NumberAllocationStatus.Frozen, NumberAllocationStatus.Released) or
-            (NumberAllocationStatus.Frozen, NumberAllocationStatus.Assigned);
+        NumberAllocationPolicy.CanTransition(current, target);
 
     private static async Task<ProductionOrderSnapshot?> ReadOrderAsync(NpgsqlConnection connection,
         NpgsqlTransaction transaction, string orderId, bool forUpdate, CancellationToken cancellationToken)

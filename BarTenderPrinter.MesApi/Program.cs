@@ -81,12 +81,21 @@ app.UseStatusCodePages(async statusCodeContext =>
 });
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+app.MapGet("/openapi/v1.json", () => Results.File(Path.Combine(AppContext.BaseDirectory, "openapi", "mes-v1.json"), "application/json"));
 
 var api = app.MapGroup("/api").RequireAuthorization().AddEndpointFilter<StationSessionFilter>();
-api.MapExtendedEndpoints();
-api.MapCoreEndpoints();
+var v1 = app.MapGroup("/api/v1").RequireAuthorization().AddEndpointFilter<StationSessionFilter>();
+api.MapMesFeatureEndpoints();
+v1.MapPlatformEndpoints().MapMesFeatureEndpoints();
+MapBasicFeatureEndpoints(api);
+MapBasicFeatureEndpoints(v1);
+
+static void MapBasicFeatureEndpoints(RouteGroupBuilder api)
+{
 api.MapPost("/orders", async (CreateProductionOrderRequest request, ProductionOrderRepository repository,
     HttpContext context, CancellationToken cancellationToken) =>
 {
@@ -99,7 +108,8 @@ api.MapPost("/orders", async (CreateProductionOrderRequest request, ProductionOr
     await repository.InsertAsync(order, cancellationToken,
         value => AuditSnapshot.Create(context, "OrderCreated", "ProductionOrder", value.Id.Value,
             null, new { value.OrderNumber, value.Status }));
-    return Results.Created($"/api/orders/{order.Id.Value}", await repository.GetAsync(order.Id.Value, cancellationToken));
+    return Results.Created(ApiRoute.Location(context, $"/orders/{order.Id.Value}"),
+        await repository.GetAsync(order.Id.Value, cancellationToken));
 }).RequireAuthorization("Planner");
 
 api.MapGet("/orders/{id}", async (string id, ProductionOrderRepository repository, HttpContext context,
@@ -120,7 +130,8 @@ api.MapPost("/number-ranges", async (CreateNumberRangeRequest request, NumberRan
     await repository.InsertAsync(range, cancellationToken,
         value => AuditSnapshot.Create(context, "NumberRangeCreated", "NumberRange", value.Id.Value,
             null, new { value.OrderId, value.Type, value.Start, value.End }));
-    return Results.Created($"/api/number-ranges/{range.Id.Value}", await repository.GetAsync(range.Id.Value, cancellationToken));
+    return Results.Created(ApiRoute.Location(context, $"/number-ranges/{range.Id.Value}"),
+        await repository.GetAsync(range.Id.Value, cancellationToken));
 }).RequireAuthorization("ProcessEngineer");
 
 api.MapGet("/number-ranges/{id}", async (string id, NumberRangeRepository repository, HttpContext context,
@@ -137,12 +148,11 @@ api.MapPost("/number-ranges/{id}/allocations", async (string id, AllocateNumberR
     CancellationToken cancellationToken) =>
 {
     id = ApiValidation.Required(id, "id");
-    var key = new IdempotencyKey(request.IdempotencyKey);
+    var key = RequestIdentity.Key(context, request.IdempotencyKey);
     var session = GetSession(context);
     var operatorId = session.UserId;
     var stationId = session.StationId;
-    var requestHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(new { RangeId = id, key.Value, operatorId, stationId })))).ToLowerInvariant();
+    var requestHash = RequestIdentity.Hash(new { RangeId = id, operatorId, stationId });
     var result = await repository.AllocateAsync(id, key, requestHash, stationId, operatorId,
         DateTimeOffset.UtcNow, cancellationToken,
         value => AuditSnapshot.Create(context, "NumberAllocated", "NumberRange", id, null,
@@ -160,7 +170,7 @@ api.MapPost("/station-passes", async (StationPassRequest request, StationPassRep
     var reworkOrderId = ApiValidation.Optional(request.ReworkOrderId, "reworkOrderId", 128);
     if (request.ReworkSequence < 0)
         throw new ArgumentException("reworkSequence必须大于或等于零。", nameof(request.ReworkSequence));
-    var key = new IdempotencyKey(request.IdempotencyKey);
+    var key = RequestIdentity.Key(context, request.IdempotencyKey);
     var session = GetSession(context);
     var operatorId = session.UserId;
     var stationId = session.StationId;
@@ -182,7 +192,7 @@ api.MapPost("/packaging-bindings", async (BindPackagingRequest request, Packagin
     var childId = ApiValidation.Required(request.ChildId, "childId");
     if (request.ExpectedParentVersion < 0)
         throw new ArgumentException("expectedParentVersion必须大于或等于零。", nameof(request.ExpectedParentVersion));
-    var key = new IdempotencyKey(request.IdempotencyKey);
+    var key = RequestIdentity.Key(context, request.IdempotencyKey);
     var operatorId = GetSession(context).UserId;
     var requestHash = HashRequest(new { parentId, childId, request.ExpectedParentVersion, operatorId });
     var result = await repository.BindPackagingAsync(parentId, childId, request.ExpectedParentVersion, operatorId,
@@ -196,7 +206,7 @@ api.MapPost("/packaging-bindings", async (BindPackagingRequest request, Packagin
 api.MapPost("/print-jobs/claims", async (ClaimPrintJobRequest request, PrintJobRepository repository,
     HttpContext context, CancellationToken cancellationToken) =>
 {
-    var key = new IdempotencyKey(request.IdempotencyKey);
+    var key = RequestIdentity.Key(context, request.IdempotencyKey);
     var session = GetSession(context);
     var operatorId = session.UserId;
     var stationId = session.StationId;
@@ -222,7 +232,7 @@ api.MapPost("/print-jobs/{jobId}/receipts", async (string jobId, PrintJobReceipt
     var resultJson = request.Result.GetRawText();
     if (Encoding.UTF8.GetByteCount(resultJson) > 65536)
         throw new ArgumentException("result不能超过65536字节。", nameof(request.Result));
-    var key = new IdempotencyKey(request.IdempotencyKey);
+    var key = RequestIdentity.Key(context, request.IdempotencyKey);
     var stationId = GetSession(context).StationId;
     var requestHash = HashRequest(new { jobId, stationId, state, resultJson });
     var result = await repository.RecordReceiptAsync(jobId, stationId, key, requestHash, state, resultJson,
@@ -263,14 +273,16 @@ api.MapGet("/traceability", async (string type, string value, ExtendedTraceabili
         ? Results.NotFound(new ApiError("NOT_FOUND", "未找到关联生产履历。", context.TraceIdentifier))
         : Results.Ok(result);
 });
+}
+
+app.MapFallbackToFile("index.html");
 
 app.Run();
 
 static StationSession GetSession(HttpContext context) =>
     context.Items[typeof(StationSession)] as StationSession ?? StationSessionAccessor.Get(context.User);
 
-static string HashRequest<T>(T value) => Convert.ToHexString(
-    SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value)))).ToLowerInvariant();
+static string HashRequest<T>(T value) => RequestIdentity.Hash(value);
 
 public partial class Program
 {

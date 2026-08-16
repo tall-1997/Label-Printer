@@ -5,11 +5,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\BarTenderPrinter.Application\BarTenderPrinter.Application.csproj" />
     <ProjectReference Include="..\BarTenderPrinter.Domain\BarTenderPrinter.Domain.csproj" />
     <ProjectReference Include="..\BarTenderPrinter.Persistence\BarTenderPrinter.Persistence.csproj" />
     <ProjectReference Include="..\BarTenderPrinter.Devices\BarTenderPrinter.Devices.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Update="appsettings.Template.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\BarTenderPrinter.MesWeb\openapi\mes-v1.json" Link="openapi\mes-v1.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
