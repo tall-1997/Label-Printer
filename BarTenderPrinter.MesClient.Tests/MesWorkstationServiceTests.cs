@@ -295,11 +295,149 @@ public sealed class MesWorkstationServiceTests
         Assert.Single(snapshot.Fields);
     }
 
+    [Theory]
+    [InlineData("order-transition", "/api/orders/order%201/transitions")]
+    [InlineData("number-status", "/api/number-allocations/allocation%201/status")]
+    [InlineData("weight", "/api/packaging-units/carton%201/weights")]
+    [InlineData("write-result", "/api/identifier-write-tasks/task%201/results")]
+    [InlineData("quality", "/api/inspection-lots/lot%201/results")]
+    [InlineData("rework", "/api/rework-orders/rework%201/activate")]
+    [InlineData("shipping", "/api/shipments/shipment%201/cartons")]
+    [InlineData("archive", "/api/orders/order%201/archive")]
+    [InlineData("archive-repair", "/api/archive-repair-tasks/repair%201/repair")]
+    public async Task ExtendedCommands_UseEscapedResourceRoutesAndIdempotencyKey(string command, string expectedPath)
+    {
+        var handler = new RecordingHandler((_, _) => Json(HttpStatusCode.OK, new { accepted = true }));
+        using var fixture = new ServiceFixture(handler);
+
+        switch (command)
+        {
+            case "order-transition":
+                await fixture.Service.TransitionOrderAsync("order 1", new MesOrderTransitionRequest { IdempotencyKey = "key-1" });
+                break;
+            case "number-status":
+                await fixture.Service.ChangeNumberStatusAsync("allocation 1", new MesNumberStatusRequest { IdempotencyKey = "key-1" });
+                break;
+            case "weight":
+                await fixture.Service.RecordWeightAsync("carton 1", new MesWeightRequest { IdempotencyKey = "key-1" });
+                break;
+            case "write-result":
+                await fixture.Service.RecordIdentifierWriteResultAsync("task 1", new MesIdentifierWriteResultRequest
+                {
+                    IdempotencyKey = "key-1", Result = EmptyObject()
+                });
+                break;
+            case "quality":
+                await fixture.Service.AddInspectionResultAsync("lot 1", new MesInspectionResultRequest { IdempotencyKey = "key-1" });
+                break;
+            case "rework":
+                await fixture.Service.ChangeReworkStateAsync("rework 1", "activate", "key-1");
+                break;
+            case "shipping":
+                await fixture.Service.AddShipmentCartonAsync("shipment 1", new MesShipmentCartonRequest { IdempotencyKey = "key-1" });
+                break;
+            case "archive":
+                await fixture.Service.ArchiveOrderAsync("order 1", "key-1");
+                break;
+            case "archive-repair":
+                await fixture.Service.RepairArchiveAsync("repair 1", "key-1");
+                break;
+        }
+
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(expectedPath, request.Path);
+        Assert.Equal("key-1", request.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task DataExchange_UsesBatchAndJobEndpoints()
+    {
+        var handler = new RecordingHandler((_, _) => Json(HttpStatusCode.OK, new { accepted = true }));
+        using var fixture = new ServiceFixture(handler);
+
+        await fixture.Service.StageCsvImportAsync("orders", Encoding.UTF8.GetBytes("orderNumber\r\nO-1"), "import-key");
+        await fixture.Service.GetCsvImportAsync("batch 1");
+        await fixture.Service.ConfirmCsvImportAsync("batch 1", "confirm-key");
+        await fixture.Service.ExportCsvAsync("orders");
+
+        Assert.Equal(new[]
+        {
+            "/api/csv-imports/orders", "/api/csv-imports/batch%201",
+            "/api/csv-imports/batch%201/confirm", "/api/csv-exports/orders"
+        }, handler.Requests.Select(request => request.Path));
+        Assert.Equal("import-key", handler.Requests[0].IdempotencyKey);
+        Assert.Equal("orderNumber\r\nO-1", handler.Requests[0].Body);
+    }
+
+    [Theory]
+    [InlineData("StationPass", "/api/station-passes")]
+    [InlineData("PackagingBinding", "/api/packaging-bindings")]
+    public async Task PendingBusinessOperation_CanBeResubmittedWithOriginalPayloadAndKey(string kind, string path)
+    {
+        var handler = new RecordingHandler((_, _) => Json(HttpStatusCode.OK, new { accepted = true }));
+        using var fixture = new ServiceFixture(handler);
+        var operation = fixture.Store.Upsert(new MesPendingOperation
+        {
+            Kind = kind, BusinessId = "business-1", IdempotencyKey = "original-key",
+            RequestPath = path, RequestJson = "{\"value\":\"original\"}", State = MesPendingState.Pending
+        });
+
+        var result = await fixture.Service.ResubmitPendingOperationAsync(operation.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("original-key", Assert.Single(handler.Requests).IdempotencyKey);
+        Assert.Contains("original", handler.Requests[0].Body);
+        Assert.Equal(MesPendingState.Synced, Assert.Single(fixture.Service.PendingOperations).State);
+    }
+
+    [Fact]
+    public void PendingBusinessOperation_CanBeMarkedForManualReview()
+    {
+        using var fixture = new ServiceFixture(new RecordingHandler((_, _) => Json(HttpStatusCode.OK, new { })));
+        var operation = fixture.Store.Upsert(new MesPendingOperation
+        {
+            Kind = "StationPass", IdempotencyKey = "key", RequestJson = "{}", State = MesPendingState.Pending
+        });
+
+        var result = fixture.Service.MarkPendingOperationForManualReview(operation.Id, "physical unit verified");
+
+        Assert.True(result.IsSuccess);
+        var pending = Assert.Single(fixture.Service.PendingOperations);
+        Assert.Equal(MesPendingState.ReviewRequired, pending.State);
+        Assert.Equal("MANUAL_REVIEW_REQUIRED", pending.ErrorCode);
+        Assert.Equal("physical unit verified", pending.ReviewNote);
+    }
+
+    [Fact]
+    public async Task FailedPendingResubmission_PreservesCorrelationIdForRecoveryUi()
+    {
+        var handler = new RecordingHandler((_, _) => Json(HttpStatusCode.Conflict,
+            new { code = "VERSION_CONFLICT", message = "conflict", correlationId = "center-correlation", retryable = false }));
+        using var fixture = new ServiceFixture(handler);
+        var operation = fixture.Store.Upsert(new MesPendingOperation
+        {
+            Kind = "PackagingBinding", IdempotencyKey = "key", RequestPath = "/api/packaging-bindings",
+            RequestJson = "{}", State = MesPendingState.Pending
+        });
+
+        await fixture.Service.ResubmitPendingOperationAsync(operation.Id);
+
+        var pending = Assert.Single(fixture.Service.PendingOperations);
+        Assert.Equal("VERSION_CONFLICT", pending.ErrorCode);
+        Assert.Equal("center-correlation", pending.CorrelationId);
+    }
+
     private static MesPrintJob PrintJob(string state) => new MesPrintJob
     {
         JobId = "job-1", IdempotencyKey = "print-key", LabelType = "Carton", State = state,
         RequestJson = "{}", UpdatedAtUtc = DateTimeOffset.UtcNow
     };
+
+    private static JsonElement EmptyObject()
+    {
+        using var document = JsonDocument.Parse("{}");
+        return document.RootElement.Clone();
+    }
 
     private static MesApiClient CreateClient(HttpMessageHandler handler, int retries, CapturingLog log = null,
         string token = "token") => new MesApiClient(new MesConnectionOptions

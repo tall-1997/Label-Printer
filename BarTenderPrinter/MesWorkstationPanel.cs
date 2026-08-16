@@ -15,7 +15,7 @@ namespace BarTenderPrinter
         public void Warn(string message) => LoggerService.Warn(message);
     }
 
-    internal sealed class MesWorkstationPanel : Panel
+    internal sealed partial class MesWorkstationPanel : Panel
     {
         private readonly MesWorkstationService _service;
         private readonly MesConnectionOptionsStore _optionsStore;
@@ -30,8 +30,9 @@ namespace BarTenderPrinter
         private readonly Label _connectionStatus = new Label { AutoSize = true };
         private readonly TabControl _tabs = new TabControl { Dock = DockStyle.Fill };
         private readonly DataGridView _reviewGrid = CreateGrid();
+        private FlowLayoutPanel _connectionCard;
         private MesPrintJob _claimedJob;
-        private readonly Label _printJobSummary = new Label { Dock = DockStyle.Top, Height = 62, AutoEllipsis = true };
+        private readonly Label _printJobSummary = new Label { AutoSize = true, AutoEllipsis = true, MinimumSize = new Size(240, 44) };
 
         public MesWorkstationPanel(MesWorkstationService service, MesConnectionOptionsStore optionsStore,
             Func<MesPrintJob, Task<PrintJobCompletion>> printExecutor, Action<string, string> log,
@@ -49,6 +50,7 @@ namespace BarTenderPrinter
             BuildTabs();
             MiuiTheme.StyleTabControl(_tabs);
             RefreshReviewGrid();
+            Resize += (_, _) => LayoutConnectionCard();
         }
 
         private void BuildConnectionCard()
@@ -57,22 +59,23 @@ namespace BarTenderPrinter
             _baseUrl.Text = options.BaseUrl;
             _timeout.Value = options.TimeoutSeconds;
             _retries.Value = options.MaxRetries;
-            var card = new FlowLayoutPanel
+            _connectionCard = new FlowLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 76,
+                Height = 124,
                 Padding = new Padding(10),
                 WrapContents = true,
+                AutoScroll = false,
                 BackColor = MiuiTheme.CardBackground
             };
             var connect = new Button { Text = "保存并连接", AutoSize = true };
             connect.Click += async (_, _) => await RunUiActionAsync(connect, SaveAndConnectAsync);
-            AddField(card, "MES 地址", _baseUrl, 260);
-            AddField(card, "访问令牌", _token, 180);
-            AddField(card, "超时(秒)", _timeout, 70);
-            AddField(card, "重试", _retries, 55);
-            card.Controls.Add(connect);
-            card.Controls.Add(_connectionStatus);
+            AddField(_connectionCard, "MES 地址", _baseUrl, 240);
+            AddField(_connectionCard, "访问令牌", _token, 160);
+            AddField(_connectionCard, "超时(秒)", _timeout, 76);
+            AddField(_connectionCard, "重试", _retries, 64);
+            _connectionCard.Controls.Add(connect);
+            _connectionCard.Controls.Add(_connectionStatus);
             MiuiTheme.StyleButton(connect, true);
             MiuiTheme.StyleTextBox(_baseUrl);
             MiuiTheme.StyleTextBox(_token);
@@ -80,16 +83,19 @@ namespace BarTenderPrinter
             MiuiTheme.StyleNumericUpDown(_retries);
             MiuiTheme.StyleLabel(_connectionStatus, true);
             Controls.Add(_tabs);
-            Controls.Add(card);
+            Controls.Add(_connectionCard);
+            LayoutConnectionCard();
         }
 
         private void BuildTabs()
         {
-            _tabs.TabPages.Add(BuildOrderPage());
-            _tabs.TabPages.Add(BuildStationPage());
-            _tabs.TabPages.Add(BuildPackagingPage());
-            _tabs.TabPages.Add(BuildPrintPage());
-            _tabs.TabPages.Add(BuildTraceabilityPage());
+            _tabs.TabPages.Add(BuildOrderGroup());
+            _tabs.TabPages.Add(BuildMasterDataGroup());
+            _tabs.TabPages.Add(BuildWorkstationGroup());
+            _tabs.TabPages.Add(BuildQualityReworkGroup());
+            _tabs.TabPages.Add(BuildShippingArchiveGroup());
+            _tabs.TabPages.Add(BuildDataExchangeGroup());
+            _tabs.TabPages.Add(BuildPrintTraceRecoveryGroup());
         }
 
         private TabPage BuildOrderPage()
@@ -154,10 +160,15 @@ namespace BarTenderPrinter
         private TabPage BuildPrintPage()
         {
             var page = CreatePage("MES 打印");
-            var claim = new Button { Text = "领取打印作业", Width = 130, Height = 32, Left = 18, Top = 18 };
-            var execute = new Button { Text = "使用现有打印流程执行", Width = 180, Height = 32, Left = 160, Top = 18, Enabled = false };
-            var recover = new Button { Text = "恢复同步", Width = 110, Height = 32, Left = 352, Top = 18 };
-            _printJobSummary.Top = 62;
+            var commands = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Padding = new Padding(14, 14, 14, 6)
+            };
+            var claim = new Button { Text = "领取打印作业", AutoSize = true, MinimumSize = new Size(130, 34) };
+            var execute = new Button { Text = "使用现有打印流程执行", AutoSize = true, MinimumSize = new Size(180, 34), Enabled = false };
+            var recover = new Button { Text = "恢复同步", AutoSize = true, MinimumSize = new Size(110, 34) };
+            _printJobSummary.Dock = DockStyle.Top;
+            _printJobSummary.Padding = new Padding(18, 8, 18, 8);
             _printJobSummary.Text = "尚未领取作业";
             claim.Click += async (_, _) => await RunUiActionAsync(claim, async cancellationToken =>
             {
@@ -206,7 +217,9 @@ namespace BarTenderPrinter
             MiuiTheme.StyleButton(execute);
             MiuiTheme.StyleButton(recover);
             MiuiTheme.StyleLabel(_printJobSummary);
-            page.Controls.AddRange(new Control[] { claim, execute, recover, _printJobSummary });
+            commands.Controls.AddRange(new Control[] { claim, execute, recover });
+            page.Controls.Add(_printJobSummary);
+            page.Controls.Add(commands);
             return page;
         }
 
@@ -224,14 +237,7 @@ namespace BarTenderPrinter
                 var result = await _service.QueryTraceabilityAsync(type.Text, value.Text.Trim(), cancellationToken);
                 ShowResult(output, result, data => JsonSerializer.Serialize(data, PrettyJson));
             });
-            _reviewGrid.Top = output.Bottom + 12;
-            _reviewGrid.Left = 18;
-            _reviewGrid.Width = Math.Max(320, page.ClientSize.Width - 36);
-            _reviewGrid.Height = 180;
-            _reviewGrid.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            page.Controls.Add(_reviewGrid);
             MiuiTheme.StyleComboBox(type);
-            MiuiTheme.StyleDataGridView(_reviewGrid);
             return page;
         }
 
@@ -274,13 +280,33 @@ namespace BarTenderPrinter
                 .Where(item => item.State != MesPendingState.Synced)
                 .Select(item => new
                 {
+                    记录ID = item.Id,
                     类型 = item.Kind,
                     业务标识 = item.BusinessId,
                     幂等键 = item.IdempotencyKey,
                     状态 = item.State.ToString(),
                     错误码 = item.ErrorCode,
+                    关联ID = item.CorrelationId,
+                    人工处理 = item.ReviewNote,
                     更新时间 = item.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
                 }).ToList();
+            if (_reviewGrid.Columns.Contains("记录ID")) _reviewGrid.Columns["记录ID"].Visible = false;
+        }
+
+        private void LayoutConnectionCard()
+        {
+            if (_connectionCard == null || _connectionCard.IsDisposed) return;
+            var availableWidth = Math.Max(260, ClientSize.Width - Padding.Horizontal);
+            _connectionCard.Width = availableWidth;
+            var preferred = _connectionCard.GetPreferredSize(new Size(availableWidth, 0));
+            _connectionCard.Height = Math.Max(72, preferred.Height + 4);
+        }
+
+        protected override void OnDpiChangedAfterParent(EventArgs e)
+        {
+            base.OnDpiChangedAfterParent(e);
+            MiuiTheme.RefreshDpi(this, DeviceDpi);
+            LayoutConnectionCard();
         }
 
         private static readonly JsonSerializerOptions PrettyJson = new JsonSerializerOptions { WriteIndented = true };
@@ -317,7 +343,7 @@ namespace BarTenderPrinter
             var label = new Label { Text = caption + "：", Left = 18, Top = top + 4, Width = 130, Tag = "row" };
             control.Left = 150;
             control.Top = top;
-            control.Width = 360;
+            control.Width = Math.Max(180, page.ClientSize.Width - 180);
             control.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             control.Tag = "row";
             page.Controls.Add(label);
@@ -340,13 +366,29 @@ namespace BarTenderPrinter
 
         private void AddAction(TabPage page, string caption, Func<CancellationToken, Task> action)
         {
-            var button = new Button { Text = caption, Left = 526, Top = NextRow(page) - 36, Width = 120, Height = 30 };
+            var button = new Button { Text = caption, AutoSize = true, MinimumSize = new Size(120, 32) };
             button.Click += async (_, _) =>
             {
                 await RunUiActionAsync(button, action);
             };
-            page.Controls.Add(button);
+            GetActionPanel(page).Controls.Add(button);
             MiuiTheme.StyleButton(button, true);
+        }
+
+        private static FlowLayoutPanel GetActionPanel(TabPage page)
+        {
+            var panel = page.Controls.OfType<FlowLayoutPanel>()
+                .FirstOrDefault(control => string.Equals(control.Name, "MesActionPanel", StringComparison.Ordinal));
+            if (panel != null) return panel;
+            panel = new FlowLayoutPanel
+            {
+                Name = "MesActionPanel", Left = 18, Top = NextRow(page),
+                Width = Math.Max(280, page.ClientSize.Width - 36), AutoSize = true,
+                MinimumSize = new Size(280, 42), WrapContents = true,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Tag = "row"
+            };
+            page.Controls.Add(panel);
+            return panel;
         }
 
         private async Task RunUiActionAsync(Control control, Func<CancellationToken, Task> action)
@@ -383,7 +425,9 @@ namespace BarTenderPrinter
 
         private static void ShowResult<T>(TextBox output, MesResult<T> result, Func<T, string> format)
         {
-            output.Text = result.IsSuccess ? format(result.Value) : FormatError(result.Error);
+            output.Text = result.IsSuccess
+                ? $"关联 ID: {result.CorrelationId}\r\n{format(result.Value)}"
+                : FormatError(result.Error);
         }
 
         private static void ShowError(Label label, MesApiError error) => label.Text = FormatError(error);

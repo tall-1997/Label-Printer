@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using BarTenderPrinter.Persistence;
@@ -40,9 +42,14 @@ public sealed class StationSessionFilter : IEndpointFilter
 
 public static class AuditSnapshot
 {
-    private static readonly HashSet<string> SensitiveNames = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> RedactedNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Imei", "Imei1", "Imei2", "Imei3", "Imei4", "SerialNumber", "Sn", "Diagnostics"
+        "Imei", "Imei1", "Imei2", "Imei3", "Imei4", "SerialNumber", "Sn"
+    };
+    private static readonly HashSet<string> SummarizedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Diagnostic", "Diagnostics", "DiagnosticCode", "Result", "ResultJson", "Error", "ErrorMessage",
+        "Exception", "StackTrace"
     };
 
     public static AuditEventSnapshot Create(HttpContext context, string action, string entityType, string entityId,
@@ -69,7 +76,8 @@ public static class AuditSnapshot
         {
             foreach (var property in jsonObject.ToArray())
             {
-                if (SensitiveNames.Contains(property.Key)) jsonObject[property.Key] = "***";
+                if (RedactedNames.Contains(property.Key)) jsonObject[property.Key] = "***";
+                else if (SummarizedNames.Contains(property.Key)) jsonObject[property.Key] = Summary(property.Value);
                 else if (property.Value is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var nestedJson))
                 {
                     try
@@ -90,5 +98,16 @@ public static class AuditSnapshot
         {
             foreach (var item in jsonArray) Redact(item);
         }
+    }
+
+    private static JsonObject Summary(JsonNode? value)
+    {
+        var serialized = value?.ToJsonString() ?? "null";
+        return new JsonObject
+        {
+            ["redacted"] = true,
+            ["length"] = Encoding.UTF8.GetByteCount(serialized),
+            ["sha256"] = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(serialized))).ToLowerInvariant()
+        };
     }
 }

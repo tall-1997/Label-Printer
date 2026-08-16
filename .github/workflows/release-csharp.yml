@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without v prefix, for example 5.7.84'
+        description: 'Release version without v prefix, for example 5.7.89'
         required: true
         type: string
 
@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:15
+        image: postgres:16
         env:
           POSTGRES_DB: bartender_ci
           POSTGRES_USER: bartender_ci
@@ -142,24 +142,29 @@ jobs:
             ### 更新内容
 
             #### MES 工位
-            - 新增订单、组装过站、包装过站、中心打印、追溯和人工核查页面
-            - 支持断线任务保留、幂等领取与回执恢复、关联 ID 和敏感日志脱敏
-            - 中心打印严格使用不可变模板、打印机和字段快照
+            - 完整覆盖订单、主数据、生产、包装、质量、返工、出库、归档和 CSV 数据交换页面
+            - MIUIX 页面支持高 DPI、窄窗口、自适应连接卡片和异步操作防重复
+            - 支持过站与包装任务恢复、中心打印幂等领取、回执恢复和人工核查
 
             #### 制造与设备
-            - 新增订单号段、制造路线、四级包装和统一生产追溯
-            - 提供模拟电子称稳定读数和模拟 IMEI/SN 写入回读校验
-            - 本地 SQLite 打印账本在 BarTender 提交前保存不可变作业快照
+            - 新增订单状态机、生产单元、制造路线、工位资格及号码完整状态历史
+            - 四级包装自动生成机身标、彩盒标、卡通箱标和卡板标作业
+            - 提供称重规则、模拟电子称及按工位和平台隔离的 IMEI/SN 写号任务
 
             #### 质量与仓储
-            - 新增质量抽检、冻结处置、返工审批和受控返工路线
-            - 新增出库扫描、数量确认和订单不可变归档
-            - PostgreSQL v9 提供事务审计、并发幂等和历史数据修复迁移
+            - 质量失败自动生成处置任务，支持放行、报废和关联返工
+            - 支持出库扫描、数量确认、订单不可变归档及摘要异常受控修复
+            - PostgreSQL v17 提供事务审计、并发幂等、CSV 暂存确认和写号工位隔离
+
+            #### 安全与合规
+            - CSV 上传限制、逐行校验、公式注入防护及权限化脱敏导出
+            - 关键状态和审计同事务提交，写号诊断及敏感结果按摘要脱敏
+            - 发布制品排除 HASP、Sentinel、旧 MobileMes 资产、证书、数据库和日志
 
             #### 测试与发布
-            - Linux CI 验证领域、设备、打印、客户端、PostgreSQL 和 MES API
+            - Linux CI 验证 178 项领域、设备、打印、客户端、PostgreSQL 和 MES API 测试
             - Windows CI 验证 WinForms、BarTender 边界、自包含发布和安装包内容
-            - 发布制品自动排除旧 MobileMes 资产、证书、数据库、日志和敏感配置
+            - 发布制品自动扫描敏感配置和非授权运行时资产
 
             ### 系统要求
             - Windows 10/11 x64

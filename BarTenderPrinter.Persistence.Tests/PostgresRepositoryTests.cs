@@ -20,7 +20,7 @@ public sealed class PostgresRepositoryTests
         await migrator.MigrateAsync();
 
         await using var command = dataSource.CreateCommand("SELECT max(version) FROM schema_migrations");
-        Assert.Equal(9, Convert.ToInt32(await command.ExecuteScalarAsync()));
+        Assert.Equal(17, Convert.ToInt32(await command.ExecuteScalarAsync()));
     }
 
     [PostgresFact]
@@ -210,6 +210,24 @@ public sealed class PostgresRepositoryTests
         Assert.Equal(auditEvent.CorrelationId, reader.GetString(1));
         Assert.Contains("Draft", reader.GetString(2));
         Assert.Contains("Published", reader.GetString(3));
+    }
+
+    [PostgresFact]
+    public async Task OrderInsertRollsBackWhenTransactionalAuditFails()
+    {
+        await using var dataSource = CreateDataSource();
+        await new PostgresMigrator(dataSource).MigrateAsync();
+        var repository = new ProductionOrderRepository(dataSource);
+        var order = CreateOrder(EntityId.New());
+        var duplicateId = Unique("audit");
+        var audit = new AuditEventSnapshot(duplicateId, "actor", "station", "shift", Unique("correlation"),
+            "OrderCreated", "ProductionOrder", order.Id.Value, null, "{}", DateTimeOffset.UtcNow);
+        await new AuditEventRepository(dataSource).AppendAsync(audit);
+
+        await Assert.ThrowsAsync<PostgresException>(() => repository.InsertAsync(order, default,
+            _ => audit with { EntityId = order.Id.Value }));
+
+        Assert.Null(await repository.GetAsync(order.Id.Value));
     }
 
     private static NpgsqlDataSource CreateDataSource() =>

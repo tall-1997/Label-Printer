@@ -17,15 +17,37 @@ public sealed class InspectionRepository(NpgsqlDataSource dataSource)
 {
     public async Task<InspectionLotSnapshot> CreateLotAsync(InspectionLot lot, DateTimeOffset createdAtUtc,
         CancellationToken cancellationToken = default,
-        Func<InspectionLotSnapshot, AuditEventSnapshot>? auditFactory = null)
+        Func<InspectionLotSnapshot, AuditEventSnapshot>? auditFactory = null,
+        IdempotencyKey? idempotencyKey = null, string? requestHash = null)
     {
         ValidateUtc(createdAtUtc, nameof(createdAtUtc));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        if (idempotencyKey != null)
+        {
+            await AcquireIdempotencyLockAsync(connection, transaction, idempotencyKey.Value.Value, cancellationToken);
+            await using var replay = new NpgsqlCommand("""
+                SELECT id, order_id, inspection_type, sample_rule, sample_unit_ids_json::text, status, version,
+                       created_at_utc, request_hash FROM inspection_lots WHERE idempotency_key=$1
+                """, connection, transaction);
+            Add(replay, idempotencyKey.Value.Value);
+            await using var replayReader = await replay.ExecuteReaderAsync(cancellationToken);
+            if (await replayReader.ReadAsync(cancellationToken))
+            {
+                if (replayReader.GetString(8) != requestHash) throw IdempotencyConflict("抽检单创建");
+                var existing = new InspectionLotSnapshot(replayReader.GetString(0), replayReader.GetString(1),
+                    replayReader.GetString(2), replayReader.GetString(3), replayReader.GetString(4),
+                    replayReader.GetString(5), replayReader.GetInt64(6), ReadUtc(replayReader, 7), true);
+                await replayReader.CloseAsync();
+                await transaction.CommitAsync(cancellationToken);
+                return existing;
+            }
+        }
         const string sql = """
             INSERT INTO inspection_lots
-                (id, order_id, inspection_type, sample_rule, sample_unit_ids_json, status, version, created_at_utc)
-            SELECT $1,$2,$3,$4,$5,$6,$7,$8
+                (id, order_id, inspection_type, sample_rule, sample_unit_ids_json, status, version, created_at_utc,
+                 idempotency_key, request_hash)
+            SELECT $1,$2,$3,$4,$5,$6,$7,$8,$10,$11
             WHERE NOT EXISTS (
                 SELECT 1 FROM unnest($9::text[]) sample_id
                 LEFT JOIN production_units u ON u.id=sample_id AND u.order_id=$2
@@ -38,6 +60,7 @@ public sealed class InspectionRepository(NpgsqlDataSource dataSource)
         Add(command, lot.Status.ToString(), lot.Version, createdAtUtc);
         var sampleIds = lot.SampleUnitIds.Select(id => id.Value).ToArray();
         command.Parameters.AddWithValue(sampleIds);
+        Add(command, DbValue(idempotencyKey?.Value), DbValue(requestHash));
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
             throw new PersistenceBusinessException("INSPECTION_SAMPLE_ORDER_MISMATCH", "抽检样本必须全部属于抽检订单。");
         await using var samples = new NpgsqlCommand("""
@@ -157,6 +180,25 @@ public sealed class InspectionRepository(NpgsqlDataSource dataSource)
             throw new PersistenceConcurrencyException("InspectionLot", lotId);
         if (failed)
         {
+            await using (var unitHold = new NpgsqlCommand("""
+                INSERT INTO production_unit_quality_holds(lot_id, unit_id, previous_status)
+                SELECT $1, u.id, u.status FROM production_units u
+                WHERE u.id IN (SELECT DISTINCT unit_id FROM inspection_results WHERE lot_id=$1 AND outcome='Failed')
+                ON CONFLICT (lot_id, unit_id) DO NOTHING
+                """, connection, transaction))
+            {
+                Add(unitHold, lotId);
+                await unitHold.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await using (var freezeUnits = new NpgsqlCommand("""
+                UPDATE production_units SET status='Frozen', version=version+1
+                WHERE id IN (SELECT unit_id FROM production_unit_quality_holds WHERE lot_id=$1)
+                  AND status NOT IN ('Frozen','Scrapped')
+                """, connection, transaction))
+            {
+                Add(freezeUnits, lotId);
+                await freezeUnits.ExecuteNonQueryAsync(cancellationToken);
+            }
             await using var hold = new NpgsqlCommand("""
                 WITH RECURSIVE related(id) AS (
                     SELECT id FROM packaging_units
@@ -182,6 +224,12 @@ public sealed class InspectionRepository(NpgsqlDataSource dataSource)
                 """, connection, transaction);
             Add(freeze, lotId);
             await freeze.ExecuteNonQueryAsync(cancellationToken);
+            await using var task = new NpgsqlCommand("""
+                INSERT INTO quality_disposition_tasks(id, lot_id, status, created_at_utc)
+                VALUES ($1,$2,'Open',$3) ON CONFLICT (lot_id) DO NOTHING
+                """, connection, transaction);
+            Add(task, EntityId.New().Value, lotId, completedAtUtc);
+            await task.ExecuteNonQueryAsync(cancellationToken);
         }
         await using var command = new NpgsqlCommand("""
             INSERT INTO inspection_lot_commands(idempotency_key, request_hash, lot_id, result_status, created_at_utc)
@@ -198,7 +246,8 @@ public sealed class InspectionRepository(NpgsqlDataSource dataSource)
     public async Task<DispositionSnapshot> ApplyDispositionAsync(string lotId, DispositionDecision decision,
         string reasonCode, string approvedBy, IdempotencyKey idempotencyKey, string requestHash,
         DateTimeOffset approvedAtUtc, CancellationToken cancellationToken = default,
-        Func<DispositionSnapshot, AuditEventSnapshot>? auditFactory = null)
+        Func<DispositionSnapshot, AuditEventSnapshot>? auditFactory = null,
+        string reworkRouteId = "", string reworkStartOperationId = "")
     {
         ValidateUtc(approvedAtUtc, nameof(approvedAtUtc));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
@@ -231,6 +280,20 @@ public sealed class InspectionRepository(NpgsqlDataSource dataSource)
         await update.ExecuteNonQueryAsync(cancellationToken);
         if (decision == DispositionDecision.Release)
         {
+            await using (var releaseUnits = new NpgsqlCommand("""
+                UPDATE production_units u SET status=h.previous_status, version=version+1
+                FROM production_unit_quality_holds h
+                WHERE h.lot_id=$1 AND h.unit_id=u.id AND u.status='Frozen'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM production_unit_quality_holds other
+                      LEFT JOIN dispositions d ON d.lot_id=other.lot_id
+                      WHERE other.unit_id=u.id AND other.lot_id<>$1
+                        AND (d.id IS NULL OR d.decision<>'Release'))
+                """, connection, transaction))
+            {
+                Add(releaseUnits, lotId);
+                await releaseUnits.ExecuteNonQueryAsync(cancellationToken);
+            }
             await using var release = new NpgsqlCommand("""
                 UPDATE packaging_units p SET status=h.previous_status, version=version+1
                 FROM packaging_quality_holds h
@@ -244,9 +307,71 @@ public sealed class InspectionRepository(NpgsqlDataSource dataSource)
             Add(release, lotId);
             await release.ExecuteNonQueryAsync(cancellationToken);
         }
+        else if (decision == DispositionDecision.Scrap)
+        {
+            await using var scrap = new NpgsqlCommand("""
+                UPDATE production_units SET status='Scrapped', version=version+1
+                WHERE id IN (SELECT DISTINCT unit_id FROM inspection_results WHERE lot_id=$1 AND outcome='Failed')
+                  AND status<>'Scrapped'
+                """, connection, transaction);
+            Add(scrap, lotId);
+            await scrap.ExecuteNonQueryAsync(cancellationToken);
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(reworkRouteId) || string.IsNullOrWhiteSpace(reworkStartOperationId))
+                throw new PersistenceBusinessException("REWORK_CONTEXT_REQUIRED", "返工处置必须指定返工路线和起始工序。");
+            await using var rework = new NpgsqlCommand("""
+                WITH failed_units AS (
+                    SELECT DISTINCT r.unit_id FROM inspection_results r WHERE r.lot_id=$1 AND r.outcome='Failed'
+                ), created AS (
+                    INSERT INTO rework_orders
+                        (id, production_unit_id, route_id, reason_code, start_operation_id, status, sequence, version,
+                         order_id)
+                    SELECT md5($2 || ':' || f.unit_id), f.unit_id, $3, $4, $5, 'Draft',
+                           COALESCE((SELECT max(existing.sequence)+1 FROM rework_orders existing
+                                     WHERE existing.production_unit_id=f.unit_id),1), 0, l.order_id
+                    FROM failed_units f CROSS JOIN inspection_lots l
+                    JOIN manufacturing_routes route ON route.id=$3 AND route.order_id=l.order_id AND route.route_type='Rework'
+                    JOIN manufacturing_operations op ON op.route_id=route.id AND op.operation_id=$5
+                    WHERE l.id=$1
+                    RETURNING id
+                )
+                INSERT INTO disposition_rework_orders(disposition_id, rework_order_id)
+                SELECT $2,id FROM created
+                """, connection, transaction);
+            Add(rework, lotId, result.Id, reworkRouteId.Trim(), result.ReasonCode, reworkStartOperationId.Trim());
+            if (await rework.ExecuteNonQueryAsync(cancellationToken) == 0)
+                throw new PersistenceBusinessException("REWORK_CONTEXT_MISMATCH", "返工路线和起始工序必须属于抽检订单。");
+        }
+        await using (var completeTask = new NpgsqlCommand("""
+            UPDATE quality_disposition_tasks SET status='Completed', completed_by=$1, completed_at_utc=$2,
+                disposition_id=$3 WHERE lot_id=$4 AND status='Open'
+            """, connection, transaction))
+        {
+            Add(completeTask, result.ApprovedBy, approvedAtUtc, result.Id, lotId);
+            await completeTask.ExecuteNonQueryAsync(cancellationToken);
+        }
         await TransactionalAudit.AppendAsync(connection, transaction, auditFactory?.Invoke(result), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return result;
+    }
+
+    public async Task<IReadOnlyList<DispositionTaskSnapshot>> GetDispositionTasksAsync(string? status = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT id, lot_id, status, created_at_utc, completed_by, completed_at_utc, disposition_id
+            FROM quality_disposition_tasks WHERE ($1='' OR status=$1) ORDER BY created_at_utc, id
+            """);
+        Add(command, status?.Trim() ?? "");
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var results = new List<DispositionTaskSnapshot>();
+        while (await reader.ReadAsync(cancellationToken))
+            results.Add(new DispositionTaskSnapshot(reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                ReadUtc(reader, 3), reader.GetString(4), reader.IsDBNull(5) ? null : ReadUtc(reader, 5),
+                reader.IsDBNull(6) ? null : reader.GetString(6)));
+        return results;
     }
 
     private static async Task<InspectionLotSnapshot?> ReadLotAsync(NpgsqlConnection connection,
@@ -311,12 +436,14 @@ public sealed class InspectionRepository(NpgsqlDataSource dataSource)
 public sealed class ReworkOrderRepository(NpgsqlDataSource dataSource)
 {
     public async Task<ReworkOrderSnapshot> CreateAsync(ReworkOrder order, CancellationToken cancellationToken = default,
-        Func<ReworkOrderSnapshot, AuditEventSnapshot>? auditFactory = null)
+        Func<ReworkOrderSnapshot, AuditEventSnapshot>? auditFactory = null,
+        IdempotencyKey? idempotencyKey = null, string? requestHash = null)
     {
         const string sql = """
             INSERT INTO rework_orders
-                (id, production_unit_id, route_id, reason_code, start_operation_id, status, sequence, version, order_id)
-            SELECT $1,$2,$3,$4,$5,$6,$7,$8,u.order_id
+                (id, production_unit_id, route_id, reason_code, start_operation_id, status, sequence, version, order_id,
+                 idempotency_key, request_hash)
+            SELECT $1,$2,$3,$4,$5,$6,$7,$8,u.order_id,$9,$10
             FROM production_units u
             JOIN manufacturing_routes r ON r.id=$3 AND r.order_id=u.order_id AND r.route_type='Rework'
             JOIN manufacturing_operations op ON op.route_id=r.id AND op.operation_id=$5
@@ -324,9 +451,32 @@ public sealed class ReworkOrderRepository(NpgsqlDataSource dataSource)
             """;
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        if (idempotencyKey != null)
+        {
+            await AcquireIdempotencyLockAsync(connection, transaction, idempotencyKey.Value.Value, cancellationToken);
+            await using var replay = new NpgsqlCommand("""
+                SELECT id, production_unit_id, route_id, reason_code, start_operation_id, status, sequence,
+                       approved_by, approved_at_utc, closed_by, closed_at_utc, version, request_hash
+                FROM rework_orders WHERE idempotency_key=$1
+                """, connection, transaction);
+            Add(replay, idempotencyKey.Value.Value);
+            await using var reader = await replay.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                if (reader.GetString(12) != requestHash)
+                    throw new PersistenceBusinessException("IDEMPOTENCY_CONFLICT", "幂等键已用于其他返工创建请求。");
+                var existing = new ReworkOrderSnapshot(reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt32(6), reader.GetString(7),
+                    ReadNullableUtc(reader, 8), reader.GetString(9), ReadNullableUtc(reader, 10), reader.GetInt64(11), true);
+                await reader.CloseAsync();
+                await transaction.CommitAsync(cancellationToken);
+                return existing;
+            }
+        }
         await using var command = new NpgsqlCommand(sql, connection, transaction);
         Add(command, order.Id.Value, order.ProductionUnitId.Value, order.RouteId.Value, order.ReasonCode,
-            order.StartOperationId, order.Status.ToString(), order.Sequence, order.Version);
+            order.StartOperationId, order.Status.ToString(), order.Sequence, order.Version,
+            DbValue(idempotencyKey?.Value), DbValue(requestHash));
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
             throw new PersistenceBusinessException("REWORK_CONTEXT_MISMATCH", "返工生产单元、返工路线和起始工序必须存在且属于同一订单。");
         var result = Map(order, null);
@@ -474,19 +624,45 @@ public sealed class ShipmentRepository(NpgsqlDataSource dataSource)
 {
     public async Task<ShipmentSnapshot> CreateAsync(Shipment shipment, DateTimeOffset createdAtUtc,
         CancellationToken cancellationToken = default,
-        Func<ShipmentSnapshot, AuditEventSnapshot>? auditFactory = null)
+        Func<ShipmentSnapshot, AuditEventSnapshot>? auditFactory = null,
+        IdempotencyKey? idempotencyKey = null, string? requestHash = null)
     {
         ValidateUtc(createdAtUtc, nameof(createdAtUtc));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        if (idempotencyKey != null)
+        {
+            await AcquireIdempotencyLockAsync(connection, transaction, idempotencyKey.Value.Value, cancellationToken);
+            await using var replay = new NpgsqlCommand("""
+                SELECT s.id, s.order_id, s.customer, s.planned_quantity, s.delivery_reference, s.status, s.version,
+                       COALESCE(sum(i.quantity),0), s.created_at_utc, s.request_hash
+                FROM shipments s LEFT JOIN shipment_items i ON i.shipment_id=s.id
+                WHERE s.idempotency_key=$1 GROUP BY s.id
+                """, connection, transaction);
+            Add(replay, idempotencyKey.Value.Value);
+            await using var reader = await replay.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                if (reader.GetString(9) != requestHash)
+                    throw new PersistenceBusinessException("IDEMPOTENCY_CONFLICT", "幂等键已用于其他出库创建请求。");
+                var existing = new ShipmentSnapshot(reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetInt32(3), reader.GetString(4), reader.GetString(5), reader.GetInt64(6),
+                    Convert.ToInt32(reader.GetInt64(7), CultureInfo.InvariantCulture), ReadUtc(reader, 8), true);
+                await reader.CloseAsync();
+                await transaction.CommitAsync(cancellationToken);
+                return existing;
+            }
+        }
         await using var command = new NpgsqlCommand("""
             INSERT INTO shipments
-                (id, order_id, customer, planned_quantity, delivery_reference, status, version, created_at_utc)
-            SELECT $1,$2,$3,$4,$5,$6,$7,$8 FROM production_orders o
+                (id, order_id, customer, planned_quantity, delivery_reference, status, version, created_at_utc,
+                 idempotency_key, request_hash)
+            SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10 FROM production_orders o
             WHERE o.id=$2 AND o.customer=$3
             """, connection, transaction);
         Add(command, shipment.Id.Value, shipment.OrderId.Value, shipment.Customer, shipment.PlannedQuantity,
-            shipment.DeliveryReference, shipment.Status.ToString(), shipment.Version, createdAtUtc);
+            shipment.DeliveryReference, shipment.Status.ToString(), shipment.Version, createdAtUtc,
+            DbValue(idempotencyKey?.Value), DbValue(requestHash));
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
             throw new PersistenceBusinessException("SHIPMENT_ORDER_MISMATCH", "出库单客户与生产订单不匹配。");
         var result = new ShipmentSnapshot(shipment.Id.Value, shipment.OrderId.Value, shipment.Customer,
@@ -878,13 +1054,119 @@ public sealed class OrderArchiveRepository(NpgsqlDataSource dataSource, Extended
     public async Task<OrderArchiveSnapshotRecord?> GetByOrderIdAsync(string orderId,
         CancellationToken cancellationToken = default)
     {
-        await using var command = dataSource.CreateCommand("""
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("""
             SELECT id, order_id, payload_json::text, payload_hash, archived_at_utc, archived_by
-            FROM order_archive_snapshots WHERE order_id=$1
-            """);
+            FROM order_archive_snapshots WHERE order_id=$1 ORDER BY archived_at_utc DESC LIMIT 1
+            """, connection, transaction);
         Add(command, Required(orderId, nameof(orderId)));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? CreateVerifiedRecord(reader, false) : null;
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+        var id = reader.GetString(0);
+        var payload = reader.GetString(2);
+        var expectedHash = reader.GetString(3);
+        var actualHash = Hash(payload);
+        if (!string.Equals(expectedHash, actualHash, StringComparison.Ordinal))
+        {
+            await reader.CloseAsync();
+            await using var task = new NpgsqlCommand("""
+                INSERT INTO archive_repair_tasks
+                    (id, order_id, archive_id, expected_hash, actual_hash, status, created_at_utc)
+                VALUES ($1,$2,$3,$4,$5,'Open',$6) ON CONFLICT (archive_id) DO NOTHING
+                """, connection, transaction);
+            Add(task, EntityId.New().Value, orderId, id, expectedHash, actualHash, DateTimeOffset.UtcNow);
+            await task.ExecuteNonQueryAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            throw new PersistenceBusinessException("ARCHIVE_HASH_MISMATCH", "订单归档快照完整性校验失败。");
+        }
+        var result = new OrderArchiveSnapshotRecord(id, reader.GetString(1), payload, expectedHash,
+            ReadUtc(reader, 4), reader.GetString(5), false);
+        await reader.CloseAsync();
+        await transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    public async Task<IReadOnlyList<ArchiveRepairTaskSnapshot>> GetRepairTasksAsync(string? status = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT id, order_id, archive_id, expected_hash, actual_hash, status, created_at_utc, repaired_by,
+                   repaired_at_utc, replacement_archive_id
+            FROM archive_repair_tasks WHERE ($1='' OR status=$1) ORDER BY created_at_utc, id
+            """);
+        Add(command, status?.Trim() ?? "");
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var results = new List<ArchiveRepairTaskSnapshot>();
+        while (await reader.ReadAsync(cancellationToken))
+            results.Add(MapRepairTask(reader));
+        return results;
+    }
+
+    public async Task<ArchiveRepairTaskSnapshot> RepairAndRearchiveAsync(string taskId, string repairedBy,
+        IdempotencyKey key, string requestHash, DateTimeOffset repairedAtUtc,
+        CancellationToken cancellationToken = default,
+        Func<ArchiveRepairTaskSnapshot, AuditEventSnapshot>? auditFactory = null)
+    {
+        ValidateUtc(repairedAtUtc, nameof(repairedAtUtc));
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead,
+            cancellationToken);
+        await using (var idempotencyLock = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 12))", connection, transaction))
+        {
+            Add(idempotencyLock, key.Value);
+            await idempotencyLock.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await using var read = new NpgsqlCommand("""
+            SELECT id, order_id, archive_id, expected_hash, actual_hash, status, created_at_utc, repaired_by,
+                   repaired_at_utc, replacement_archive_id, idempotency_key, request_hash
+            FROM archive_repair_tasks WHERE id=$1 FOR UPDATE
+            """, connection, transaction);
+        Add(read, Required(taskId, nameof(taskId)));
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) throw new KeyNotFoundException("归档修复任务不存在。");
+        var task = MapRepairTask(reader);
+        var existingKey = reader.IsDBNull(10) ? null : reader.GetString(10);
+        var existingHash = reader.IsDBNull(11) ? null : reader.GetString(11);
+        await reader.CloseAsync();
+        if (task.Status == ArchiveRepairTaskStatus.Repaired.ToString())
+        {
+            if (existingKey != key.Value || existingHash != requestHash)
+                throw new PersistenceBusinessException("IDEMPOTENCY_CONFLICT", "归档修复任务已经完成。");
+            await transaction.CommitAsync(cancellationToken);
+            return task with { IsReplay = true };
+        }
+        var trace = await traceabilityRepository.QueryAsync(connection, TraceabilityQueryType.Order, task.OrderId,
+            cancellationToken) ?? throw new KeyNotFoundException("生产订单不存在。");
+        var payload = await CanonicalizeAsync(connection, transaction, JsonSerializer.Serialize(trace), cancellationToken);
+        var replacement = new OrderArchiveSnapshot(EntityId.New(), new EntityId(task.OrderId), payload, repairedAtUtc,
+            repairedBy);
+        await using (var insert = new NpgsqlCommand("""
+            INSERT INTO order_archive_snapshots
+                (id, order_id, payload_json, payload_hash, archived_at_utc, archived_by, idempotency_key, request_hash)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            """, connection, transaction))
+        {
+            Add(insert, replacement.Id.Value, replacement.OrderId.Value);
+            insert.Parameters.AddWithValue(NpgsqlDbType.Jsonb, replacement.PayloadJson);
+            Add(insert, replacement.PayloadHash, replacement.ArchivedAtUtc, replacement.ArchivedBy, key.Value, requestHash);
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await using (var update = new NpgsqlCommand("""
+            UPDATE archive_repair_tasks SET status='Repaired', repaired_by=$1, repaired_at_utc=$2,
+                replacement_archive_id=$3, idempotency_key=$4, request_hash=$5 WHERE id=$6
+            """, connection, transaction))
+        {
+            Add(update, Required(repairedBy, nameof(repairedBy)), repairedAtUtc, replacement.Id.Value, key.Value,
+                requestHash, taskId);
+            await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+        var result = task with { Status = ArchiveRepairTaskStatus.Repaired.ToString(), RepairedBy = repairedBy.Trim(),
+            RepairedAtUtc = repairedAtUtc, ReplacementArchiveId = replacement.Id.Value };
+        await TransactionalAudit.AppendAsync(connection, transaction, auditFactory?.Invoke(result), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return result;
     }
 
     private static OrderArchiveSnapshotRecord CreateVerifiedRecord(NpgsqlDataReader reader, bool isReplay)
@@ -897,6 +1179,14 @@ public sealed class OrderArchiveRepository(NpgsqlDataSource dataSource, Extended
         return new OrderArchiveSnapshotRecord(reader.GetString(0), reader.GetString(1), payload, storedHash,
             ReadUtc(reader, 4), reader.GetString(5), isReplay);
     }
+
+    private static ArchiveRepairTaskSnapshot MapRepairTask(NpgsqlDataReader reader) => new(reader.GetString(0),
+        reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5),
+        ReadUtc(reader, 6), reader.GetString(7), reader.IsDBNull(8) ? null : ReadUtc(reader, 8),
+        reader.IsDBNull(9) ? null : reader.GetString(9));
+
+    private static string Hash(string value) => Convert.ToHexString(
+        SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private static DateTimeOffset ReadUtc(NpgsqlDataReader reader, int ordinal) =>
         new(DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc));

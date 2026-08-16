@@ -24,8 +24,9 @@ $forbiddenExtensions = @(
     ".pfx", ".p12", ".pem", ".key", ".cer", ".crt", ".der", ".p7b", ".p7c",
     ".snk", ".jks", ".keystore", ".db", ".sqlite", ".sqlite3", ".log"
 )
+$forbiddenNamePattern = "(?i)(MobileMes|HASP|Sentinel|SafeNet|Hardlock|Dongle)"
 $forbiddenFiles = @($releaseFiles | Where-Object {
-    $_.Name -match "(?i)MobileMes" -or $forbiddenExtensions -contains $_.Extension.ToLowerInvariant()
+    $_.Name -match $forbiddenNamePattern -or $forbiddenExtensions -contains $_.Extension.ToLowerInvariant()
 })
 
 if ($forbiddenFiles) {
@@ -33,7 +34,7 @@ if ($forbiddenFiles) {
     throw "Forbidden release assets found: $($relativePaths -join ', ')"
 }
 
-$forbiddenContentName = "MobileMes"
+$forbiddenContentName = "(MobileMes|HASP|Sentinel|SafeNet|Hardlock|Dongle)"
 $managedBinaries = @($releaseFiles | Where-Object { $_.Extension -in ".dll", ".exe" })
 foreach ($binary in $managedBinaries) {
     $assemblyName = $null

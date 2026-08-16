@@ -1,16 +1,26 @@
 # BarTender Printer
 
-基于 Seagull BarTender COM 接口的包装 MES 标签自动化打印工具，支持订单管理、.btw 模板字段自动填充、右键打开模板、增降序锁定、历史字段导入、补打印、重复校验和历史追溯。
+基于 .NET 8、PostgreSQL 16 和 Seagull BarTender COM 接口的包装 MES 客户端与中心服务。系统覆盖订单状态、生产主数据、号码生命周期、组装包装、称重与写号任务、四类标签自动作业、质量处置、返工、出库、归档修复、CSV 数据交换、追溯及恢复操作。
 
 ![界面预览](assets/preview.png)
 
 ## 最新版本
 
-**v5.7.88** - C# WinForms MES 集成版
+**v5.7.89** - C# WinForms 完整 MES 工作流版
 
 ## 功能特性
 
 ### 核心功能
+- **完整 MIUIX WinForms 页面**：打印、订单管理和 MES 工位统一使用 MIUIX 风格主题与响应式页面结构
+- **订单状态闭环**：支持草稿、发布、生产、暂停、恢复和关闭，并以乐观并发版本保护状态转换
+- **生产主数据**：维护生产单元、标准/返工路线、有序工序、工位资格和四级包装单元
+- **号码生命周期**：支持 IMEI、SN、PSN、MSN、卡通箱号和卡板号的保留、分配、冻结、释放、报废及历史查询
+- **四类标签自动作业**：机身创建及彩盒、卡通箱、卡板满容量关闭时自动生成中心打印作业
+- **称重与写号任务**：按订单/包装类型执行重量规则判定，支持写号任务创建、领取、结果回传和不确定状态冻结
+- **质量与返工**：支持检验批、检验结果、质量处置任务、包装/生产单元冻结、放行、返工和报废
+- **出库与归档**：支持出库单、卡通箱扫描、数量确认、不可变归档、摘要校验、修复任务和替代归档
+- **CSV 导入导出**：订单和号段分批校验后原子导入，导出订单、号段和追溯数据并按权限脱敏
+- **操作恢复**：保存在线校验意图与打印快照，支持原幂等键重新提交、同步核对和转人工处理
 - **订单管理页面**：按客户、机型、颜色、订单号选择包装订单并调用绑定配置
 - **添加订单**：新增订单时填写可复用客户、机型、颜色和唯一订单号，页面内平铺配置模板和数据源
 - **多模板订单**：一个订单可绑定多个模板，每个模板独立保存数据源、打印机、份数、锁定和增降序设置
@@ -68,24 +78,33 @@
 - 所有非打印功能正常可用
 - 手动配置数据源
 
+### 设备与授权边界
+- 首期设备实现为模拟电子称和模拟写号适配器
+- `IScaleAdapter` 与 `IIdentifierWriter` 为真实设备适配接口，厂商协议和真实硬件工具由后续适配器接入
+- 项目范围排除 HASP/Sentinel 商业授权、加密狗驱动和许可证服务器模块
+- 登录认证、PBKDF2-SHA256 密码存储、Bearer 工位会话、角色授权、审计链和敏感字段脱敏继续作为安全基础能力
+
 ## 技术方案
 
 | 项目 | 说明 |
 |------|------|
 | 语言 | C# (.NET 8.0) |
 | UI | WinForms + MIUIX 风格配色 |
+| 中心服务 | ASP.NET Core Minimal API |
+| 中心存储 | PostgreSQL 16，v1-v17 版本化迁移 |
+| 设备 | 模拟适配器 + 真实适配接口 |
 | BarTender | COM 接口调用 |
 | 打印方式 | `Formats.Open` → `SetNamedSubStringValue` → `PrintOut` |
 | 预览方式 | .NET Framework 4.8 x64 隔离宿主调用 BarTender 2022 R2 `Seagull.BarTender.Print` SDK |
 | 配置存储 | Windows INI 文件 |
-| 历史记录 | CSV 文件 |
+| 本地历史 | SQLite、JSONL 兼容备份和 CSV 导出 |
 | 发布方式 | Inno Setup 当前用户安装包（内置 .NET 运行时） |
 
 ## 界面布局
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender Printer v5.7.88  By---池鱼  [日志] [关于] [导出日志] │
+│ BarTender Printer v5.7.89  By---池鱼  [日志] [关于] [导出日志] │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -121,6 +140,9 @@
 10. 继续扫码输入，重复打印
 11. 需要复用历史数据时，在历史记录中选择记录并点击“导入”或“补打印选中项”
 12. 需要直接打开模板时，右键 `.btw` 文件选择“使用 BarTenderPrinter 打开”
+13. MES 业务从 `MES 工位` 的订单、主数据、生产工位、质量返工、出库归档、导入导出、作业与恢复七个分组执行
+14. 称重与写号页当前明确标注模拟模式；现场真实设备接入前需实现并验证对应适配器
+15. 待处理操作在恢复页按原幂等键重新提交，状态冲突转人工核查
 
 > Windows 11 可能需要先点击“显示更多选项”，再选择“使用 BarTenderPrinter 打开”。
 
@@ -128,7 +150,12 @@
 
 - Windows 10/11 x64
 - BarTender 2022 R2 Enterprise（Automation/Enterprise Automation 版）
+- PostgreSQL 16（运行中心 MES API 时）
 - 安装包内置 .NET 运行时
+
+## 跨平台测试
+
+当前已确认结果：Domain 43、Devices 36、Printing 7、MesClient 32、Persistence 26、MesApi 34，共 178 项跨平台测试通过。Domain 测试覆盖基础契约、订单、生产、号段、包装、称重、质量、返工、出库和归档。
 
 ## 下载
 
@@ -136,6 +163,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
+| [v5.7.89](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.89) | ~50 MB | 完整 MES 工作流、PostgreSQL v17、CSV 交换、工位隔离与安全加固版 |
 | [v5.7.88](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.88) | ~50 MB | MES 工位、设备模拟、质量返工、出库归档与中心追溯集成版 |
 | [v5.7.87](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.87) | ~50 MB | 打印协调、历史灾难恢复与并发可靠性增强版 |
 | [v5.7.83](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.83) | ~50 MB | 响应式布局、多 DPI 与待核查状态显示修复版 |
@@ -211,6 +239,11 @@ Label-Printer/
 │   ├── OrderManager.cs        # 包装订单和模板归档管理
 │   ├── LoggerService.cs       # 日志服务
 │   └── MiuiTheme.cs           # MIUIX 风格主题
+├── BarTenderPrinter.Domain/   # 跨平台领域模型与共享契约
+├── BarTenderPrinter.Devices/  # 模拟设备适配器与真实设备接口
+├── BarTenderPrinter.Persistence/ # PostgreSQL 16 持久化、迁移和 CSV 交换
+├── BarTenderPrinter.MesApi/   # MES 中心 API、认证、授权和审计
+├── BarTenderPrinter.*.Tests/  # 跨平台及 Windows 测试项目
 ├── bartender_printer.py       # Python 版（v2.x）
 ├── label_printer.py           # 通用标签打印工具
 ├── assets/                    # 资源文件
@@ -241,6 +274,8 @@ dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --
 # 使用 Inno Setup 6 构建当前用户安装包
 iscc installer/BarTenderPrinter.iss
 ```
+
+MES API 通过 `ConnectionStrings__MesDatabase` 接收 PostgreSQL 16 连接字符串，通过 `MesSecurity__Sessions__{index}` 配置 Bearer 工位会话。配置模板只保留占位符，实际令牌和密码由部署环境注入。
 
 ### Python 版
 ```bash

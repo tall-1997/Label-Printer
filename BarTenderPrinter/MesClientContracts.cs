@@ -84,6 +84,150 @@ namespace BarTenderPrinter
         public string IdempotencyKey { get; set; } = "";
     }
 
+    public class MesIdempotentRequest
+    {
+        public string IdempotencyKey { get; set; } = "";
+    }
+
+    public sealed class MesOrderTransitionRequest : MesIdempotentRequest
+    {
+        public string TargetStatus { get; set; } = "Published";
+        public long ExpectedVersion { get; set; }
+    }
+
+    public sealed class MesProductionUnitRequest : MesIdempotentRequest
+    {
+        public string OrderId { get; set; } = "";
+        public IReadOnlyDictionary<string, string> AllocationIds { get; set; } =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public sealed class MesRouteOperationRequest
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public int Sequence { get; set; }
+    }
+
+    public sealed class MesRouteRequest : MesIdempotentRequest
+    {
+        public string OrderId { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string RouteType { get; set; } = "Standard";
+        public IReadOnlyList<MesRouteOperationRequest> Operations { get; set; } = Array.Empty<MesRouteOperationRequest>();
+    }
+
+    public sealed class MesStationRequest : MesIdempotentRequest
+    {
+        public string Name { get; set; } = "";
+        public IReadOnlyList<string> QualifiedOperationIds { get; set; } = Array.Empty<string>();
+    }
+
+    public sealed class MesPackagingUnitRequest : MesIdempotentRequest
+    {
+        public string OrderId { get; set; } = "";
+        public string UnitType { get; set; } = "Carton";
+        public string Code { get; set; } = "";
+        public string ProductModel { get; set; } = "";
+        public string Color { get; set; } = "";
+        public int Capacity { get; set; }
+        public string ProductionUnitId { get; set; }
+    }
+
+    public sealed class MesNumberStatusRequest : MesIdempotentRequest
+    {
+        public string TargetStatus { get; set; } = "Frozen";
+        public string ReasonCode { get; set; } = "";
+    }
+
+    public sealed class MesWeightRuleRequest : MesIdempotentRequest
+    {
+        public string OrderId { get; set; } = "";
+        public string PackagingUnitType { get; set; } = "Carton";
+        public decimal MinimumWeight { get; set; }
+        public decimal MaximumWeight { get; set; }
+        public string Unit { get; set; } = "kg";
+    }
+
+    public sealed class MesWeightRequest : MesIdempotentRequest
+    {
+        public decimal Weight { get; set; }
+        public string Unit { get; set; } = "kg";
+        public string DeviceId { get; set; } = "simulated-scale";
+        public bool IsSimulated { get; set; } = true;
+    }
+
+    public sealed class MesIdentifierWriteTaskRequest : MesIdempotentRequest
+    {
+        public string UnitId { get; set; } = "";
+        public IReadOnlyList<string> AllocationIds { get; set; } = Array.Empty<string>();
+        public string Platform { get; set; } = "android";
+        public string TargetStationId { get; set; } = "";
+    }
+
+    public sealed class MesIdentifierWriteClaimRequest : MesIdempotentRequest
+    {
+        public string Platform { get; set; } = "android";
+    }
+
+    public sealed class MesIdentifierWriteResultRequest : MesIdempotentRequest
+    {
+        public string State { get; set; } = "Succeeded";
+        public JsonElement Result { get; set; }
+        public string DiagnosticCode { get; set; } = "";
+    }
+
+    public sealed class MesInspectionLotRequest : MesIdempotentRequest
+    {
+        public string OrderId { get; set; } = "";
+        public string InspectionType { get; set; } = "OQC";
+        public string SampleRule { get; set; } = "";
+        public IReadOnlyList<string> SampleUnitIds { get; set; } = Array.Empty<string>();
+    }
+
+    public sealed class MesInspectionResultRequest : MesIdempotentRequest
+    {
+        public string UnitId { get; set; } = "";
+        public string ItemCode { get; set; } = "";
+        public string Outcome { get; set; } = "Passed";
+        public string DefectCode { get; set; } = "";
+        public string ResponsibleOperationId { get; set; } = "";
+        public string Remarks { get; set; } = "";
+    }
+
+    public sealed class MesInspectionCompleteRequest : MesIdempotentRequest
+    {
+        public long ExpectedVersion { get; set; }
+    }
+
+    public sealed class MesInspectionDispositionRequest : MesIdempotentRequest
+    {
+        public string Decision { get; set; } = "Release";
+        public string ReasonCode { get; set; } = "";
+    }
+
+    public sealed class MesReworkOrderRequest : MesIdempotentRequest
+    {
+        public string ProductionUnitId { get; set; } = "";
+        public string RouteId { get; set; } = "";
+        public string ReasonCode { get; set; } = "";
+        public string StartOperationId { get; set; } = "";
+        public int Sequence { get; set; }
+    }
+
+    public sealed class MesShipmentRequest : MesIdempotentRequest
+    {
+        public string OrderId { get; set; } = "";
+        public string Customer { get; set; } = "";
+        public int PlannedQuantity { get; set; }
+        public string DeliveryReference { get; set; } = "";
+    }
+
+    public sealed class MesShipmentCartonRequest : MesIdempotentRequest
+    {
+        public string CartonId { get; set; } = "";
+    }
+
     public sealed class MesPrintJob
     {
         public string JobId { get; set; } = "";
@@ -183,6 +327,8 @@ namespace BarTenderPrinter
         public string ReceiptPayloadJson { get; set; } = "";
         public MesPendingState State { get; set; }
         public string ErrorCode { get; set; } = "";
+        public string CorrelationId { get; set; } = "";
+        public string ReviewNote { get; set; } = "";
         public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
         public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     }
@@ -200,5 +346,7 @@ namespace BarTenderPrinter
         System.Threading.Tasks.Task<MesResult<T>> GetAsync<T>(string path, System.Threading.CancellationToken cancellationToken = default);
         System.Threading.Tasks.Task<MesResult<T>> PostAsync<T>(string path, object request, string idempotencyKey,
             System.Threading.CancellationToken cancellationToken = default);
+        System.Threading.Tasks.Task<MesResult<T>> PostBytesAsync<T>(string path, byte[] request, string contentType,
+            string idempotencyKey, System.Threading.CancellationToken cancellationToken = default);
     }
 }

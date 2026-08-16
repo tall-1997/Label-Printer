@@ -31,12 +31,37 @@ public sealed record NumberRangeSnapshot(
 
 public sealed record NumberAllocationResult(string Id, string Value, string Status, bool IsReplay);
 
+public sealed record NumberAllocationStatusSnapshot(string AllocationId, string Value, string Status,
+    string UnitId, bool IsReplay);
+
+public sealed record NumberAllocationHistorySnapshot(string Id, string AllocationId, string PreviousStatus,
+    string NextStatus, string ReasonCode, string ActorId, string StationId, DateTimeOffset ChangedAtUtc);
+
 public sealed record ProductionUnitSnapshot(
     string Id,
     string OrderId,
     string Status,
     string CurrentOperationId,
     long Version);
+
+public sealed record ManufacturingRouteSnapshot(string Id, string OrderId, string Name, string RouteType,
+    IReadOnlyList<ManufacturingOperationSnapshot> Operations);
+public sealed record ManufacturingOperationSnapshot(string Id, string Name, int Sequence);
+public sealed record StationSnapshot(string Id, string Name, IReadOnlyList<string> QualifiedOperationIds);
+public sealed record PackagingUnitSnapshot(string Id, string OrderId, string UnitType, string Code,
+    string ProductModel, string Color, int Capacity, string Status, long Version, string? ProductionUnitId);
+
+public sealed record WeightRuleSnapshot(string Id, string OrderId, string PackagingUnitType,
+    decimal MinimumWeight, decimal MaximumWeight, string Unit, long Version);
+public sealed record WeightMeasurementSnapshot(string Id, string PackagingUnitId, string RuleId,
+    decimal Weight, string Unit, string DeviceId, bool IsSimulated, string Result,
+    decimal MinimumWeight, decimal MaximumWeight, DateTimeOffset MeasuredAtUtc, bool IsReplay);
+
+public sealed record IdentifierWriteTaskSnapshot(string Id, string UnitId, string[] AllocationIds,
+    string IdentifiersJson, string Platform, string TargetStationId, string State, string ClaimedByStationId,
+    string ClaimedByOperatorId, string? ResultJson, string DiagnosticCode, long Version,
+    DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc, bool IsReplay = false);
+public sealed record IdentifierWriteClaimResult(IdentifierWriteTaskSnapshot? Task, bool IsReplay);
 
 public sealed record StationPassSnapshot(
     string Id,
@@ -163,6 +188,9 @@ public sealed record InspectionResultSnapshot(string Id, string LotId, string Un
 public sealed record DispositionSnapshot(string Id, string LotId, string Decision, string ReasonCode,
     string ApprovedBy, DateTimeOffset ApprovedAtUtc, bool IsReplay);
 
+public sealed record DispositionTaskSnapshot(string Id, string LotId, string Status, DateTimeOffset CreatedAtUtc,
+    string CompletedBy, DateTimeOffset? CompletedAtUtc, string? DispositionId = null);
+
 public sealed record ReworkOrderSnapshot(string Id, string ProductionUnitId, string RouteId, string ReasonCode,
     string StartOperationId, string Status, int Sequence, string ApprovedBy, DateTimeOffset? ApprovedAtUtc,
     string ClosedBy, DateTimeOffset? ClosedAtUtc, long Version, bool IsReplay = false);
@@ -176,6 +204,15 @@ public sealed record ShipmentItemSnapshot(string ShipmentId, string CartonId, in
 
 public sealed record OrderArchiveSnapshotRecord(string Id, string OrderId, string PayloadJson, string PayloadHash,
     DateTimeOffset ArchivedAtUtc, string ArchivedBy, bool IsReplay);
+
+public sealed record ArchiveRepairTaskSnapshot(string Id, string OrderId, string ArchiveId, string ExpectedHash,
+    string ActualHash, string Status, DateTimeOffset CreatedAtUtc, string RepairedBy,
+    DateTimeOffset? RepairedAtUtc, string? ReplacementArchiveId, bool IsReplay = false);
+
+public sealed record CsvImportErrorSnapshot(int RowNumber, string Code, string Message);
+public sealed record CsvImportBatchSnapshot(string Id, string ImportType, string SourceSha256, string Status,
+    int TotalRows, int ValidRows, IReadOnlyList<CsvImportErrorSnapshot> Errors, DateTimeOffset CreatedAtUtc,
+    string CreatedBy, DateTimeOffset? ConfirmedAtUtc = null, bool IsReplay = false);
 
 public sealed record ExtendedTraceabilitySnapshot(
     TraceabilityQueryType QueryType,

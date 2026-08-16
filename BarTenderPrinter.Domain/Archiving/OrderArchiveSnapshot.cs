@@ -4,6 +4,24 @@ using BarTenderPrinter.Domain.Common;
 
 namespace BarTenderPrinter.Domain.Archiving;
 
+public enum ArchiveRepairTaskStatus
+{
+    Open,
+    Repaired
+}
+
+public sealed record ArchiveRepairTask(
+    EntityId Id,
+    EntityId OrderId,
+    EntityId ArchiveId,
+    string ExpectedHash,
+    string ActualHash,
+    ArchiveRepairTaskStatus Status,
+    DateTimeOffset CreatedAtUtc,
+    string RepairedBy = "",
+    DateTimeOffset? RepairedAtUtc = null,
+    EntityId? ReplacementArchiveId = null);
+
 public sealed record OrderArchiveSnapshot
 {
     public EntityId Id { get; }

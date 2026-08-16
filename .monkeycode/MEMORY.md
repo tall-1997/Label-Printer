@@ -23,7 +23,8 @@ This file records user instructions, preferences, and teachings for reference in
 
 [Complete queued work autonomously]
 - Date: 2026-08-15
-- Context: User-defined collaboration preference for multi-stage implementation
+- Context: User-defined collaboration preference for multi-stage implementation and full feature migration
 - Instructions:
-  - Complete all remaining planned tasks in one continuous execution.
-  - Do not pause for clarification or send progress reports when the existing specification provides sufficient direction.
+  - Complete all requested and remaining planned tasks in one continuous execution, including implementation, tests, and delivery verification.
+  - Do not pause for confirmation, clarification, or intermediate approval when repository context and existing specifications provide sufficient direction.
+  - Resolve overlapping implementations autonomously by selecting the option with stronger correctness, maintainability, and project consistency.

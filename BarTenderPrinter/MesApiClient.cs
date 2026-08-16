@@ -66,6 +66,10 @@ namespace BarTenderPrinter
             CancellationToken cancellationToken = default) =>
             SendAsync<T>(HttpMethod.Post, path, request, idempotencyKey, cancellationToken);
 
+        public Task<MesResult<T>> PostBytesAsync<T>(string path, byte[] request, string contentType,
+            string idempotencyKey, CancellationToken cancellationToken = default) =>
+            SendAsync<T>(HttpMethod.Post, path, new RawContent(request, contentType), idempotencyKey, cancellationToken);
+
         private async Task<MesResult<T>> SendAsync<T>(HttpMethod method, string path, object request,
             string idempotencyKey, CancellationToken cancellationToken)
         {
@@ -91,7 +95,12 @@ namespace BarTenderPrinter
                         message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
                     if (!string.IsNullOrWhiteSpace(idempotencyKey))
                         message.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
-                    if (request != null)
+                    if (request is RawContent raw)
+                    {
+                        message.Content = new ByteArrayContent(raw.Content);
+                        message.Content.Headers.ContentType = new MediaTypeHeaderValue(raw.ContentType);
+                    }
+                    else if (request != null)
                         message.Content = new StringContent(JsonSerializer.Serialize(request, JsonOptions), Encoding.UTF8, "application/json");
 
                     _log?.Info($"MES {method.Method} {SafePath(path)} correlationId={correlationId} attempt={attempt}");
@@ -103,7 +112,11 @@ namespace BarTenderPrinter
                         ? "" : await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
                     if (response.IsSuccessStatusCode)
                     {
-                        var value = string.IsNullOrWhiteSpace(body) ? default : JsonSerializer.Deserialize<T>(body, JsonOptions);
+                        var value = typeof(T) == typeof(string)
+                            ? (T)(object)body
+                            : typeof(T) == typeof(byte[])
+                                ? (T)(object)Encoding.UTF8.GetBytes(body)
+                                : string.IsNullOrWhiteSpace(body) ? default : JsonSerializer.Deserialize<T>(body, JsonOptions);
                         return MesResult<T>.Success(value, responseCorrelation, (int)response.StatusCode);
                     }
 
@@ -185,6 +198,18 @@ namespace BarTenderPrinter
                 CorrelationId = correlationId,
                 Retryable = true
             });
+
+        private sealed class RawContent
+        {
+            public RawContent(byte[] content, string contentType)
+            {
+                Content = content ?? throw new ArgumentNullException(nameof(content));
+                ContentType = string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType;
+            }
+
+            public byte[] Content { get; }
+            public string ContentType { get; }
+        }
 
         public void Dispose() => _httpClient.Dispose();
     }

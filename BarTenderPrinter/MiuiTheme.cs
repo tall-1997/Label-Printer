@@ -38,6 +38,8 @@ namespace BarTenderPrinter
         public static readonly Color Success = Color.FromArgb(34, 197, 94);
         public static readonly Color Error = Color.FromArgb(239, 68, 68);
         public static readonly Color Warning = Color.FromArgb(245, 158, 11);
+        public static readonly Color WarningLight = Color.FromArgb(255, 247, 237);
+        public static readonly Color WarningText = Color.FromArgb(154, 52, 18);
         public static readonly Color Divider = Color.FromArgb(226, 232, 240);
         public static readonly Color InputBackground = Color.FromArgb(248, 250, 252);
         public static readonly Color Border = Color.FromArgb(203, 213, 225);
@@ -154,6 +156,16 @@ namespace BarTenderPrinter
             tabs.DrawItem -= DrawModernTab;
             tabs.DrawItem += DrawModernTab;
             foreach (TabPage page in tabs.TabPages) page.BackColor = CardBackground;
+        }
+
+        public static void RefreshDpi(Control root, int dpi)
+        {
+            foreach (Control control in root.Controls)
+            {
+                if (control is TabControl tabs) StyleTabControl(tabs, dpi);
+                if (control is DataGridView grid) StyleDataGridView(grid);
+                if (control.HasChildren) RefreshDpi(control, dpi);
+            }
         }
 
         private static void DrawModernTab(object sender, DrawItemEventArgs e)

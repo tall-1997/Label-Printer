@@ -33,7 +33,7 @@
 
 ## 设备边界
 
-`IDeviceAdapter` 提供适配器 ID 和模拟模式标识。
+`IDeviceAdapter` 提供适配器 ID 和模拟模式标识。`IScaleAdapter` 与 `IIdentifierWriter` 是真实设备接入边界；当前交付实现为模拟适配器，尚未包含厂商串口协议、写号工具、HASP/Sentinel 加密狗或商业许可服务集成。
 
 `IScaleAdapter.ReadStableAsync()` 接收串口、波特率、数据切片、单位、稳定读数次数和超时组成的 `ScaleProfile`，返回重量、单位、设备 ID、UTC 采集时间及模拟标识。`SimulatedScaleAdapter` 支持 `StableReading`、`Timeout`、`FormatError` 和 `OutOfRange` 场景；配置、超时和协议错误通过 `DeviceAdapterException` 携带稳定设备错误码。
 
@@ -57,7 +57,7 @@
 
 日期格式支持：无日期、YYMM、YYMMDD、YYYYMM、YYYYMMDD、两位年份加年内日、四位年份加年内日和 MMDD。
 
-`NumberAllocation` 生命周期包含已保留、已分配、已释放、已报废和已冻结。
+`NumberAllocation` 生命周期包含 `Reserved`、`Assigned`、`Released`、`Scrapped` 和 `Frozen`。中心状态命令记录原因码、操作员、工位、UTC 时间、幂等键和状态历史；写号结果为 `Uncertain` 时，关联的已保留或已分配号码自动冻结，活动生产单元同时冻结。
 
 ## 生产单元
 
@@ -89,7 +89,7 @@
 
 持久化完成失败抽检单时递归冻结关联包装；`Release` 处置将相关 `Frozen` 包装恢复为 `Closed`。`Shipment` 从 `Draft` 经箱号扫描进入 `PendingConfirmation`，仅接收同订单、已关闭且包含机身的卡通箱，并拒绝质量冻结和重复出库。实际数量等于计划数量后才能确认，确认后相关卡通箱更新为 `Shipped`。
 
-`OrderArchiveSnapshot` 仅为已关闭订单创建。归档内容是扩展追溯结果的不可变 JSON，并保存小写 SHA-256 摘要、归档人和 UTC 时间；每个订单最多一个归档快照。
+`OrderArchiveSnapshot` 仅为已关闭订单创建。归档内容是扩展追溯结果的不可变 JSON，并保存小写 SHA-256 摘要、归档人和 UTC 时间。正常业务创建首份归档；摘要校验失败时生成修复任务，受控修复保留原快照并创建替代归档。
 
 ## 包装聚合
 
@@ -109,7 +109,7 @@
 
 `IUnitOfWork.CommitAsync()` 定义中心持久化提交边界。`PostgresOptions` 从项目配置接收连接字符串并创建 `NpgsqlDataSource`，`PostgresMigrator` 在事务级 advisory lock 内按版本执行迁移。
 
-当前 PostgreSQL schema 包含生产订单、号段、号码分配、生产单元、制造路线、工序、工位、工位资格、过站记录、包装单元、包装绑定、包装打印意图、打印作业、打印领取请求、审计事件、抽检单、检验结果、质量处置、返工任务、返工命令、出库单、出库明细、出库命令和订单归档。迁移版本 1 建立核心表和唯一索引，版本 2 增加包装打印意图表，版本 3 增加制造配置表及包装绑定幂等字段和唯一索引，版本 4 增加打印领取与回执字段和索引，版本 5 增加可记录空队列结果的打印领取请求表，版本 6 增加生产单元到机身包装的唯一关联及打印作业追溯外键，版本 7 增加质量、返工、出库和订单归档表、外键、唯一索引及命令幂等记录，版本 8 增加抽检样本订单约束、质量冻结原状态、返工过站上下文约束、抽检完成命令记录及归档更新删除保护，版本 9 安全清理历史跨订单抽检样本并保留修复审计。
+PostgreSQL 16 schema 由 v1-v17 迁移管理。v1-v9 建立订单、号段、生产、包装、打印、审计、质量、返工、出库、归档和数据修复基础；v10 增加通用 MES 幂等命令；v11 增加号码状态历史；v12 增加称重规则与测量；v13 增加写号任务、领取和结果；v14 增加质量处置任务、生产单元冻结及处置关联返工；v15 增加归档摘要异常修复任务和替代归档关系；v16 增加 CSV 导入批次、逐行校验结果和原子确认记录；v17 增加写号任务目标工位和工位/平台队列索引。迁移在事务级 advisory lock 内顺序执行。
 
 仓储职责：
 
@@ -126,13 +126,15 @@
 - `ReworkOrderRepository`：创建返工任务，幂等推进审批、激活与完成状态，并在完成前核对返工路线过站。
 - `ShipmentRepository`：校验客户与订单，幂等扫描卡通箱，阻止质量冻结和重复出库，并按计划数量确认出库。
 - `ExtendedTraceabilityRepository`：在核心追溯上聚合质量、返工、出库和归档记录。
-- `OrderArchiveRepository`：为已关闭订单生成一次性扩展追溯快照和 SHA-256 摘要。
+- `OrderArchiveRepository`：为已关闭订单生成扩展追溯快照和 SHA-256 摘要，校验归档并通过修复任务创建替代归档。
+- `MesCoreRepository`：处理订单状态、生产主数据、号码状态、称重、写号任务和四类标签自动作业。
+- `CsvExchangeRepository`：暂存并逐行验证订单/号段 UTF-8 CSV，原子确认导入，并导出订单、号段和追溯 CSV。
 
 号段值、生产单元 IMEI/SN、包装码、活动父级、打印作业幂等键均由数据库唯一索引约束。版本条件更新冲突抛出 `PersistenceConcurrencyException`；同幂等键异摘要返回 `IDEMPOTENCY_CONFLICT`。
 
 ## HTTP 接口
 
-受保护接口使用 `Authorization: Bearer <token>`。项目配置中的工位会话必须同时包含用户、至少一个角色、工位和班次。`StationSessionFilter` 在业务端点执行前校验并缓存会话上下文，写操作只从该认证上下文读取操作员、工位和班次。策略包含 `Planner`、`ProcessEngineer`、`NumberAllocator`、`StationOperator`、`ReprintApprover`、`ReworkOperator`、`ReworkApprover`、`QualityOperator`、`DispositionApprover`、`ArchiveOperator`、`ShipmentConfirmer` 和 `WarehouseOperator`。质量处置要求 `QualityManager`，返工审批与完成要求 `ProductionSupervisor`，归档要求 `ArchiveAdministrator`，出库确认要求 `WarehouseSupervisor`。
+受保护接口使用 `Authorization: Bearer <token>`。项目配置中的工位会话必须同时包含用户、至少一个角色、工位和班次。`StationSessionFilter` 在业务端点执行前校验并缓存会话上下文，写操作只从该认证上下文读取操作员、工位和班次。授权策略覆盖计划、工艺、号码、生产主数据、工位、质量处置、返工、仓库、归档和数据交换；高风险操作由 `QualityManager`、`ProductionSupervisor`、`WarehouseSupervisor` 或 `ArchiveAdministrator` 等角色隔离。
 
 `AuditSnapshot` 为状态变更生成统一审计事件。审计事件包含认证用户、工位、班次、关联 ID、动作、关联实体及前后 JSON 快照；IMEI、SN 和设备诊断字段在入库前递归替换为 `***`。幂等重放沿用首次业务结果，不重复追加审计事件。
 
@@ -167,6 +169,26 @@
 ### POST /api/number-ranges/{id}/allocations
 
 事务申请下一个号码，需要 `ProcessEngineer` 或 `ProductionOperator` 角色。请求包含 `idempotencyKey`；服务端根据号段、幂等键、操作员和工位计算摘要。相同请求返回首次号码并设置 `isReplay=true`，异请求复用键返回 `IDEMPOTENCY_CONFLICT`。
+
+### 订单、主数据与号码生命周期接口
+
+- `POST /api/orders/{id}/transitions`：按预期版本执行 `Draft -> Published -> InProduction/Closed`、生产暂停、恢复和关闭。
+- `POST /api/production-units`：使用同订单号码分配创建生产单元，创建时将号码从 `Reserved` 推进为 `Assigned`。
+- `POST /api/routes`：创建标准或返工路线及有序工序。
+- `POST /api/stations`：创建工位及合格工序集合。
+- `POST /api/packaging-units`：创建机身、彩盒、卡通箱或卡板；机身创建后自动登记机身标签作业。
+- `POST /api/number-allocations/{id}/status`：将号码变更为 `Frozen`、`Released` 或 `Scrapped` 并记录原因和审计。
+- `GET /api/number-allocations/{id}/history`：查询完整号码状态历史。
+
+### 称重、写号与自动标签接口
+
+- `POST /api/weight-rules`：按订单和包装类型创建重量上下限规则。
+- `POST /api/packaging-units/{id}/weights`：记录重量、单位、设备和模拟标识，并返回 `Passed` 或 `Failed`。
+- `POST /api/identifier-write-tasks`：为生产单元与号码分配创建写号任务。
+- `POST /api/identifier-write-tasks/claims`：由认证工位幂等领取最早待处理任务，空队列返回 204。
+- `POST /api/identifier-write-tasks/{id}/results`：提交 `Succeeded`、`Failed` 或 `Uncertain` 结果及诊断码。
+
+机身创建、彩盒关闭、卡通箱关闭和卡板关闭分别自动登记四类标签作业。作业通过既有打印领取、回执和恢复接口处理。
 
 ### POST /api/station-passes
 
@@ -205,10 +227,10 @@
 
 ### 返工接口
 
-- `POST /api/rework-orders`：创建返工任务，要求 `ReworkOperator`。
-- `POST /api/rework-orders/{id}/approve`：幂等审批返工任务，要求 `ReworkApprover`。
-- `POST /api/rework-orders/{id}/activate`：幂等激活返工任务，要求 `ReworkOperator`。
-- `POST /api/rework-orders/{id}/complete`：核对路线并幂等完成返工，要求 `ReworkApprover`。
+- `POST /api/rework-orders`：创建返工任务，策略 `ReworkCreator` 要求 `QualityEngineer`。
+- `POST /api/rework-orders/{id}/approve`：幂等审批返工任务，策略 `ReworkApprover` 要求 `QualityManager`。
+- `POST /api/rework-orders/{id}/activate`：幂等激活返工任务，策略 `ReworkExecutor` 要求 `ProductionSupervisor`。
+- `POST /api/rework-orders/{id}/complete`：核对路线并幂等完成返工，策略 `ReworkExecutor` 要求 `ProductionSupervisor`。
 
 ### 出库与归档接口
 
@@ -217,12 +239,25 @@
 - `POST /api/shipments/{id}/confirm`：幂等确认计划数量，要求 `ShipmentConfirmer`。
 - `POST /api/orders/{orderId}/archive`：为已关闭订单创建归档，要求 `ArchiveOperator`。
 - `GET /api/orders/{orderId}/archive`：读取订单归档，要求有效工位会话。
+- `GET /api/archive-repair-tasks?status=Open`：查询归档摘要异常修复任务，要求 `ArchiveOperator`。
+- `POST /api/archive-repair-tasks/{id}/repair`：受控创建替代归档并关闭修复任务，要求 `ArchiveOperator`。
+
+### CSV 数据交换接口
+
+- `POST /api/csv-imports/{type}`：暂存 `orders` 或 `number-ranges` UTF-8 CSV，限制 10 MB，返回逐行校验错误，要求 `DataImporter`。
+- `GET /api/csv-imports/{id}`：查询批次状态与错误。
+- `POST /api/csv-imports/{id}/confirm`：幂等原子确认有效批次。
+- `GET /api/csv-exports/orders`：导出订单 CSV。
+- `GET /api/csv-exports/number-ranges`：导出号段 CSV。
+- `GET /api/csv-exports/traceability`：导出生产单元追溯 CSV。
+
+CSV 导出按角色决定敏感字段可见性，并对可能触发表格公式的值进行转义。
 
 ## WinForms MES 客户端契约
 
 `MesConnectionOptions` 配置绝对 HTTP/HTTPS 地址、1 至 120 秒超时和 0 至 3 次重试。`MesApiClient` 为每次逻辑请求生成 `X-Correlation-ID`，发送 Bearer 会话和可选 `Idempotency-Key`；GET 与带幂等键的请求可在超时、429 和 5xx 时重试。日志只记录隐藏查询值后的路径。
 
-`MesWorkstationService` 提供健康检查、订单查询、组装过站、包装绑定、打印领取与回执、打印恢复和追溯查询。连接配置保存到 `mes-connection.json`，业务意图和打印恢复快照保存到 `mes-pending-operations.json`。过站与包装保持在线校验，连接失败时保留 `Pending` 意图并返回 `ONLINE_VALIDATION_REQUIRED`。打印恢复按原始业务幂等键查询中心；本地与中心状态一致时转为 `Synced`，冲突时保留双方快照并转为 `ReviewRequired`。
+`MesWorkstationService` 提供健康检查、订单状态、主数据、号码生命周期、组装包装、称重、写号、质量处置任务、返工、出库、归档修复、CSV、打印、追溯和恢复操作。连接配置保存到 `mes-connection.json`，业务意图和打印恢复快照保存到 `mes-pending-operations.json`。过站与包装保持在线校验，连接失败时保留 `Pending` 意图并返回 `ONLINE_VALIDATION_REQUIRED`。操作恢复支持按原幂等键重新提交和附说明转人工处理；打印恢复按原始业务幂等键查询中心，一致时转为 `Synced`，冲突时保留双方快照并转为 `ReviewRequired`。
 
 ## 现有打印边界
 

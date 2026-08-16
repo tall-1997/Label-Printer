@@ -14,7 +14,8 @@ namespace BarTenderPrinter.Persistence;
 
 public sealed class ProductionOrderRepository(NpgsqlDataSource dataSource)
 {
-    public async Task InsertAsync(ProductionOrder order, CancellationToken cancellationToken = default)
+    public async Task InsertAsync(ProductionOrder order, CancellationToken cancellationToken = default,
+        Func<ProductionOrder, AuditEventSnapshot>? auditFactory = null)
     {
         ArgumentNullException.ThrowIfNull(order);
         const string sql = """
@@ -22,10 +23,14 @@ public sealed class ProductionOrderRepository(NpgsqlDataSource dataSource)
                 (id, order_number, customer, product_model, color, planned_quantity, valid_from_utc, valid_to_utc, status, version)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             """;
-        await using var command = dataSource.CreateCommand(sql);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
         Add(command, order.Id.Value, order.OrderNumber, order.Customer, order.ProductModel, order.Color,
             order.PlannedQuantity, DbValue(order.ValidFromUtc), DbValue(order.ValidToUtc), order.Status.ToString(), order.Version);
         await command.ExecuteNonQueryAsync(cancellationToken);
+        await TransactionalAudit.AppendAsync(connection, transaction, auditFactory?.Invoke(order), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<ProductionOrderSnapshot?> GetAsync(string id, CancellationToken cancellationToken = default)
@@ -67,7 +72,8 @@ public sealed class ProductionOrderRepository(NpgsqlDataSource dataSource)
 
 public sealed class NumberRangeRepository(NpgsqlDataSource dataSource)
 {
-    public async Task InsertAsync(NumberRange range, CancellationToken cancellationToken = default)
+    public async Task InsertAsync(NumberRange range, CancellationToken cancellationToken = default,
+        Func<NumberRange, AuditEventSnapshot>? auditFactory = null)
     {
         ArgumentNullException.ThrowIfNull(range);
         const string sql = """
@@ -75,11 +81,15 @@ public sealed class NumberRangeRepository(NpgsqlDataSource dataSource)
                 (id, order_id, number_type, prefix, date_pattern, start_value, end_value, next_value, step, numeric_width, validation_pattern, is_exhausted, version)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,false,$12)
             """;
-        await using var command = dataSource.CreateCommand(sql);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
         Add(command, range.Id.Value, range.OrderId.Value, range.Type.ToString(), range.Prefix,
             range.DatePattern.ToString(), range.Start, range.End, range.NextValue, range.Step,
             range.NumericWidth, range.ValidationPattern, range.Version);
         await command.ExecuteNonQueryAsync(cancellationToken);
+        await TransactionalAudit.AppendAsync(connection, transaction, auditFactory?.Invoke(range), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<NumberRangeSnapshot?> GetAsync(string id, CancellationToken cancellationToken = default)
@@ -102,7 +112,8 @@ public sealed class NumberRangeRepository(NpgsqlDataSource dataSource)
 
     public async Task<NumberAllocationResult> AllocateAsync(string rangeId, IdempotencyKey idempotencyKey,
         string requestHash, string stationId, string operatorId, DateTimeOffset utcNow,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<NumberAllocationResult, AuditEventSnapshot>? auditFactory = null)
     {
         ValidateUtc(utcNow, nameof(utcNow));
         requestHash = Required(requestHash, nameof(requestHash));
@@ -169,8 +180,10 @@ public sealed class NumberRangeRepository(NpgsqlDataSource dataSource)
         await using var updateCommand = new NpgsqlCommand(updateSql, connection, transaction);
         Add(updateCommand, isNowExhausted, rangeId);
         await updateCommand.ExecuteNonQueryAsync(cancellationToken);
+        var result = new NumberAllocationResult(allocationId, value, NumberAllocationStatus.Reserved.ToString(), false);
+        await TransactionalAudit.AppendAsync(connection, transaction, auditFactory?.Invoke(result), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new NumberAllocationResult(allocationId, value, NumberAllocationStatus.Reserved.ToString(), false);
+        return result;
     }
 
     private static async Task<(NumberAllocationResult Result, string RequestHash)?> ReadAllocationAsync(
@@ -319,7 +332,8 @@ public sealed class StationPassRepository(NpgsqlDataSource dataSource)
         DateTimeOffset occurredAtUtc,
         string reworkOrderId = "",
         int reworkSequence = 0,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<StationPassSnapshot, AuditEventSnapshot>? auditFactory = null)
     {
         ValidateUtc(occurredAtUtc, nameof(occurredAtUtc));
         unitId = Required(unitId, nameof(unitId));
@@ -446,6 +460,7 @@ public sealed class StationPassRepository(NpgsqlDataSource dataSource)
         Add(updateCommand, operationId, unitId, unitVersion);
         if (await updateCommand.ExecuteNonQueryAsync(cancellationToken) != 1)
             throw new PersistenceConcurrencyException(nameof(ProductionUnit), unitId);
+        await TransactionalAudit.AppendAsync(connection, transaction, auditFactory?.Invoke(snapshot), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return snapshot;
     }
@@ -509,7 +524,8 @@ public sealed class PackagingRepository(NpgsqlDataSource dataSource)
     public async Task<PackagingBindingResult> BindPackagingAsync(string parentId, string childId,
         long expectedParentVersion, string operatorId, DateTimeOffset utcNow,
         IdempotencyKey idempotencyKey, string requestHash,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<PackagingBindingResult, AuditEventSnapshot>? auditFactory = null)
     {
         ValidateUtc(utcNow, nameof(utcNow));
         parentId = Required(parentId, nameof(parentId));
@@ -603,7 +619,7 @@ public sealed class PackagingRepository(NpgsqlDataSource dataSource)
             throw new PersistenceConcurrencyException(nameof(PackagingUnit), parentId);
 
         PackagingPrintIntentSnapshot? printIntent = null;
-        if (closesParent && parent.Type is PackagingUnitType.Carton or PackagingUnitType.Pallet)
+        if (closesParent && parent.Type is PackagingUnitType.ColorBox or PackagingUnitType.Carton or PackagingUnitType.Pallet)
         {
             await using var childrenCommand = new NpgsqlCommand("""
                 SELECT u.code FROM packaging_bindings b
@@ -624,20 +640,17 @@ public sealed class PackagingRepository(NpgsqlDataSource dataSource)
                 ["CHILD_CODES"] = string.Join(",", childCodes)
             });
             printIntent = new PackagingPrintIntentSnapshot(EntityId.New().Value, parentId,
-                parent.Type == PackagingUnitType.Carton ? LabelType.Carton.ToString() : LabelType.Pallet.ToString(),
+                parent.Type.ToString(),
                 fieldsJson, utcNow);
-            await using var intentCommand = new NpgsqlCommand("""
-                INSERT INTO packaging_print_intents(id, packaging_unit_id, label_type, fields_json, created_at_utc)
-                VALUES ($1,$2,$3,$4,$5)
-                ON CONFLICT (packaging_unit_id) DO NOTHING
-                """, connection, transaction);
-            Add(intentCommand, printIntent.Id, printIntent.PackagingUnitId, printIntent.LabelType);
-            intentCommand.Parameters.AddWithValue(NpgsqlDbType.Jsonb, printIntent.FieldsJson);
-            intentCommand.Parameters.AddWithValue(printIntent.CreatedAtUtc);
-            await intentCommand.ExecuteNonQueryAsync(cancellationToken);
+            await MesCoreRepository.RegisterPackagingLabelAsync(connection, transaction,
+                new PackagingUnitSnapshot(parentId, parent.OrderId, parent.Type.ToString(), parent.Code,
+                    parent.ProductModel, parent.Color, parent.Capacity, PackagingUnitStatus.Closed.ToString(),
+                    expectedParentVersion + 1, null), childCodes, utcNow, cancellationToken, printIntent.Id);
         }
+        var result = new PackagingBindingResult(parentId, childId, expectedParentVersion + 1, closesParent, false, printIntent);
+        await TransactionalAudit.AppendAsync(connection, transaction, auditFactory?.Invoke(result), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new PackagingBindingResult(parentId, childId, expectedParentVersion + 1, closesParent, false, printIntent);
+        return result;
     }
 
     public async Task InsertPrintIntentAsync(PackagingPrintIntent intent,
@@ -755,7 +768,8 @@ public sealed class PrintJobRepository(NpgsqlDataSource dataSource)
 
     public async Task<PrintJobClaimResult> ClaimNextAsync(string stationId, string operatorId,
         IdempotencyKey idempotencyKey, string requestHash, DateTimeOffset claimedAtUtc,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<PrintJobSnapshot, AuditEventSnapshot>? auditFactory = null)
     {
         ValidateUtc(claimedAtUtc, nameof(claimedAtUtc));
         stationId = Required(stationId, nameof(stationId));
@@ -822,13 +836,15 @@ public sealed class PrintJobRepository(NpgsqlDataSource dataSource)
             claimedAtUtc, cancellationToken);
         var claimed = await ReadPrintJobAsync(connection, transaction, jobId, cancellationToken)
             ?? throw new InvalidOperationException("已领取打印作业无法读取。");
+        await TransactionalAudit.AppendAsync(connection, transaction, auditFactory?.Invoke(claimed), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new PrintJobClaimResult(claimed, false);
     }
 
     public async Task<PrintJobReceiptResult> RecordReceiptAsync(string jobId, string stationId,
         IdempotencyKey idempotencyKey, string requestHash, string state, string resultJson,
-        DateTimeOffset receivedAtUtc, CancellationToken cancellationToken = default)
+        DateTimeOffset receivedAtUtc, CancellationToken cancellationToken = default,
+        Func<PrintJobSnapshot, AuditEventSnapshot>? auditFactory = null)
     {
         ValidateUtc(receivedAtUtc, nameof(receivedAtUtc));
         jobId = Required(jobId, nameof(jobId));
@@ -883,6 +899,7 @@ public sealed class PrintJobRepository(NpgsqlDataSource dataSource)
             throw new PersistenceConcurrencyException("PrintJob", jobId);
         var updated = await ReadPrintJobAsync(connection, transaction, jobId, cancellationToken)
             ?? throw new InvalidOperationException("已更新打印作业无法读取。");
+        await TransactionalAudit.AppendAsync(connection, transaction, auditFactory?.Invoke(updated), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new PrintJobReceiptResult(updated, false);
     }

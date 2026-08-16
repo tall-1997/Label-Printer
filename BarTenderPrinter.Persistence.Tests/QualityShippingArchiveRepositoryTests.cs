@@ -85,6 +85,35 @@ public sealed class QualityShippingArchiveRepositoryTests
         await using var status = dataSource.CreateCommand("SELECT status FROM packaging_units WHERE id=$1");
         status.Parameters.AddWithValue(body.Id.Value);
         Assert.Equal("Closed", await status.ExecuteScalarAsync());
+        await using var unitStatus = dataSource.CreateCommand("SELECT status FROM production_units WHERE id=$1");
+        unitStatus.Parameters.AddWithValue(unit.Id.Value);
+        Assert.Equal("Created", await unitStatus.ExecuteScalarAsync());
+        var tasks = await repository.GetDispositionTasksAsync("Completed");
+        Assert.Contains(tasks, task => task.LotId == lot.Id.Value && task.DispositionId != null);
+    }
+
+    [PostgresFact]
+    public async Task ScrapDispositionMarksFailedProductionUnitScrapped()
+    {
+        await using var dataSource = CreateDataSource();
+        await new PostgresMigrator(dataSource).MigrateAsync();
+        var order = new ProductionOrder(EntityId.New(), Unique("ORDER"), "Customer", "M1", "BLACK", 1);
+        await new ProductionOrderRepository(dataSource).InsertAsync(order);
+        var unit = new ProductionUnit(EntityId.New(), order.Id);
+        await new ProductionUnitRepository(dataSource).InsertAsync(unit);
+        var lot = new InspectionLot(EntityId.New(), order.Id, "OQC", "ONE", [unit.Id]);
+        var repository = new InspectionRepository(dataSource);
+        await repository.CreateLotAsync(lot, DateTimeOffset.UtcNow);
+        await repository.AddResultAsync(lot.Id.Value, unit.Id.Value, "APPEARANCE", InspectionOutcome.Failed,
+            "BROKEN", "OP-1", "", new IdempotencyKey(Unique("result")), "result-hash", DateTimeOffset.UtcNow);
+
+        await repository.CompleteLotAsync(lot.Id.Value, 0);
+        await repository.ApplyDispositionAsync(lot.Id.Value, DispositionDecision.Scrap, "UNRECOVERABLE", "manager",
+            new IdempotencyKey(Unique("disposition")), "disposition-hash", DateTimeOffset.UtcNow);
+
+        await using var status = dataSource.CreateCommand("SELECT status FROM production_units WHERE id=$1");
+        status.Parameters.AddWithValue(unit.Id.Value);
+        Assert.Equal("Scrapped", await status.ExecuteScalarAsync());
     }
 
     [PostgresFact]
@@ -106,13 +135,24 @@ public sealed class QualityShippingArchiveRepositoryTests
         var replay = await repository.AddResultAsync(lot.Id.Value, unit.Id.Value, "APPEARANCE",
             InspectionOutcome.Failed, "SCRATCH", "OP-1", "", resultKey, "hash-1", DateTimeOffset.UtcNow);
         var completed = await repository.CompleteLotAsync(lot.Id.Value, 0);
+        var route = new ManufacturingRoute(EntityId.New(), order.Id, "Disposition repair", RouteType.Rework,
+        [
+            new ManufacturingOperation { Id = "RW-1", Name = "Repair", Sequence = 1 }
+        ]);
+        await new ManufacturingConfigurationRepository(dataSource).InsertRouteAsync(route);
         var disposition = await repository.ApplyDispositionAsync(lot.Id.Value, DispositionDecision.Rework,
-            "REPAIR", "quality-manager", new IdempotencyKey(Unique("disposition")), "hash-2", DateTimeOffset.UtcNow);
+            "REPAIR", "quality-manager", new IdempotencyKey(Unique("disposition")), "hash-2", DateTimeOffset.UtcNow,
+            default, null, route.Id.Value, "RW-1");
 
         Assert.False(first.IsReplay);
         Assert.True(replay.IsReplay);
         Assert.Equal("Failed", completed.Status);
         Assert.Equal("Rework", disposition.Decision);
+        await using var link = dataSource.CreateCommand("""
+            SELECT count(*) FROM disposition_rework_orders WHERE disposition_id=$1
+            """);
+        link.Parameters.AddWithValue(disposition.Id);
+        Assert.Equal(1L, await link.ExecuteScalarAsync());
     }
 
     [PostgresFact]
@@ -286,6 +326,41 @@ public sealed class QualityShippingArchiveRepositoryTests
         var exception = await Assert.ThrowsAsync<PostgresException>(() => update.ExecuteNonQueryAsync());
 
         Assert.Equal(PostgresErrorCodes.ObjectNotInPrerequisiteState, exception.SqlState);
+    }
+
+    [PostgresFact]
+    public async Task ArchiveHashMismatchCreatesRepairTaskAndControlledRepairCreatesReplacement()
+    {
+        await using var dataSource = CreateDataSource();
+        await new PostgresMigrator(dataSource).MigrateAsync();
+        var order = new ProductionOrder(EntityId.New(), Unique("ORDER"), "Customer", "M1", "BLACK", 1);
+        await new ProductionOrderRepository(dataSource).InsertAsync(order);
+        var archiveId = Unique("archive");
+        await using (var insert = dataSource.CreateCommand("""
+            INSERT INTO order_archive_snapshots
+                (id, order_id, payload_json, payload_hash, archived_at_utc, archived_by, idempotency_key, request_hash)
+            VALUES ($1,$2,'{}','wrong',$3,'archiver',$4,'hash')
+            """))
+        {
+            insert.Parameters.AddWithValue(archiveId);
+            insert.Parameters.AddWithValue(order.Id.Value);
+            insert.Parameters.AddWithValue(DateTimeOffset.UtcNow);
+            insert.Parameters.AddWithValue(Unique("archive-key"));
+            await insert.ExecuteNonQueryAsync();
+        }
+        var repository = new OrderArchiveRepository(dataSource,
+            new ExtendedTraceabilityRepository(dataSource, new TraceabilityRepository(dataSource)));
+
+        var mismatch = await Assert.ThrowsAsync<PersistenceBusinessException>(() =>
+            repository.GetByOrderIdAsync(order.Id.Value));
+        var task = (await repository.GetRepairTasksAsync("Open")).Single(value => value.ArchiveId == archiveId);
+        var repaired = await repository.RepairAndRearchiveAsync(task.Id, "archive-admin",
+            new IdempotencyKey(Unique("repair")), "repair-hash", DateTimeOffset.UtcNow);
+
+        Assert.Equal("ARCHIVE_HASH_MISMATCH", mismatch.Code);
+        Assert.Equal("Repaired", repaired.Status);
+        Assert.NotNull(repaired.ReplacementArchiveId);
+        Assert.Equal(repaired.ReplacementArchiveId, (await repository.GetByOrderIdAsync(order.Id.Value))?.Id);
     }
 
     private static NpgsqlDataSource CreateDataSource() =>

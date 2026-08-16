@@ -1,5 +1,9 @@
 using BarTenderPrinter.Domain.Numbering;
 using BarTenderPrinter.Domain.Quality;
+using BarTenderPrinter.Domain.Orders;
+using BarTenderPrinter.Domain.Packaging;
+using BarTenderPrinter.Domain.Production;
+using BarTenderPrinter.Domain.Routing;
 using System.Text.Json;
 
 namespace BarTenderPrinter.MesApi;
@@ -27,6 +31,28 @@ public sealed record CreateNumberRangeRequest(
     string ValidationPattern);
 
 public sealed record AllocateNumberRequest(string IdempotencyKey);
+public sealed record TransitionOrderRequest(ProductionOrderStatus TargetStatus, long ExpectedVersion,
+    string IdempotencyKey);
+public sealed record CreateProductionUnitRequest(string OrderId,
+    IReadOnlyDictionary<NumberType, string> AllocationIds, string IdempotencyKey);
+public sealed record CreateRouteRequest(string OrderId, string Name, RouteType RouteType,
+    IReadOnlyList<CreateOperationRequest> Operations, string IdempotencyKey);
+public sealed record CreateOperationRequest(string Id, string Name, int Sequence);
+public sealed record CreateStationRequest(string Name, IReadOnlyList<string> QualifiedOperationIds,
+    string IdempotencyKey);
+public sealed record CreatePackagingUnitRequest(string OrderId, PackagingUnitType UnitType, string Code,
+    string ProductModel, string Color, int Capacity, string? ProductionUnitId, string IdempotencyKey);
+public sealed record ChangeNumberStatusRequest(NumberAllocationStatus TargetStatus, string ReasonCode,
+    string IdempotencyKey);
+public sealed record CreateWeightRuleRequest(string OrderId, PackagingUnitType PackagingUnitType,
+    decimal MinimumWeight, decimal MaximumWeight, string Unit, string IdempotencyKey);
+public sealed record RecordWeightRequest(decimal Weight, string Unit, string DeviceId, bool IsSimulated,
+    string IdempotencyKey);
+public sealed record CreateIdentifierWriteTaskRequest(string UnitId, IReadOnlyList<string> AllocationIds,
+    string Platform, string TargetStationId, string IdempotencyKey);
+public sealed record ClaimIdentifierWriteTaskRequest(string Platform, string IdempotencyKey);
+public sealed record IdentifierWriteResultRequest(IdentifierWriteTaskState State, JsonElement Result,
+    string DiagnosticCode, string IdempotencyKey);
 
 public sealed record StationPassRequest(
     string UnitId,
@@ -51,18 +77,21 @@ public sealed record PrintJobReceiptRequest(
     JsonElement Result);
 
 public sealed record CreateInspectionLotRequest(string OrderId, string InspectionType, string SampleRule,
-    IReadOnlyList<string> SampleUnitIds);
+    IReadOnlyList<string> SampleUnitIds, string IdempotencyKey = "");
 public sealed record AddInspectionResultRequest(string UnitId, string ItemCode, InspectionOutcome Outcome,
     string DefectCode, string ResponsibleOperationId, string Remarks, string IdempotencyKey);
 public sealed record CompleteInspectionLotRequest(long ExpectedVersion, string IdempotencyKey = "");
-public sealed record ApplyDispositionRequest(DispositionDecision Decision, string ReasonCode, string IdempotencyKey);
+public sealed record ApplyDispositionRequest(DispositionDecision Decision, string ReasonCode, string IdempotencyKey,
+    string ReworkRouteId = "", string ReworkStartOperationId = "");
 
 public sealed record CreateReworkOrderRequest(string ProductionUnitId, string RouteId, string ReasonCode,
-    string StartOperationId, int Sequence);
+    string StartOperationId, int Sequence, string IdempotencyKey = "");
 public sealed record ReworkCommandRequest(string IdempotencyKey);
 
 public sealed record CreateShipmentRequest(string OrderId, string Customer, int PlannedQuantity,
-    string DeliveryReference);
+    string DeliveryReference, string IdempotencyKey = "");
 public sealed record AddShipmentCartonRequest(string CartonId, string IdempotencyKey);
 public sealed record ConfirmShipmentRequest(string IdempotencyKey);
 public sealed record ArchiveOrderRequest(string IdempotencyKey);
+public sealed record ConfirmCsvImportRequest(string IdempotencyKey = "");
+public sealed record RepairArchiveRequest(string IdempotencyKey = "");

@@ -32,6 +32,10 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("ArchiveOperator", policy => policy.RequireRole("ArchiveAdministrator"));
     options.AddPolicy("ShipmentConfirmer", policy => policy.RequireRole("WarehouseSupervisor"));
     options.AddPolicy("WarehouseOperator", policy => policy.RequireRole("WarehouseOperator", "WarehouseSupervisor"));
+    options.AddPolicy("ProductionMasterData", policy => policy.RequireRole("ProcessEngineer", "ProductionSupervisor"));
+    options.AddPolicy("NumberDisposition", policy => policy.RequireRole("QualityManager", "ProductionSupervisor"));
+    options.AddPolicy("DataImporter", policy => policy.RequireRole("Planner", "ProcessEngineer"));
+    options.AddPolicy("DataExporter", policy => policy.RequireRole("Planner", "ProcessEngineer", "QualityManager", "ArchiveAdministrator"));
 });
 builder.Services.AddSingleton(sp =>
 {
@@ -53,6 +57,8 @@ builder.Services.AddSingleton<InspectionRepository>();
 builder.Services.AddSingleton<ReworkOrderRepository>();
 builder.Services.AddSingleton<ShipmentRepository>();
 builder.Services.AddSingleton<OrderArchiveRepository>();
+builder.Services.AddSingleton<MesCoreRepository>();
+builder.Services.AddSingleton<CsvExchangeRepository>();
 builder.Services.AddSingleton<StationSessionFilter>();
 
 var app = builder.Build();
@@ -80,8 +86,9 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
 var api = app.MapGroup("/api").RequireAuthorization().AddEndpointFilter<StationSessionFilter>();
 api.MapExtendedEndpoints();
+api.MapCoreEndpoints();
 api.MapPost("/orders", async (CreateProductionOrderRequest request, ProductionOrderRepository repository,
-    AuditEventRepository auditRepository, HttpContext context, CancellationToken cancellationToken) =>
+    HttpContext context, CancellationToken cancellationToken) =>
 {
     var order = new ProductionOrder(EntityId.New(),
         ApiValidation.Required(request.OrderNumber, "orderNumber"),
@@ -89,9 +96,9 @@ api.MapPost("/orders", async (CreateProductionOrderRequest request, ProductionOr
         ApiValidation.Required(request.ProductModel, "productModel"),
         ApiValidation.Required(request.Color, "color"),
         request.PlannedQuantity, request.ValidFromUtc, request.ValidToUtc);
-    await repository.InsertAsync(order, cancellationToken);
-    await auditRepository.AppendAsync(AuditSnapshot.Create(context, "OrderCreated", "ProductionOrder", order.Id.Value,
-        null, new { order.OrderNumber, order.Status }), cancellationToken);
+    await repository.InsertAsync(order, cancellationToken,
+        value => AuditSnapshot.Create(context, "OrderCreated", "ProductionOrder", value.Id.Value,
+            null, new { value.OrderNumber, value.Status }));
     return Results.Created($"/api/orders/{order.Id.Value}", await repository.GetAsync(order.Id.Value, cancellationToken));
 }).RequireAuthorization("Planner");
 
@@ -105,14 +112,14 @@ api.MapGet("/orders/{id}", async (string id, ProductionOrderRepository repositor
 });
 
 api.MapPost("/number-ranges", async (CreateNumberRangeRequest request, NumberRangeRepository repository,
-    AuditEventRepository auditRepository, HttpContext context, CancellationToken cancellationToken) =>
+    HttpContext context, CancellationToken cancellationToken) =>
 {
     var range = new NumberRange(EntityId.New(), new EntityId(ApiValidation.Required(request.OrderId, "orderId")),
         request.NumberType, ApiValidation.Optional(request.Prefix, "prefix", 64), request.DatePattern,
         request.Start, request.End, request.Step, request.NumericWidth, ApiValidation.RegexPattern(request.ValidationPattern));
-    await repository.InsertAsync(range, cancellationToken);
-    await auditRepository.AppendAsync(AuditSnapshot.Create(context, "NumberRangeCreated", "NumberRange", range.Id.Value,
-        null, new { range.OrderId, range.Type, range.Start, range.End }), cancellationToken);
+    await repository.InsertAsync(range, cancellationToken,
+        value => AuditSnapshot.Create(context, "NumberRangeCreated", "NumberRange", value.Id.Value,
+            null, new { value.OrderId, value.Type, value.Start, value.End }));
     return Results.Created($"/api/number-ranges/{range.Id.Value}", await repository.GetAsync(range.Id.Value, cancellationToken));
 }).RequireAuthorization("ProcessEngineer");
 
@@ -126,7 +133,7 @@ api.MapGet("/number-ranges/{id}", async (string id, NumberRangeRepository reposi
 });
 
 api.MapPost("/number-ranges/{id}/allocations", async (string id, AllocateNumberRequest request,
-    NumberRangeRepository repository, AuditEventRepository auditRepository, HttpContext context,
+    NumberRangeRepository repository, HttpContext context,
     CancellationToken cancellationToken) =>
 {
     id = ApiValidation.Required(id, "id");
@@ -137,15 +144,14 @@ api.MapPost("/number-ranges/{id}/allocations", async (string id, AllocateNumberR
     var requestHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
         JsonSerializer.Serialize(new { RangeId = id, key.Value, operatorId, stationId })))).ToLowerInvariant();
     var result = await repository.AllocateAsync(id, key, requestHash, stationId, operatorId,
-        DateTimeOffset.UtcNow, cancellationToken);
-    if (!result.IsReplay)
-        await auditRepository.AppendAsync(AuditSnapshot.Create(context, "NumberAllocated", "NumberRange", id, null,
-            new { result.Id, result.Status, result.Value }), cancellationToken);
+        DateTimeOffset.UtcNow, cancellationToken,
+        value => AuditSnapshot.Create(context, "NumberAllocated", "NumberRange", id, null,
+            new { value.Id, value.Status, value.Value }));
     return Results.Ok(result);
 }).RequireAuthorization("NumberAllocator");
 
 api.MapPost("/station-passes", async (StationPassRequest request, StationPassRepository repository,
-    AuditEventRepository auditRepository, HttpContext context, CancellationToken cancellationToken) =>
+    HttpContext context, CancellationToken cancellationToken) =>
 {
     var unitId = ApiValidation.Required(request.UnitId, "unitId");
     var orderId = ApiValidation.Required(request.OrderId, "orderId");
@@ -163,15 +169,14 @@ api.MapPost("/station-passes", async (StationPassRequest request, StationPassRep
         unitId, orderId, routeId, operationId, stationId, operatorId, reworkOrderId, request.ReworkSequence
     });
     var result = await repository.PassAsync(unitId, orderId, routeId, operationId, stationId, operatorId,
-        key, requestHash, DateTimeOffset.UtcNow, reworkOrderId, request.ReworkSequence, cancellationToken);
-    if (!result.IsReplay)
-        await auditRepository.AppendAsync(AuditSnapshot.Create(context, "StationPassed", "ProductionUnit", unitId,
-            null, new { result.RouteId, result.OperationId, result.Id }), cancellationToken);
+        key, requestHash, DateTimeOffset.UtcNow, reworkOrderId, request.ReworkSequence, cancellationToken,
+        value => AuditSnapshot.Create(context, "StationPassed", "ProductionUnit", unitId,
+            null, new { value.RouteId, value.OperationId, value.Id }));
     return Results.Ok(result);
 }).RequireAuthorization("StationOperator");
 
 api.MapPost("/packaging-bindings", async (BindPackagingRequest request, PackagingRepository repository,
-    AuditEventRepository auditRepository, HttpContext context, CancellationToken cancellationToken) =>
+    HttpContext context, CancellationToken cancellationToken) =>
 {
     var parentId = ApiValidation.Required(request.ParentId, "parentId");
     var childId = ApiValidation.Required(request.ChildId, "childId");
@@ -181,16 +186,15 @@ api.MapPost("/packaging-bindings", async (BindPackagingRequest request, Packagin
     var operatorId = GetSession(context).UserId;
     var requestHash = HashRequest(new { parentId, childId, request.ExpectedParentVersion, operatorId });
     var result = await repository.BindPackagingAsync(parentId, childId, request.ExpectedParentVersion, operatorId,
-        DateTimeOffset.UtcNow, key, requestHash, cancellationToken);
-    if (!result.IsReplay)
-        await auditRepository.AppendAsync(AuditSnapshot.Create(context, "PackagingBound", "PackagingUnit", parentId,
-            null, new { result.ChildId, result.ParentVersion, result.ParentClosed,
-                PrintIntentId = result.PrintIntent?.Id }), cancellationToken);
+        DateTimeOffset.UtcNow, key, requestHash, cancellationToken,
+        value => AuditSnapshot.Create(context, "PackagingBound", "PackagingUnit", parentId,
+            null, new { value.ChildId, value.ParentVersion, value.ParentClosed,
+                PrintIntentId = value.PrintIntent?.Id }));
     return Results.Ok(result);
 }).RequireAuthorization("StationOperator");
 
 api.MapPost("/print-jobs/claims", async (ClaimPrintJobRequest request, PrintJobRepository repository,
-    AuditEventRepository auditRepository, HttpContext context, CancellationToken cancellationToken) =>
+    HttpContext context, CancellationToken cancellationToken) =>
 {
     var key = new IdempotencyKey(request.IdempotencyKey);
     var session = GetSession(context);
@@ -198,16 +202,15 @@ api.MapPost("/print-jobs/claims", async (ClaimPrintJobRequest request, PrintJobR
     var stationId = session.StationId;
     var requestHash = HashRequest(new { stationId, operatorId });
     var result = await repository.ClaimNextAsync(stationId, operatorId, key, requestHash,
-        DateTimeOffset.UtcNow, cancellationToken);
+        DateTimeOffset.UtcNow, cancellationToken,
+        value => AuditSnapshot.Create(context, "PrintJobClaimed", "PrintJob", value.JobId,
+            new { State = "Received" }, new { value.State, stationId }));
     if (result.Job == null) return Results.NoContent();
-    if (!result.IsReplay)
-        await auditRepository.AppendAsync(AuditSnapshot.Create(context, "PrintJobClaimed", "PrintJob", result.Job.JobId,
-            new { State = "Received" }, new { result.Job.State, stationId }), cancellationToken);
     return Results.Ok(result);
 }).RequireAuthorization("StationOperator");
 
 api.MapPost("/print-jobs/{jobId}/receipts", async (string jobId, PrintJobReceiptRequest request,
-    PrintJobRepository repository, AuditEventRepository auditRepository, HttpContext context,
+    PrintJobRepository repository, HttpContext context,
     CancellationToken cancellationToken) =>
 {
     jobId = ApiValidation.Required(jobId, "jobId");
@@ -223,10 +226,9 @@ api.MapPost("/print-jobs/{jobId}/receipts", async (string jobId, PrintJobReceipt
     var stationId = GetSession(context).StationId;
     var requestHash = HashRequest(new { jobId, stationId, state, resultJson });
     var result = await repository.RecordReceiptAsync(jobId, stationId, key, requestHash, state, resultJson,
-        DateTimeOffset.UtcNow, cancellationToken);
-    if (!result.IsReplay)
-        await auditRepository.AppendAsync(AuditSnapshot.Create(context, "PrintJobReceiptRecorded", "PrintJob", jobId,
-            new { State = "Submitting" }, new { result.Job.State, result.Job.ResultJson }), cancellationToken);
+        DateTimeOffset.UtcNow, cancellationToken,
+        value => AuditSnapshot.Create(context, "PrintJobReceiptRecorded", "PrintJob", jobId,
+            new { State = "Submitting" }, new { value.State, value.ResultJson }));
     return Results.Ok(result);
 }).RequireAuthorization("StationOperator");
 

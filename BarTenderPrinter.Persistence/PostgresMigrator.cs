@@ -489,6 +489,188 @@ public sealed class PostgresMigrator(NpgsqlDataSource dataSource)
             ) valid
         ), '[]'::jsonb);
         DROP TRIGGER IF EXISTS order_archive_snapshots_immutable ON order_archive_snapshots;
+        """),
+        (10, """
+        CREATE TABLE mes_commands (
+            idempotency_key text PRIMARY KEY,
+            request_hash text NOT NULL,
+            command_type text NOT NULL,
+            entity_id text NOT NULL,
+            result_json jsonb NOT NULL,
+            created_at_utc timestamptz NOT NULL
+        );
+        CREATE INDEX ix_mes_commands_entity ON mes_commands(command_type, entity_id);
+
+        """),
+        (11, """
+        CREATE TABLE number_allocation_status_history (
+            id text PRIMARY KEY,
+            allocation_id text NOT NULL REFERENCES number_allocations(id),
+            previous_status text NOT NULL,
+            next_status text NOT NULL,
+            reason_code text NOT NULL,
+            actor_id text NOT NULL,
+            station_id text NOT NULL,
+            changed_at_utc timestamptz NOT NULL,
+            idempotency_key text NOT NULL UNIQUE,
+            request_hash text NOT NULL
+        );
+        CREATE INDEX ix_number_status_history_allocation
+            ON number_allocation_status_history(allocation_id, changed_at_utc);
+        """),
+        (12, """
+        CREATE TABLE weight_rules (
+            id text PRIMARY KEY,
+            order_id text NOT NULL REFERENCES production_orders(id),
+            packaging_unit_type text NOT NULL,
+            minimum_weight numeric(18,6) NOT NULL,
+            maximum_weight numeric(18,6) NOT NULL,
+            unit text NOT NULL,
+            version bigint NOT NULL DEFAULT 0,
+            CHECK (minimum_weight >= 0 AND maximum_weight >= minimum_weight),
+            UNIQUE (order_id, packaging_unit_type)
+        );
+        CREATE TABLE weight_measurements (
+            id text PRIMARY KEY,
+            packaging_unit_id text NOT NULL REFERENCES packaging_units(id),
+            rule_id text NOT NULL REFERENCES weight_rules(id),
+            weight numeric(18,6) NOT NULL,
+            unit text NOT NULL,
+            device_id text NOT NULL,
+            is_simulated boolean NOT NULL,
+            result text NOT NULL,
+            measured_at_utc timestamptz NOT NULL,
+            idempotency_key text NOT NULL UNIQUE,
+            request_hash text NOT NULL
+        );
+        CREATE INDEX ix_weight_measurements_packaging
+            ON weight_measurements(packaging_unit_id, measured_at_utc);
+        """),
+        (13, """
+        CREATE TABLE identifier_write_tasks (
+            id text PRIMARY KEY,
+            unit_id text NOT NULL REFERENCES production_units(id),
+            allocation_ids text[] NOT NULL,
+            identifiers_json jsonb NOT NULL,
+            platform text NOT NULL,
+            state text NOT NULL,
+            claimed_by_station_id text NULL,
+            claimed_by_operator_id text NULL,
+            result_json jsonb NULL,
+            diagnostic_code text NOT NULL DEFAULT '',
+            version bigint NOT NULL DEFAULT 0,
+            created_at_utc timestamptz NOT NULL,
+            updated_at_utc timestamptz NOT NULL,
+            idempotency_key text NOT NULL UNIQUE,
+            request_hash text NOT NULL,
+            result_idempotency_key text NULL UNIQUE,
+            result_request_hash text NULL
+        );
+        CREATE INDEX ix_identifier_write_task_queue
+            ON identifier_write_tasks(state, created_at_utc);
+        CREATE TABLE identifier_write_claims (
+            idempotency_key text PRIMARY KEY,
+            request_hash text NOT NULL,
+            task_id text NULL REFERENCES identifier_write_tasks(id),
+            created_at_utc timestamptz NOT NULL
+        );
+        """),
+        (14, """
+        CREATE TABLE quality_disposition_tasks (
+            id text PRIMARY KEY,
+            lot_id text NOT NULL UNIQUE REFERENCES inspection_lots(id),
+            status text NOT NULL,
+            created_at_utc timestamptz NOT NULL,
+            completed_by text NOT NULL DEFAULT '',
+            completed_at_utc timestamptz NULL,
+            disposition_id text NULL UNIQUE REFERENCES dispositions(id)
+        );
+        CREATE INDEX ix_quality_disposition_tasks_status
+            ON quality_disposition_tasks(status, created_at_utc);
+        CREATE TABLE production_unit_quality_holds (
+            lot_id text NOT NULL REFERENCES inspection_lots(id),
+            unit_id text NOT NULL REFERENCES production_units(id),
+            previous_status text NOT NULL,
+            PRIMARY KEY (lot_id, unit_id)
+        );
+        INSERT INTO quality_disposition_tasks(id, lot_id, status, created_at_utc)
+        SELECT md5('quality-disposition-task:' || id), id, 'Open', created_at_utc
+        FROM inspection_lots WHERE status='Failed' ON CONFLICT (lot_id) DO NOTHING;
+        CREATE TABLE disposition_rework_orders (
+            disposition_id text NOT NULL REFERENCES dispositions(id),
+            rework_order_id text NOT NULL UNIQUE REFERENCES rework_orders(id),
+            PRIMARY KEY (disposition_id, rework_order_id)
+        );
+        ALTER TABLE inspection_lots ADD COLUMN idempotency_key text NULL;
+        ALTER TABLE inspection_lots ADD COLUMN request_hash text NULL;
+        CREATE UNIQUE INDEX ux_inspection_lots_idempotency
+            ON inspection_lots(idempotency_key) WHERE idempotency_key IS NOT NULL;
+        ALTER TABLE rework_orders ADD COLUMN idempotency_key text NULL;
+        ALTER TABLE rework_orders ADD COLUMN request_hash text NULL;
+        CREATE UNIQUE INDEX ux_rework_orders_idempotency
+            ON rework_orders(idempotency_key) WHERE idempotency_key IS NOT NULL;
+        ALTER TABLE shipments ADD COLUMN idempotency_key text NULL;
+        ALTER TABLE shipments ADD COLUMN request_hash text NULL;
+        CREATE UNIQUE INDEX ux_shipments_idempotency
+            ON shipments(idempotency_key) WHERE idempotency_key IS NOT NULL;
+        """),
+        (15, """
+        ALTER TABLE order_archive_snapshots DROP CONSTRAINT order_archive_snapshots_order_id_key;
+        CREATE INDEX ix_order_archive_snapshots_order
+            ON order_archive_snapshots(order_id, archived_at_utc DESC);
+        CREATE TABLE archive_repair_tasks (
+            id text PRIMARY KEY,
+            order_id text NOT NULL REFERENCES production_orders(id),
+            archive_id text NOT NULL UNIQUE REFERENCES order_archive_snapshots(id),
+            expected_hash text NOT NULL,
+            actual_hash text NOT NULL,
+            status text NOT NULL,
+            created_at_utc timestamptz NOT NULL,
+            repaired_by text NOT NULL DEFAULT '',
+            repaired_at_utc timestamptz NULL,
+            replacement_archive_id text NULL UNIQUE REFERENCES order_archive_snapshots(id),
+            idempotency_key text NULL UNIQUE,
+            request_hash text NULL
+        );
+        CREATE INDEX ix_archive_repair_tasks_status
+            ON archive_repair_tasks(status, created_at_utc);
+        """),
+        (16, """
+        CREATE TABLE csv_import_batches (
+            id text PRIMARY KEY,
+            import_type text NOT NULL,
+            source_sha256 text NOT NULL,
+            status text NOT NULL,
+            total_rows integer NOT NULL,
+            valid_rows integer NOT NULL,
+            errors_json jsonb NOT NULL,
+            created_at_utc timestamptz NOT NULL,
+            created_by text NOT NULL,
+            confirmed_at_utc timestamptz NULL,
+            idempotency_key text NOT NULL UNIQUE,
+            request_hash text NOT NULL,
+            UNIQUE (import_type, source_sha256)
+        );
+        CREATE TABLE csv_import_rows (
+            batch_id text NOT NULL REFERENCES csv_import_batches(id),
+            row_number integer NOT NULL,
+            values_json jsonb NOT NULL,
+            is_valid boolean NOT NULL,
+            errors_json jsonb NOT NULL,
+            PRIMARY KEY (batch_id, row_number)
+        );
+        CREATE TABLE csv_import_confirmations (
+            idempotency_key text PRIMARY KEY,
+            request_hash text NOT NULL,
+            batch_id text NOT NULL UNIQUE REFERENCES csv_import_batches(id),
+            confirmed_at_utc timestamptz NOT NULL
+        );
+        """),
+        (17, """
+        ALTER TABLE identifier_write_tasks
+            ADD COLUMN target_station_id text NOT NULL DEFAULT '';
+        CREATE INDEX ix_identifier_write_task_claim_queue
+            ON identifier_write_tasks(target_station_id, platform, state, created_at_utc);
         """)
     };
 

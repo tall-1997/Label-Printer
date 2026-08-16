@@ -23,6 +23,20 @@ public enum DispositionDecision
     Scrap
 }
 
+public enum DispositionTaskStatus
+{
+    Open,
+    Completed
+}
+
+public sealed record DispositionTask(
+    EntityId Id,
+    EntityId LotId,
+    DispositionTaskStatus Status,
+    DateTimeOffset CreatedAtUtc,
+    string CompletedBy = "",
+    DateTimeOffset? CompletedAtUtc = null);
+
 public sealed record InspectionResult(
     EntityId Id,
     EntityId LotId,

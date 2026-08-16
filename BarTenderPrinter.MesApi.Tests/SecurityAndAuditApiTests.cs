@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using BarTenderPrinter.MesApi;
 using BarTenderPrinter.Persistence;
 using Npgsql;
@@ -79,7 +80,27 @@ public sealed class SecurityAndAuditApiTests
         Assert.DoesNotContain("SN001", json);
         Assert.DoesNotContain("device-path", json);
         Assert.Contains("***", json);
-        Assert.Contains("failed", json);
+        Assert.DoesNotContain("failed", json);
+        Assert.Contains("sha256", json);
+        Assert.Contains("redacted", json);
+    }
+
+    [Fact]
+    public void AuditSnapshotSummarizesDiagnosticVariantsAndRetainsWhitelistedMetadata()
+    {
+        var json = AuditSnapshot.Serialize(new
+        {
+            State = "Failed",
+            Diagnostic = "secret diagnostic",
+            DiagnosticCode = "DEVICE_SECRET",
+            ResultJson = JsonSerializer.Serialize(new { token = "secret token" }),
+            SafeCount = 3
+        });
+
+        Assert.DoesNotContain("secret", json);
+        Assert.Contains("Failed", json);
+        Assert.Contains("SafeCount", json);
+        Assert.Equal(3, JsonNode.Parse(json!)!["SafeCount"]!.GetValue<int>());
     }
 
     private static async Task<JsonElement> PostObjectAsync(HttpClient client, string path, object request)

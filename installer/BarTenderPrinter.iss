@@ -34,7 +34,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："; Flags: unchecked
 
 [Files]
-Source: "..\publish\*"; DestDir: "{app}"; Excludes: "*MobileMes*,*.pfx,*.p12,*.pem,*.key,*.cer,*.crt,*.der,*.p7b,*.p7c,*.snk,*.jks,*.keystore,*.db,*.sqlite,*.sqlite3,*.log,Deployment\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\publish\*"; DestDir: "{app}"; Excludes: "*MobileMes*,*HASP*,*Sentinel*,*SafeNet*,*Hardlock*,*Dongle*,*.pfx,*.p12,*.pem,*.key,*.cer,*.crt,*.der,*.p7b,*.p7c,*.snk,*.jks,*.keystore,*.db,*.sqlite,*.sqlite3,*.log,Deployment\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\publish\Deployment\workstation-client-contract.json"; DestDir: "{app}\Deployment"; Flags: ignoreversion
 Source: "..\publish\Deployment\local-ledger-migrations.sql"; DestDir: "{app}\Deployment"; Flags: ignoreversion
 

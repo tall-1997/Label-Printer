@@ -119,6 +119,8 @@ namespace BarTenderPrinter
             target.ReceiptPayloadJson = source.ReceiptPayloadJson;
             target.State = source.State;
             target.ErrorCode = source.ErrorCode;
+            target.CorrelationId = source.CorrelationId;
+            target.ReviewNote = source.ReviewNote;
         }
     }
 
@@ -143,6 +145,128 @@ namespace BarTenderPrinter
 
         public Task<MesResult<MesOrderSnapshot>> GetOrderAsync(string orderId, CancellationToken cancellationToken = default) =>
             _client.GetAsync<MesOrderSnapshot>("/api/orders/" + Escape(orderId), cancellationToken);
+
+        public Task<MesResult<JsonElement>> TransitionOrderAsync(string orderId, MesOrderTransitionRequest request,
+            CancellationToken cancellationToken = default) =>
+            PostAsync($"/api/orders/{Escape(orderId)}/transitions", request, request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> CreateProductionUnitAsync(MesProductionUnitRequest request,
+            CancellationToken cancellationToken = default) => PostAsync("/api/production-units", request,
+                request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> CreateRouteAsync(MesRouteRequest request,
+            CancellationToken cancellationToken = default) => PostAsync("/api/routes", request,
+                request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> CreateStationAsync(MesStationRequest request,
+            CancellationToken cancellationToken = default) => PostAsync("/api/stations", request,
+                request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> CreatePackagingUnitAsync(MesPackagingUnitRequest request,
+            CancellationToken cancellationToken = default) => PostAsync("/api/packaging-units", request,
+                request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> ChangeNumberStatusAsync(string allocationId, MesNumberStatusRequest request,
+            CancellationToken cancellationToken = default) => PostAsync(
+                $"/api/number-allocations/{Escape(allocationId)}/status", request, request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> GetNumberHistoryAsync(string allocationId,
+            CancellationToken cancellationToken = default) =>
+            _client.GetAsync<JsonElement>($"/api/number-allocations/{Escape(allocationId)}/history", cancellationToken);
+
+        public Task<MesResult<JsonElement>> CreateWeightRuleAsync(MesWeightRuleRequest request,
+            CancellationToken cancellationToken = default) => PostAsync("/api/weight-rules", request,
+                request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> RecordWeightAsync(string packagingUnitId, MesWeightRequest request,
+            CancellationToken cancellationToken = default) => PostAsync(
+                $"/api/packaging-units/{Escape(packagingUnitId)}/weights", request, request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> CreateIdentifierWriteTaskAsync(MesIdentifierWriteTaskRequest request,
+            CancellationToken cancellationToken = default) => PostAsync("/api/identifier-write-tasks", request,
+                request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> ClaimIdentifierWriteTaskAsync(string platform, string idempotencyKey,
+            CancellationToken cancellationToken = default) => PostAsync("/api/identifier-write-tasks/claims",
+                new MesIdentifierWriteClaimRequest { Platform = platform, IdempotencyKey = idempotencyKey },
+                idempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> RecordIdentifierWriteResultAsync(string taskId,
+            MesIdentifierWriteResultRequest request, CancellationToken cancellationToken = default) => PostAsync(
+                $"/api/identifier-write-tasks/{Escape(taskId)}/results", request, request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> CreateInspectionLotAsync(MesInspectionLotRequest request,
+            CancellationToken cancellationToken = default) => PostAsync("/api/inspection-lots", request,
+                request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> GetQualityDispositionTasksAsync(string status,
+            CancellationToken cancellationToken = default) => _client.GetAsync<JsonElement>(
+                "/api/quality-disposition-tasks?status=" + Escape(status), cancellationToken);
+
+        public Task<MesResult<JsonElement>> AddInspectionResultAsync(string lotId, MesInspectionResultRequest request,
+            CancellationToken cancellationToken = default) => PostAsync($"/api/inspection-lots/{Escape(lotId)}/results",
+                request, request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> CompleteInspectionLotAsync(string lotId, MesInspectionCompleteRequest request,
+            CancellationToken cancellationToken = default) => PostAsync($"/api/inspection-lots/{Escape(lotId)}/complete",
+                request, request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> ApplyInspectionDispositionAsync(string lotId,
+            MesInspectionDispositionRequest request, CancellationToken cancellationToken = default) => PostAsync(
+                $"/api/inspection-lots/{Escape(lotId)}/disposition", request, request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> CreateReworkOrderAsync(MesReworkOrderRequest request,
+            CancellationToken cancellationToken = default) => PostAsync("/api/rework-orders", request,
+                request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> ChangeReworkStateAsync(string reworkOrderId, string command,
+            string idempotencyKey, CancellationToken cancellationToken = default) => PostAsync(
+                $"/api/rework-orders/{Escape(reworkOrderId)}/{Escape(command)}",
+                new MesIdempotentRequest { IdempotencyKey = idempotencyKey }, idempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> CreateShipmentAsync(MesShipmentRequest request,
+            CancellationToken cancellationToken = default) => PostAsync("/api/shipments", request,
+                request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> AddShipmentCartonAsync(string shipmentId, MesShipmentCartonRequest request,
+            CancellationToken cancellationToken = default) => PostAsync($"/api/shipments/{Escape(shipmentId)}/cartons",
+                request, request.IdempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> ConfirmShipmentAsync(string shipmentId, string idempotencyKey,
+            CancellationToken cancellationToken = default) => PostAsync($"/api/shipments/{Escape(shipmentId)}/confirm",
+                new MesIdempotentRequest { IdempotencyKey = idempotencyKey }, idempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> ArchiveOrderAsync(string orderId, string idempotencyKey,
+            CancellationToken cancellationToken = default) => PostAsync($"/api/orders/{Escape(orderId)}/archive",
+                new MesIdempotentRequest { IdempotencyKey = idempotencyKey }, idempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> GetOrderArchiveAsync(string orderId,
+            CancellationToken cancellationToken = default) =>
+            _client.GetAsync<JsonElement>($"/api/orders/{Escape(orderId)}/archive", cancellationToken);
+
+        public Task<MesResult<JsonElement>> GetArchiveRepairTasksAsync(string status,
+            CancellationToken cancellationToken = default) => _client.GetAsync<JsonElement>(
+                "/api/archive-repair-tasks?status=" + Escape(status), cancellationToken);
+
+        public Task<MesResult<JsonElement>> RepairArchiveAsync(string repairTaskId, string idempotencyKey,
+            CancellationToken cancellationToken = default) => PostAsync(
+                $"/api/archive-repair-tasks/{Escape(repairTaskId)}/repair",
+                new MesIdempotentRequest { IdempotencyKey = idempotencyKey }, idempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> StageCsvImportAsync(string type, byte[] content, string idempotencyKey,
+            CancellationToken cancellationToken = default) => _client.PostBytesAsync<JsonElement>(
+                $"/api/csv-imports/{Escape(type)}", content, "text/csv", idempotencyKey, cancellationToken);
+
+        public Task<MesResult<JsonElement>> GetCsvImportAsync(string batchId,
+            CancellationToken cancellationToken = default) =>
+            _client.GetAsync<JsonElement>($"/api/csv-imports/{Escape(batchId)}", cancellationToken);
+
+        public Task<MesResult<JsonElement>> ConfirmCsvImportAsync(string batchId, string idempotencyKey,
+            CancellationToken cancellationToken = default) => PostAsync($"/api/csv-imports/{Escape(batchId)}/confirm",
+                new MesIdempotentRequest { IdempotencyKey = idempotencyKey }, idempotencyKey, cancellationToken);
+
+        public Task<MesResult<string>> ExportCsvAsync(string type, CancellationToken cancellationToken = default) =>
+            _client.GetAsync<string>($"/api/csv-exports/{Escape(type)}", cancellationToken);
 
         public Task<MesResult<JsonElement>> PassStationAsync(MesStationPassRequest request, CancellationToken cancellationToken = default) =>
             ExecuteOnlineOnlyAsync("StationPass", request.UnitId, request.IdempotencyKey, "/api/station-passes", request, cancellationToken);
@@ -273,6 +397,34 @@ namespace BarTenderPrinter
             return new MesPrintRecoveryResult { RecoveredCount = recovered, PrintableJobs = printableJobs };
         }
 
+        public async Task<MesResult<JsonElement>> ResubmitPendingOperationAsync(string operationId,
+            CancellationToken cancellationToken = default)
+        {
+            var operation = _pendingStore.GetAll().FirstOrDefault(item => item.Id == operationId);
+            if (operation == null)
+                return LocalFailure("PENDING_OPERATION_NOT_FOUND", "待恢复操作不存在。", false);
+            if (operation.Kind != "StationPass" && operation.Kind != "PackagingBinding")
+                return LocalFailure("PENDING_OPERATION_UNSUPPORTED", "该记录需要使用对应业务恢复流程。", false);
+            var result = await _client.PostAsync<JsonElement>(operation.RequestPath, ParsePayload(operation.RequestJson),
+                operation.IdempotencyKey, cancellationToken).ConfigureAwait(false);
+            UpdatePendingResult(operation.Id, result);
+            return result;
+        }
+
+        public MesResult<JsonElement> MarkPendingOperationForManualReview(string operationId, string note)
+        {
+            var operation = _pendingStore.GetAll().FirstOrDefault(item => item.Id == operationId);
+            if (operation == null)
+                return LocalFailure("PENDING_OPERATION_NOT_FOUND", "待恢复操作不存在。", false);
+            _pendingStore.Update(operation.Id, item =>
+            {
+                item.State = MesPendingState.ReviewRequired;
+                item.ReviewNote = note?.Trim() ?? "";
+                item.ErrorCode = "MANUAL_REVIEW_REQUIRED";
+            });
+            return MesResult<JsonElement>.Success(default, "", 200);
+        }
+
         private async Task<MesResult<JsonElement>> ExecuteOnlineOnlyAsync(string kind, string businessId,
             string idempotencyKey, string path, object request, CancellationToken cancellationToken)
         {
@@ -289,6 +441,7 @@ namespace BarTenderPrinter
             _pendingStore.Update(operation.Id, item =>
             {
                 item.ErrorCode = result.IsSuccess ? "" : result.Error?.Code ?? "MES_UNAVAILABLE";
+                item.CorrelationId = result.CorrelationId;
                 item.CenterResultJson = result.IsSuccess ? JsonSerializer.Serialize(result.Value) : "";
                 item.State = result.IsSuccess ? MesPendingState.Synced : MesPendingState.Pending;
             });
@@ -302,6 +455,24 @@ namespace BarTenderPrinter
                 };
             return result;
         }
+
+        private Task<MesResult<JsonElement>> PostAsync(string path, object request, string idempotencyKey,
+            CancellationToken cancellationToken) =>
+            _client.PostAsync<JsonElement>(path, request, idempotencyKey, cancellationToken);
+
+        private void UpdatePendingResult(string operationId, MesResult<JsonElement> result)
+        {
+            _pendingStore.Update(operationId, item =>
+            {
+                item.ErrorCode = result.IsSuccess ? "" : result.Error?.Code ?? "MES_UNAVAILABLE";
+                item.CorrelationId = result.CorrelationId;
+                item.CenterResultJson = result.IsSuccess ? JsonSerializer.Serialize(result.Value) : "";
+                item.State = result.IsSuccess ? MesPendingState.Synced : MesPendingState.Pending;
+            });
+        }
+
+        private static MesResult<JsonElement> LocalFailure(string code, string message, bool retryable) =>
+            MesResult<JsonElement>.Failure(new MesApiError { Code = code, Message = message, Retryable = retryable });
 
         private void PreservePrintJob(MesPrintJob job, string localResultJson, MesPendingState state, string errorCode,
             string receiptKey = "", string receiptPayloadJson = "")
