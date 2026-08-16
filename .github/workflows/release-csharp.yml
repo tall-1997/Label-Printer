@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without v prefix, for example 5.7.92'
+        description: 'Release version without v prefix, for example 5.7.93'
         required: true
         type: string
 
@@ -16,26 +16,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test-linux-service:
-    name: Linux center service and cross-platform tests
+  test-printing-core:
+    name: Linux printing reliability tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: bartender_ci
-          POSTGRES_USER: bartender_ci
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U bartender_ci -d bartender_ci"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
-      BARTENDER_TEST_POSTGRES: Host=localhost;Port=5432;Database=bartender_ci;Username=bartender_ci
       DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '1'
     steps:
       - name: Checkout code
@@ -46,43 +31,12 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install MES Web toolchain
-        shell: bash
-        run: |
-          npm install -g react@19.1.1 react-dom@19.1.1 react-router-dom@7.18.2 @mui/material@7.3.2 @mui/icons-material@7.3.2 @emotion/react@11.14.0 @emotion/styled@11.14.1 typescript@5.9.2 vite@7.1.5 @vitejs/plugin-react@5.0.2 vitest@3.2.4 jsdom@26.1.0 @testing-library/react@16.3.0 @testing-library/jest-dom@6.8.0 @types/react@19.1.12 @types/react-dom@19.1.9
-          ln -s "$(npm root -g)" BarTenderPrinter.MesWeb/node_modules
-
-      - name: Test and build MES Web
-        shell: bash
-        run: |
-          npm --prefix BarTenderPrinter.MesWeb test
-          npm --prefix BarTenderPrinter.MesWeb run build
-
-      - name: Run cross-platform tests
-        shell: bash
-        run: |
-          dotnet test BarTenderPrinter.Domain.Tests/BarTenderPrinter.Domain.Tests.csproj -c Release
-          dotnet test BarTenderPrinter.Application.Tests/BarTenderPrinter.Application.Tests.csproj -c Release
-          dotnet test BarTenderPrinter.StationAgent.Tests/BarTenderPrinter.StationAgent.Tests.csproj -c Release
-          dotnet test BarTenderPrinter.Devices.Tests/BarTenderPrinter.Devices.Tests.csproj -c Release
-          dotnet test BarTenderPrinter.Printing.Tests/BarTenderPrinter.Printing.Tests.csproj -c Release
-          dotnet test BarTenderPrinter.MesClient.Tests/BarTenderPrinter.MesClient.Tests.csproj -c Release
-          dotnet test BarTenderPrinter.Persistence.Tests/BarTenderPrinter.Persistence.Tests.csproj -c Release
-          dotnet test BarTenderPrinter.MesApi.Tests/BarTenderPrinter.MesApi.Tests.csproj -c Release
-
-      - name: Build center service
-        run: |
-          dotnet build BarTenderPrinter.MesApi/BarTenderPrinter.MesApi.csproj -c Release
-          dotnet build BarTenderPrinter.StationAgent/BarTenderPrinter.StationAgent.csproj -c Release
+      - name: Run printing reliability tests
+        run: dotnet test BarTenderPrinter.Printing.Tests/BarTenderPrinter.Printing.Tests.csproj -c Release
 
   build-and-release:
     name: Windows WinForms and BarTender release
-    needs: test-linux-service
+    needs: test-printing-core
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -162,29 +116,21 @@ jobs:
 
             ### 更新内容
 
-            #### MES Web 平台
-            - 新增 React 19、TypeScript、Vite 和 MUI 响应式管理端及扫码工位端
-            - 提供明暗主题、Capability 导航、实时追溯、页面状态恢复和同源生产托管
-            - `/api/v1` 与迁移期 `/api` 共用业务处理、授权、幂等和审计逻辑
+            #### 产品精简
+            - 保留 WinForms 打印页面、订单管理、模板预览、打印历史和补打印
+            - 移除 MES Web、中心 API、PostgreSQL、Station Agent、设备模拟和 MES 工位入口
 
-            #### 应用与设备架构
-            - 新增 Application 用例层，集中平台会话、Capability、规范请求摘要和审计清洗
-            - 新增 loopback Station Agent，隔离 BarTender、打印机、电子秤、写号工具和本地 SQLite
-            - 本地操作账本支持幂等重放、乐观并发、崩溃不确定状态、人工恢复和离线 outbox
-
-            #### 数据与契约
-            - PostgreSQL 保持中心权威存储，号码状态规则集中到 Domain 层
-            - 统一 `Idempotency-Key` 请求头、正文一致性校验及规范 JSON SHA-256 摘要
-            - 提供 OpenAPI v1 基线和 TypeScript 合约，迁移版本增加连续性校验
+            #### 打印可靠性
+            - 保留 SQLite 打印作业账本、幂等防重和并发重复提交保护
+            - 保留提交不确定状态、崩溃恢复及补打印审批链
+            - 保持 BarTender COM 打印接口和独立预览宿主兼容
 
             #### 安全与合规
-            - 保留认证、角色授权、Capability、审计完整性和输入验证边界
-            - IMEI、SN 和设备诊断在审计快照中脱敏或转换为摘要
+            - 保留账户权限、补打印审批、历史完整性和输入验证边界
             - 发布制品排除 HASP、Sentinel、旧 MobileMes 资产、证书、数据库和日志
 
             #### 测试与发布
-            - Linux CI 验证 192 项领域、应用、设备、打印、客户端、PostgreSQL、MES API 和 Agent 测试
-            - Web CI 验证 Vitest、TypeScript 和 Vite 生产构建
+            - Linux CI 验证跨平台打印可靠性测试
             - Windows CI 验证 WinForms、BarTender 边界、自包含发布和安装包内容
             - 发布制品自动扫描敏感配置和非授权运行时资产
 

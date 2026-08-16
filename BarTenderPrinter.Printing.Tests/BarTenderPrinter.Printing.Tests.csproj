@@ -17,7 +17,6 @@
     <Compile Include="..\BarTenderPrinter\PrintContracts.cs" Link="Production\PrintContracts.cs" />
     <Compile Include="..\BarTenderPrinter\PrintJobCoordinator.cs" Link="Production\PrintJobCoordinator.cs" />
     <Compile Include="..\BarTenderPrinter\PrintJobLedger.cs" Link="Production\PrintJobLedger.cs" />
-    <Compile Include="..\BarTenderPrinter\LabelTemplateRegistry.cs" Link="Production\LabelTemplateRegistry.cs" />
     <Compile Include="..\BarTenderPrinter\PrintWorkflow.cs" Link="Production\PrintWorkflow.cs" />
   </ItemGroup>
 </Project>

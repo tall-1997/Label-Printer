@@ -12,9 +12,6 @@ namespace BarTenderPrinter
     {
         public string JobId { get; set; } = "";
         public string IdempotencyKey { get; set; } = "";
-        public string BatchId { get; set; } = "";
-        public string BatchItemId { get; set; } = "";
-        public LabelType LabelType { get; set; }
         public string OriginalJobId { get; set; } = "";
         public string ApprovalId { get; set; } = "";
         public int ReprintSequence { get; set; }
@@ -75,9 +72,6 @@ namespace BarTenderPrinter
                     ? (string.IsNullOrWhiteSpace(request.IdempotencyKey) ? Guid.NewGuid().ToString("N") : request.IdempotencyKey.Trim())
                     : request.JobId.Trim(),
                 IdempotencyKey = request.IdempotencyKey?.Trim() ?? "",
-                BatchId = request.BatchId?.Trim() ?? "",
-                BatchItemId = request.BatchItemId?.Trim() ?? "",
-                LabelType = request.LabelType,
                 OriginalJobId = request.OriginalJobId?.Trim() ?? "",
                 ApprovalId = request.ApprovalId?.Trim() ?? "",
                 ReprintSequence = Math.Max(0, request.ReprintSequence),
@@ -138,9 +132,6 @@ namespace BarTenderPrinter
                 {
                     JobId = snapshot.JobId,
                     IdempotencyKey = snapshot.IdempotencyKey,
-                    BatchId = snapshot.BatchId,
-                    BatchItemId = snapshot.BatchItemId,
-                    LabelType = snapshot.LabelType,
                     OriginalJobId = snapshot.OriginalJobId,
                     ApprovalId = snapshot.ApprovalId,
                     ReprintSequence = snapshot.ReprintSequence,
@@ -199,9 +190,6 @@ namespace BarTenderPrinter
             {
                 request.JobId,
                 request.IdempotencyKey,
-                request.BatchId,
-                request.BatchItemId,
-                LabelType = request.LabelType.ToString(),
                 request.OriginalJobId,
                 request.ApprovalId,
                 request.ReprintSequence,

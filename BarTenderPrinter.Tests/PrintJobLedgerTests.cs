@@ -97,23 +97,7 @@ namespace BarTenderPrinter.Tests
         }
 
         [Fact]
-        public void TemplateRegistryResolvesLatestEffectiveVersionForAllLabelTypes()
-        {
-            var effective = new DateTime(2026, 8, 15, 0, 0, 0, DateTimeKind.Utc);
-            foreach (var labelType in new[] { LabelType.Body, LabelType.ColorBox, LabelType.Carton, LabelType.Pallet })
-            {
-                var registry = new LabelTemplateRegistry(new[]
-                {
-                    Registration(labelType, "v1", effective.AddDays(-2)),
-                    Registration(labelType, "v2", effective.AddDays(-1))
-                });
-
-                Assert.Equal("v2", registry.Resolve("Customer", "Model", labelType, effective).Version);
-            }
-        }
-
-        [Fact]
-        public void HistoryManagerPersistsMesJobAndReprintApprovalFields()
+        public void HistoryManagerPersistsJobAndReprintApprovalFields()
         {
             var directory = CreateTempDirectory();
             var history = new HistoryManager(Path.Combine(directory, "records.csv"), Path.Combine(directory, "records.jsonl"), Path.Combine(directory, "records.db"));
@@ -123,9 +107,6 @@ namespace BarTenderPrinter.Tests
             {
                 JobId = "job-2",
                 IdempotencyKey = "key-2",
-                BatchId = "batch-1",
-                BatchItemId = "item-1",
-                LabelType = LabelType.Carton,
                 OriginalJobId = "job-1",
                 ApprovalId = "approval-1",
                 ReprintSequence = 1,
@@ -137,13 +118,16 @@ namespace BarTenderPrinter.Tests
             var reloaded = new HistoryManager(Path.Combine(directory, "records.csv"), Path.Combine(directory, "records.jsonl"), Path.Combine(directory, "records.db"));
             reloaded.Load();
             var record = Assert.Single(reloaded.Records);
-            Assert.Equal(4, record.SchemaVersion);
+            Assert.Equal(5, record.SchemaVersion);
             Assert.Equal("job-2", record.JobId);
             Assert.Equal("key-2", record.IdempotencyKey);
-            Assert.Equal(LabelType.Carton, record.LabelType);
             Assert.Equal("job-1", record.OriginalJobId);
             Assert.Equal("approval-1", record.ApprovalId);
             Assert.Equal(1, record.ReprintSequence);
+            var jsonl = File.ReadAllText(Path.Combine(directory, "records.jsonl"));
+            Assert.DoesNotContain("\"BatchId\"", jsonl);
+            Assert.DoesNotContain("\"BatchItemId\"", jsonl);
+            Assert.DoesNotContain("\"LabelType\"", jsonl);
         }
 
         [Fact]
@@ -161,22 +145,10 @@ namespace BarTenderPrinter.Tests
             Assert.Equal(0, service.SubmissionCount);
         }
 
-        private static LabelTemplateRegistration Registration(LabelType type, string version, DateTime from) => new LabelTemplateRegistration
-        {
-            Customer = "Customer",
-            ProductModel = "Model",
-            LabelType = type,
-            TemplateId = $"{type}-{version}",
-            TemplatePath = $"C:\\{type}-{version}.btw",
-            Version = version,
-            EffectiveFromUtc = from
-        };
-
         private static PrintJobRequest CreateRequest(string jobId, string key) => new PrintJobRequest
         {
             JobId = jobId,
             IdempotencyKey = key,
-            LabelType = LabelType.Body,
             TemplateName = "body.btw",
             TemplatePath = "C:\\body.btw",
             TemplateId = "body-v1",

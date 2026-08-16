@@ -20,8 +20,6 @@ namespace BarTenderPrinter
         public static readonly string OrdersFile = Path.Combine(DataDirectory, "orders.json");
         public static readonly string AccountsFile = Path.Combine(DataDirectory, "accounts.json");
         public static readonly string ApplicationStateFile = Path.Combine(DataDirectory, "application-state.json");
-        public static readonly string MesConnectionFile = Path.Combine(DataDirectory, "mes-connection.json");
-        public static readonly string MesPendingOperationsFile = Path.Combine(DataDirectory, "mes-pending-operations.json");
         public static readonly string ValidationDataDirectory = Path.Combine(DataDirectory, "validation-data");
         public static readonly string PreviewDirectory = Path.Combine(DataDirectory, "previews");
         public static readonly string HistoryRecordsDirectory = Path.Combine(DataDirectory, "history-records");

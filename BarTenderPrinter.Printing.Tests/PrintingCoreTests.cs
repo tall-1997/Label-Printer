@@ -86,17 +86,6 @@ namespace BarTenderPrinter.Printing.Tests
         }
 
         [Fact]
-        public void RegistryResolvesAllFourLabelTypesByLatestEffectiveVersion()
-        {
-            var now = new DateTime(2026, 8, 15, 0, 0, 0, DateTimeKind.Utc);
-            foreach (var type in new[] { LabelType.Body, LabelType.ColorBox, LabelType.Carton, LabelType.Pallet })
-            {
-                var registry = new LabelTemplateRegistry(new[] { Registration(type, "v1", now.AddDays(-2)), Registration(type, "v2", now.AddDays(-1)) });
-                Assert.Equal("v2", registry.Resolve("Customer", "Model", type, now).Version);
-            }
-        }
-
-        [Fact]
         public async Task ReprintRequiresApprovalSnapshot()
         {
             var service = new CountingService();
@@ -116,24 +105,12 @@ namespace BarTenderPrinter.Printing.Tests
         {
             JobId = "job-1",
             IdempotencyKey = "key-1",
-            LabelType = LabelType.Body,
             TemplateName = "body.btw",
             TemplatePath = "C:\\body.btw",
             TemplateId = "body-v1",
             TemplateVersion = "v1",
             FieldValues = new Dictionary<string, string> { ["IMEI"] = "123" },
             Printer = "Printer"
-        };
-
-        private static LabelTemplateRegistration Registration(LabelType type, string version, DateTime from) => new()
-        {
-            Customer = "Customer",
-            ProductModel = "Model",
-            LabelType = type,
-            TemplateId = $"{type}-{version}",
-            TemplatePath = $"C:\\{type}-{version}.btw",
-            Version = version,
-            EffectiveFromUtc = from
         };
 
         private static string NewDatabasePath()

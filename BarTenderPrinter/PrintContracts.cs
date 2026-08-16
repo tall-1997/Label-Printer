@@ -4,9 +4,6 @@ namespace BarTenderPrinter
     {
         public string JobId { get; set; } = "";
         public string IdempotencyKey { get; set; } = "";
-        public string BatchId { get; set; } = "";
-        public string BatchItemId { get; set; } = "";
-        public LabelType LabelType { get; set; }
         public string OriginalJobId { get; set; } = "";
         public string ApprovalId { get; set; } = "";
         public int ReprintSequence { get; set; }
@@ -30,15 +27,6 @@ namespace BarTenderPrinter
     {
         Print,
         Reprint
-    }
-
-    public enum LabelType
-    {
-        Unspecified,
-        Body,
-        ColorBox,
-        Carton,
-        Pallet
     }
 
     public enum PrintSubmissionState

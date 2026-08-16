@@ -11,7 +11,7 @@ namespace BarTenderPrinter
 {
     public class PrintRecord
     {
-        public int SchemaVersion { get; set; } = 4;
+        public int SchemaVersion { get; set; } = 5;
         public string RecordId { get; set; }
         public string Imei { get; set; }
         public string TemplateName { get; set; }
@@ -37,16 +37,22 @@ namespace BarTenderPrinter
         public string ExclusionBatchId { get; set; }
         public string JobId { get; set; }
         public string IdempotencyKey { get; set; }
-        public string BatchId { get; set; }
-        public string BatchItemId { get; set; }
-        public LabelType LabelType { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("BatchId")]
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public string LegacyV4BatchId { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("BatchItemId")]
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public string LegacyV4BatchItemId { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("LabelType")]
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+        public int LegacyLabelType { get; set; }
         public string OriginalJobId { get; set; }
         public string ApprovalId { get; set; }
         public int ReprintSequence { get; set; }
 
         public PrintRecord()
         {
-            SchemaVersion = 4;
+            SchemaVersion = 5;
             RecordId = Guid.NewGuid().ToString("N");
             Imei = "";
             TemplateName = "";
@@ -71,8 +77,6 @@ namespace BarTenderPrinter
             ExclusionBatchId = "";
             JobId = "";
             IdempotencyKey = "";
-            BatchId = "";
-            BatchItemId = "";
             OriginalJobId = "";
             ApprovalId = "";
         }
@@ -99,8 +103,6 @@ namespace BarTenderPrinter
             RecordChecksum = "";
             JobId = "";
             IdempotencyKey = "";
-            BatchId = "";
-            BatchItemId = "";
             OriginalJobId = "";
             ApprovalId = "";
         }
@@ -128,8 +130,6 @@ namespace BarTenderPrinter
             RecordChecksum = "";
             JobId = "";
             IdempotencyKey = "";
-            BatchId = "";
-            BatchItemId = "";
             OriginalJobId = "";
             ApprovalId = "";
         }
@@ -412,9 +412,6 @@ namespace BarTenderPrinter
                 {
                     JobId = entry.JobId ?? "",
                     IdempotencyKey = entry.IdempotencyKey ?? "",
-                    BatchId = entry.BatchId ?? "",
-                    BatchItemId = entry.BatchItemId ?? "",
-                    LabelType = entry.LabelType,
                     OriginalJobId = entry.OriginalJobId ?? "",
                     ApprovalId = entry.ApprovalId ?? "",
                     ReprintSequence = Math.Max(0, entry.ReprintSequence),
@@ -1011,18 +1008,19 @@ namespace BarTenderPrinter
         {
             if (record == null) return false;
             if (string.IsNullOrWhiteSpace(record.RecordChecksum)) return record.SchemaVersion < 3;
-            return string.Equals(record.RecordChecksum, ComputeChecksum(record, true, record.SchemaVersion >= 4), StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(record.RecordChecksum, ComputeChecksum(record, false, record.SchemaVersion >= 4), StringComparison.OrdinalIgnoreCase) ||
+            return string.Equals(record.RecordChecksum, ComputeChecksum(record, true, record.SchemaVersion == 4, record.SchemaVersion >= 5), StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(record.RecordChecksum, ComputeChecksum(record, false, record.SchemaVersion == 4, record.SchemaVersion >= 5), StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(record.RecordChecksum, ComputeLegacyChecksum(record, true), StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(record.RecordChecksum, ComputeLegacyChecksum(record, false), StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ComputeChecksum(PrintRecord record)
         {
-            return ComputeChecksum(record, record.SchemaVersion >= 3, record.SchemaVersion >= 4);
+            return ComputeChecksum(record, record.SchemaVersion >= 3, false, record.SchemaVersion >= 5);
         }
 
-        private static string ComputeChecksum(PrintRecord record, bool includeLifecycle, bool includeMesFields)
+        private static string ComputeChecksum(PrintRecord record, bool includeLifecycle, bool includeLegacyMesFields,
+            bool includePrintJobFields)
         {
             var values = new List<string>
             {
@@ -1039,13 +1037,21 @@ namespace BarTenderPrinter
                 values.Add(record.ExclusionReason ?? "");
                 values.Add(record.ExclusionBatchId ?? "");
             }
-            if (includeMesFields)
+            if (includeLegacyMesFields)
             {
                 values.Add(record.JobId ?? "");
                 values.Add(record.IdempotencyKey ?? "");
-                values.Add(record.BatchId ?? "");
-                values.Add(record.BatchItemId ?? "");
-                values.Add(record.LabelType.ToString());
+                values.Add(record.LegacyV4BatchId ?? "");
+                values.Add(record.LegacyV4BatchItemId ?? "");
+                values.Add(LegacyLabelTypeName(record.LegacyLabelType));
+                values.Add(record.OriginalJobId ?? "");
+                values.Add(record.ApprovalId ?? "");
+                values.Add(record.ReprintSequence.ToString());
+            }
+            else if (includePrintJobFields)
+            {
+                values.Add(record.JobId ?? "");
+                values.Add(record.IdempotencyKey ?? "");
                 values.Add(record.OriginalJobId ?? "");
                 values.Add(record.ApprovalId ?? "");
                 values.Add(record.ReprintSequence.ToString());
@@ -1054,6 +1060,15 @@ namespace BarTenderPrinter
             using (var hmac = new HMACSHA256(GetIntegrityKey()))
                 return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)));
         }
+
+        private static string LegacyLabelTypeName(int value) => value switch
+        {
+            1 => "Body",
+            2 => "ColorBox",
+            3 => "Carton",
+            4 => "Pallet",
+            _ => "Unspecified"
+        };
 
         private static string ComputeLegacyChecksum(PrintRecord record, bool includeLifecycle)
         {

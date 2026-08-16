@@ -7,9 +7,7 @@ $ErrorActionPreference = "Stop"
 $publishRoot = (Resolve-Path $PublishDirectory).Path
 $requiredFiles = @(
     "BarTenderPrinter.exe",
-    "BarTenderPreviewHost.exe",
-    "Deployment/workstation-client-contract.json",
-    "Deployment/local-ledger-migrations.sql"
+    "BarTenderPreviewHost.exe"
 )
 
 foreach ($relativePath in $requiredFiles) {

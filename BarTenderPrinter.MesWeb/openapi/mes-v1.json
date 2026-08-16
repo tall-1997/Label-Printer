@@ -1,8 +1,0 @@
-{
-  "openapi": "3.0.3",
-  "info": { "title": "BarTender MES API", "version": "1.0.0" },
-  "paths": {
-    "/api/v1/session": { "get": { "operationId": "getSession", "responses": { "200": { "description": "Current session" }, "401": { "description": "Unauthorized" } } } },
-    "/api/v1/traceability": { "get": { "operationId": "queryTraceability", "parameters": [{ "name": "type", "in": "query", "required": true, "schema": { "type": "string", "enum": ["Order", "Imei", "SerialNumber", "Carton", "Pallet"] } }, { "name": "value", "in": "query", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "Traceability result" }, "404": { "description": "Not found" } } } }
-  }
-}

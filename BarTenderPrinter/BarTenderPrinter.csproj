@@ -6,7 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>BarTenderPrinter</RootNamespace>
     <AssemblyName>BarTenderPrinter</AssemblyName>
-    <Version>5.7.92</Version>
+    <Version>5.7.93</Version>
     <ApplicationIcon>icon.ico</ApplicationIcon>
 
     <!-- Self-contained installed application -->
@@ -25,17 +25,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BarTenderPrinter.Domain\BarTenderPrinter.Domain.csproj" />
-    <ProjectReference Include="..\BarTenderPrinter.Devices\BarTenderPrinter.Devices.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
     <InternalsVisibleTo Include="BarTenderPrinter.Tests" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Update="Deployment\workstation-client-contract.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Update="Deployment\local-ledger-migrations.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>
