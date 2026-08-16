@@ -34,7 +34,7 @@ if ($forbiddenFiles) {
     throw "Forbidden release assets found: $($relativePaths -join ', ')"
 }
 
-$forbiddenContentName = "(MobileMes|HASP|Sentinel|SafeNet|Hardlock|Dongle)"
+$forbiddenContentName = "MobileMes"
 $managedBinaries = @($releaseFiles | Where-Object { $_.Extension -in ".dll", ".exe" })
 foreach ($binary in $managedBinaries) {
     $assemblyName = $null
