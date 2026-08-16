@@ -6,7 +6,7 @@
 
 ## 最新版本
 
-**v5.7.89** - C# WinForms 完整 MES 工作流版
+**v5.7.90** - C# WinForms 完整 MES 工作流版
 
 ## 功能特性
 
@@ -104,7 +104,7 @@
 
 ```
 ┌──────────────────────────────────────────┐
-│ BarTender Printer v5.7.89  By---池鱼  [日志] [关于] [导出日志] │
+│ BarTender Printer v5.7.90  By---池鱼  [日志] [关于] [导出日志] │
 │ [保存配置] [加载配置] [编辑数据源]            │
 │ [加载校验数据] [✓启用校验] 已加载: N条       │
 │                                            │
@@ -163,7 +163,7 @@
 
 | 版本 | 大小 | 说明 |
 |------|------|------|
-| [v5.7.89](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.89) | ~50 MB | 完整 MES 工作流、PostgreSQL v17、CSV 交换、工位隔离与安全加固版 |
+| [v5.7.90](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.90) | ~50 MB | 完整 MES 工作流、PostgreSQL v17、CSV 交换、工位隔离与安全加固版 |
 | [v5.7.88](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.88) | ~50 MB | MES 工位、设备模拟、质量返工、出库归档与中心追溯集成版 |
 | [v5.7.87](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.87) | ~50 MB | 打印协调、历史灾难恢复与并发可靠性增强版 |
 | [v5.7.83](https://github.com/tall-1997/Label-Printer/releases/tag/v5.7.83) | ~50 MB | 响应式布局、多 DPI 与待核查状态显示修复版 |
