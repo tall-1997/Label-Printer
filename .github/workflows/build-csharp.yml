@@ -63,7 +63,15 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Run tests
-        run: dotnet test BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release
+        run: dotnet test BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release --logger "trx;LogFileName=build-windows.trx" --results-directory TestResults
+
+      - name: Upload Windows test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-csharp-windows-test-results
+          path: TestResults/*.trx
+          if-no-files-found: warn
 
       - name: Publish self-contained application
         run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish

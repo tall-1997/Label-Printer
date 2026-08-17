@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $publishRoot = (Resolve-Path $PublishDirectory).Path
 $requiredFiles = @(
     "BarTenderPrinter.exe",
+    "BarTenderPrinter.dll",
     "BarTenderPreviewHost.exe"
 )
 
@@ -17,19 +18,38 @@ foreach ($relativePath in $requiredFiles) {
     }
 }
 
-$releaseFiles = @(Get-ChildItem $publishRoot -Recurse -File)
+$releaseItems = @(Get-ChildItem $publishRoot -Recurse -Force)
+$releaseFiles = @($releaseItems | Where-Object { !$_.PSIsContainer })
+$forbiddenPathPattern = '(?i)(^|/)(sync-profile\.dat|[^/]+\.btpsync|sync\.db|[^/]+\.pfx\.dat)$|(^|/)(sync-incoming|template-cache|sync-staging|direct-sync-certificates)(/|$)|(^|/)[^/]*(sync[-_ ]?diagnostic|diagnostic[-_ ]?sync)[^/]*$|(^|/)[^/]*direct[-_ ]?sync[^/]*\.(pfx|p12|pfx\.dat)$'
 $forbiddenExtensions = @(
     ".pfx", ".p12", ".pem", ".key", ".cer", ".crt", ".der", ".p7b", ".p7c",
     ".snk", ".jks", ".keystore", ".db", ".sqlite", ".sqlite3", ".log"
 )
 $forbiddenNamePattern = "(?i)(MobileMes|HASP|Sentinel|SafeNet|Hardlock|Dongle)"
-$forbiddenFiles = @($releaseFiles | Where-Object {
-    $_.Name -match $forbiddenNamePattern -or $forbiddenExtensions -contains $_.Extension.ToLowerInvariant()
+$forbiddenFiles = @($releaseItems | Where-Object {
+    $relativePath = [System.IO.Path]::GetRelativePath($publishRoot, $_.FullName).Replace('\', '/')
+    $relativePath -match $forbiddenPathPattern -or
+        $_.Name -match $forbiddenNamePattern -or
+        (!$_.PSIsContainer -and $forbiddenExtensions -contains $_.Extension.ToLowerInvariant())
 })
 
 if ($forbiddenFiles) {
     $relativePaths = $forbiddenFiles | ForEach-Object { [System.IO.Path]::GetRelativePath($publishRoot, $_.FullName) }
     throw "Forbidden release assets found: $($relativePaths -join ', ')"
+}
+
+$mainAssembly = Join-Path $publishRoot "BarTenderPrinter.dll"
+$mainAssemblyContent = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($mainAssembly))
+$requiredSyncMarkers = @(
+    "SyncApplicationService",
+    "SyncConnectionProfileStore",
+    "SyncCoordinator",
+    "WebDavObjectStore",
+    "DirectSyncHost"
+)
+$missingSyncMarkers = @($requiredSyncMarkers | Where-Object { $mainAssemblyContent -notmatch [regex]::Escape($_) })
+if ($missingSyncMarkers) {
+    throw "Synchronization production code is missing from BarTenderPrinter.dll: $($missingSyncMarkers -join ', ')"
 }
 
 $forbiddenContentName = "MobileMes"
@@ -74,6 +94,9 @@ foreach ($configurationFile in $configurationFiles) {
 
     if ($content -match $pemPrivateKeyPattern) {
         throw "Configuration contains a PEM private key: $relativePath"
+    }
+    if ($content -match '(?i)BarTenderPrinter Sync Diagnostics') {
+        throw "Synchronization diagnostics found: $relativePath"
     }
 
     foreach ($pattern in $sensitiveValuePatterns) {

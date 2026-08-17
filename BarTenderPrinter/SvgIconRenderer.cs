@@ -17,7 +17,8 @@ namespace BarTenderPrinter
         Import,
         Reprint,
         Info,
-        Log
+        Log,
+        Sync
     }
 
     internal static class SvgIconRenderer
@@ -105,6 +106,14 @@ namespace BarTenderPrinter
                     graphics.DrawLine(pen, 8, 8, 16, 8);
                     graphics.DrawLine(pen, 8, 12, 16, 12);
                     graphics.DrawLine(pen, 8, 16, 14, 16);
+                    break;
+                case AppIcon.Sync:
+                    graphics.DrawArc(pen, 4, 4, 16, 16, 205, 225);
+                    graphics.DrawLine(pen, 4, 8, 4, 4);
+                    graphics.DrawLine(pen, 4, 4, 8, 4);
+                    graphics.DrawArc(pen, 4, 4, 16, 16, 25, 225);
+                    graphics.DrawLine(pen, 20, 16, 20, 20);
+                    graphics.DrawLine(pen, 20, 20, 16, 20);
                     break;
             }
         }

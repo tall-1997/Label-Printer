@@ -6,10 +6,12 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace BarTenderPrinter
@@ -63,6 +65,7 @@ namespace BarTenderPrinter
         private Button _btnSidebarToggle;
         private Button _btnPrintPage;
         private Button _btnOrderPage;
+        private Button _btnSyncPage;
         private bool _sidebarExpanded;
         private Panel _printPagePanel;
         private Panel _printOrderPanel;
@@ -71,6 +74,35 @@ namespace BarTenderPrinter
         private ComboBox _cmbPrintColor;
         private ComboBox _cmbPrintOrderNumber;
         private Panel _orderPagePanel;
+        private Panel _syncPagePanel;
+        private Panel _syncPageHeader;
+        private TableLayoutPanel _syncMetricsPanel;
+        private TabControl _syncTabs;
+        private Label _lblSyncWorkspace;
+        private Label _lblSyncStatus;
+        private Label _lblSyncLastRun;
+        private Label[] _syncMetricValues = Array.Empty<Label>();
+        private Label[] _syncMetricDetails = Array.Empty<Label>();
+        private Button _btnSyncNow;
+        private Button _btnSyncCancel;
+        private CheckBox _chkSyncDirect;
+        private NumericUpDown _numSyncPort;
+        private readonly SyncApplicationService _syncService;
+        private readonly SyncPagePresenter _syncPresenter;
+        private readonly System.Windows.Forms.Timer _syncDebounceTimer = new System.Windows.Forms.Timer { Interval = 10000 };
+        private ListBox _syncDevicesList;
+        private ListBox _syncConflictsList;
+        private ListBox _syncActivitiesList;
+        private Label _lblSyncUsage;
+        private ProgressBar _syncUsageProgress;
+        private ProgressBar _syncProgress;
+        private Label _lblSyncDiagnostics;
+        private Label _lblSyncConflictDetails;
+        private bool _networkEventBound;
+        private bool _closingAfterSync;
+        private bool _shutdownStarted;
+        private bool _remoteOrdersPendingReload;
+        private bool _remoteTemplateSettingsPendingReload;
         private Panel _orderContentPanel;
         private ComboBox _txtOrderCustomer;
         private ComboBox _txtOrderModel;
@@ -170,11 +202,14 @@ namespace BarTenderPrinter
             _btService = barTenderService ?? throw new ArgumentNullException(nameof(barTenderService));
             _history = historyRepository ?? throw new ArgumentNullException(nameof(historyRepository));
             _printWorkflow = printWorkflow ?? throw new ArgumentNullException(nameof(printWorkflow));
+            _syncService = new SyncApplicationService();
+            _syncPresenter = new SyncPagePresenter(_syncService);
             _startupTemplatePath = NormalizeStartupTemplatePath(startupTemplatePath);
             InitializeComponent();
             InstallP2Controls();
             InstallPreviewControl();
             InstallOrderSidebar();
+            InstallSyncPage();
             ConfigureModernShell();
             _configFile = AppPaths.ConfigFile;
             _printCoordinator = new PrintJobCoordinator(_btService, _history, _printWorkflow, printJobLedger);
@@ -197,32 +232,28 @@ namespace BarTenderPrinter
                         LayoutModernShell();
                         RebuildPrintPageLayout();
                         LayoutOrderEditor();
+                        LayoutSyncPage();
                         DockPreviewForm();
                     }));
                 }
                 catch (ObjectDisposedException) { }
                 catch (InvalidOperationException) { }
             };
-            FormClosed += (s, e) => DisposeModernImages();
+            FormClosed += (s, e) =>
+            {
+                DisposeModernImages();
+                _syncPresenter.Dispose();
+                _syncDebounceTimer.Dispose();
+            };
             Load += MainForm_Load;
             Shown += MainForm_Shown;
-            FormClosing += (s, e) =>
+            FormClosing += MainForm_FormClosing;
+            _syncDebounceTimer.Tick += async (s, e) =>
             {
-                if (_pendingPrintJobCount > 0)
-                {
-                    MessageBox.Show(this, "打印作业仍在处理中，请等待作业完成后退出。", "打印处理中", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    e.Cancel = true;
-                    return;
-                }
-                if (MessageBox.Show(this, "确定退出软件？", "退出确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-                { e.Cancel = true; return; }
-                if (!ConfirmOrderEditorChanges()) { e.Cancel = true; return; }
-                SaveCurrentTemplateSettings();
-                SaveApplicationState();
-                ClosePreviewForm();
-                _historySearchTimer.Dispose();
-                _btService.Dispose();
+                _syncDebounceTimer.Stop();
+                await RunAutomaticSyncAsync("本地共享数据已保存");
             };
+            _syncService.SharedDataChanged += SyncService_SharedDataChanged;
             inputPanel.SizeChanged += InputPanel_SizeChanged;
             inputPanel.Scroll += (s, e) => ClampInputPanelScroll();
             inputPanel.MouseWheel += (s, e) => BeginInvoke((Action)ClampInputPanelScroll);
@@ -232,6 +263,7 @@ namespace BarTenderPrinter
                 LayoutModernShell();
                 RebuildPrintPageLayout();
                 LayoutOrderEditor();
+                LayoutSyncPage();
                 DockPreviewForm();
             };
             historyPanel.SizeChanged += (s, e) =>
@@ -332,6 +364,10 @@ namespace BarTenderPrinter
             _btnOrderPage.BackColor = MiuiTheme.Sidebar;
             _btnOrderPage.FlatAppearance.BorderSize = 0;
             _btnOrderPage.FlatAppearance.MouseOverBackColor = MiuiTheme.SidebarHover;
+            _btnSyncPage.ForeColor = MiuiTheme.TextPrimary;
+            _btnSyncPage.BackColor = MiuiTheme.Sidebar;
+            _btnSyncPage.FlatAppearance.BorderSize = 0;
+            _btnSyncPage.FlatAppearance.MouseOverBackColor = MiuiTheme.SidebarHover;
 
             MiuiTheme.StyleComboBox(cmbTemplate);
             MiuiTheme.StyleComboBox(cmbPrinter);
@@ -394,6 +430,7 @@ namespace BarTenderPrinter
             var navWidth = Math.Max(ScaleUi(136), SidebarExpandedWidth - ScaleUi(16));
             _btnPrintPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(12), navWidth, ScaleUi(44));
             _btnOrderPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(64), navWidth, ScaleUi(44));
+            _btnSyncPage.Bounds = new Rectangle(ScaleUi(8), ScaleUi(116), navWidth, ScaleUi(44));
             if (_printOrderPanel != null) _printOrderPanel.Left = sidebarWidth + ScaleUi(12);
             if (_printPagePanel != null)
             {
@@ -405,6 +442,13 @@ namespace BarTenderPrinter
             {
                 _orderPagePanel.Left = sidebarWidth;
                 _orderPagePanel.Width = Math.Max(ScaleUi(320), ClientSize.Width - sidebarWidth);
+            }
+            if (_syncPagePanel != null)
+            {
+                _syncPagePanel.Left = sidebarWidth;
+                _syncPagePanel.Width = Math.Max(ScaleUi(320), ClientSize.Width - sidebarWidth);
+                _syncPagePanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
+                LayoutSyncPage();
             }
         }
 
@@ -464,6 +508,11 @@ namespace BarTenderPrinter
             {
                 _orderPagePanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
                 LayoutOrderEditor();
+            }
+            if (_syncPagePanel != null)
+            {
+                _syncPagePanel.Height = Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom);
+                LayoutSyncPage();
             }
         }
 
@@ -678,8 +727,10 @@ namespace BarTenderPrinter
         {
             if (scale <= 0F) scale = Math.Max(1F, DeviceDpi / 96F);
             var printActive = _printPagePanel?.Visible == true;
+            var syncActive = _syncPagePanel?.Visible == true;
             ReplaceImage(_btnPrintPage, SvgIconRenderer.Render(AppIcon.Print, printActive ? Color.White : MiuiTheme.TextPrimary, ScaleIcon(17, scale)));
             ReplaceImage(_btnOrderPage, SvgIconRenderer.Render(AppIcon.Orders, orderPageActive ? Color.White : MiuiTheme.TextPrimary, ScaleIcon(17, scale)));
+            ReplaceImage(_btnSyncPage, SvgIconRenderer.Render(AppIcon.Sync, syncActive ? Color.White : MiuiTheme.TextPrimary, ScaleIcon(17, scale)));
         }
 
         private static int ScaleIcon(int logicalSize, float scale)
@@ -715,7 +766,7 @@ namespace BarTenderPrinter
 
         private void DisposeModernImages()
         {
-            foreach (var button in new[] { btnExportLog, btnPrint, btnRefreshPrinter, btnClearSearch, btnClearHistory, btnExportHistory, btnImportHistory, btnReprintHistory, _btnToggleLog, _btnAbout, _btnSidebarToggle, _btnPrintPage, _btnOrderPage })
+            foreach (var button in new[] { btnExportLog, btnPrint, btnRefreshPrinter, btnClearSearch, btnClearHistory, btnExportHistory, btnImportHistory, btnReprintHistory, _btnToggleLog, _btnAbout, _btnSidebarToggle, _btnPrintPage, _btnOrderPage, _btnSyncPage })
             {
                 if (button == null) continue;
                 var image = button.Image;
@@ -1045,6 +1096,141 @@ namespace BarTenderPrinter
             SetStatus("正在初始化...");
         }
 
+        private async void MainForm_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (_closingAfterSync)
+            {
+                ClosePreviewForm();
+                _historySearchTimer.Dispose();
+                _btService.Dispose();
+                return;
+            }
+            if (_shutdownStarted)
+            {
+                e.Cancel = true;
+                return;
+            }
+            if (_pendingPrintJobCount > 0)
+            {
+                MessageBox.Show(this, "打印作业仍在处理中，请等待作业完成后退出。", "打印处理中", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                e.Cancel = true;
+                return;
+            }
+            if (MessageBox.Show(this, "确定退出软件？", "退出确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            {
+                e.Cancel = true;
+                return;
+            }
+            if (!ConfirmOrderEditorChanges())
+            {
+                e.Cancel = true;
+                return;
+            }
+
+            e.Cancel = true;
+            _shutdownStarted = true;
+            _syncDebounceTimer.Stop();
+            UnbindNetworkEvents();
+            if (!_remoteTemplateSettingsPendingReload) SaveCurrentTemplateSettings();
+            SaveApplicationState();
+            try
+            {
+                var shutdown = _syncService.FlushAndStopAsync(TimeSpan.FromSeconds(5));
+                await Task.WhenAny(shutdown, Task.Delay(TimeSpan.FromSeconds(5)));
+            }
+            catch (Exception ex)
+            {
+                LoggerService.Error("退出时刷新同步队列失败", ex);
+            }
+            finally
+            {
+                _closingAfterSync = true;
+                Close();
+            }
+        }
+
+        private void BindNetworkEvents()
+        {
+            if (_networkEventBound) return;
+            NetworkChange.NetworkAvailabilityChanged += NetworkAvailabilityChanged;
+            _networkEventBound = true;
+        }
+
+        private void UnbindNetworkEvents()
+        {
+            if (!_networkEventBound) return;
+            NetworkChange.NetworkAvailabilityChanged -= NetworkAvailabilityChanged;
+            _networkEventBound = false;
+        }
+
+        private void NetworkAvailabilityChanged(object sender, NetworkAvailabilityEventArgs e)
+        {
+            if (e.IsAvailable) PostToUi(() => _ = RunAutomaticSyncAsync("网络连接已恢复"));
+        }
+
+        private void ScheduleSharedDataSync()
+        {
+            if (_shutdownStarted || !_syncService.IsConfigured) return;
+            _ = CaptureSharedDataSnapshotAsync();
+            _syncDebounceTimer.Stop();
+            _syncDebounceTimer.Start();
+        }
+
+        private async Task CaptureSharedDataSnapshotAsync()
+        {
+            try { await _syncService.QueueLocalChangesAsync(CancellationToken.None); }
+            catch (Exception ex) { LoggerService.Error("生成共享数据同步队列失败", ex); }
+            await RefreshSyncStateSafelyAsync();
+        }
+
+        private async Task RefreshSyncStateSafelyAsync()
+        {
+            try { await _syncPresenter.RefreshAsync(); }
+            catch (Exception ex) { LoggerService.Error("刷新同步中心状态失败", ex); }
+        }
+
+        private async Task RunAutomaticSyncAsync(string reason)
+        {
+            if (_shutdownStarted || !_syncService.IsConfigured || !NetworkInterface.GetIsNetworkAvailable()) return;
+            var result = await _syncPresenter.ExecuteAsync((service, token) => service.SynchronizeAsync(token));
+            if (result.Succeeded) LoggerService.Info($"自动同步完成（{reason}）：{result.Message}");
+            else LoggerService.Error($"自动同步失败（{reason}）：{result.Message}");
+        }
+
+        private void SyncService_SharedDataChanged(object sender, SharedDataChangedEventArgs e)
+        {
+            PostToUi(() => ReloadSharedDataAfterSync(e.EntityTypes));
+        }
+
+        private void ReloadSharedDataAfterSync(IReadOnlyCollection<string> entityTypes)
+        {
+            if (_shutdownStarted) return;
+            if (entityTypes.Contains("Orders"))
+            {
+                if (_orderEditorDirty)
+                {
+                    _remoteOrdersPendingReload = true;
+                    SetStatus("远端订单已保存到磁盘；当前编辑尚未保存，请保存或放弃后刷新订单。");
+                    AddLog("远端订单已写入磁盘，因订单编辑存在未保存修改而延后界面刷新", "WARNING");
+                }
+                else
+                {
+                    _orders.Reload();
+                    _remoteOrdersPendingReload = false;
+                    RefreshOrderFilters(OrderFilterLevel.All, false);
+                    RefreshPrintOrderSelector(PrintOrderFilterLevel.All, true);
+                    SetStatus("已加载远端订单更新");
+                }
+            }
+            if (entityTypes.Contains("TemplateSettings"))
+            {
+                _templateSettings.Reload();
+                _remoteTemplateSettingsPendingReload = !string.IsNullOrWhiteSpace(_selectedTemplatePath);
+                if (!_remoteTemplateSettingsPendingReload) SetStatus("已加载远端模板设置更新");
+                else SetStatus("远端模板设置已保存到磁盘，将在重新选择模板时加载。");
+            }
+        }
+
         private void InstallOrderSidebar()
         {
             var collapsedWidth = SidebarCollapsedWidth;
@@ -1073,14 +1259,17 @@ namespace BarTenderPrinter
             _btnSidebarToggle.Click += (s, e) => SetSidebarExpanded(!_sidebarExpanded);
             _btnPrintPage = new Button { Text = "打印页面", Visible = false };
             _btnOrderPage = new Button { Text = "订单管理", Visible = false };
+            _btnSyncPage = new Button { Text = "同步中心", Visible = false, AccessibleName = "同步中心" };
             _btnPrintPage.Click += (s, e) => { ShowPrintPage(); SetSidebarExpanded(false); };
             _btnOrderPage.Click += (s, e) => { ShowOrderManagementPage(); SetSidebarExpanded(false); };
-            _navPanel.Controls.AddRange(new Control[] { _btnPrintPage, _btnOrderPage });
+            _btnSyncPage.Click += (s, e) => { ShowSyncPage(); SetSidebarExpanded(false); };
+            _navPanel.Controls.AddRange(new Control[] { _btnPrintPage, _btnOrderPage, _btnSyncPage });
             Controls.Add(_navPanel);
             _navPanel.BringToFront();
             MiuiTheme.StyleButton(_btnSidebarToggle);
             MiuiTheme.StyleNavigationButton(_btnPrintPage, true);
             MiuiTheme.StyleNavigationButton(_btnOrderPage, false);
+            MiuiTheme.StyleNavigationButton(_btnSyncPage, false);
             ApplyNavigationIcons(false);
             LayoutSidebar();
 
@@ -1193,6 +1382,541 @@ namespace BarTenderPrinter
                 control.Visible = false;
             RebuildPrintPageLayout();
             RefreshPrintOrderSelector(PrintOrderFilterLevel.All, false);
+        }
+
+        private void InstallSyncPage()
+        {
+            _syncPagePanel = new Panel
+            {
+                Location = new Point(0, titlePanel.Bottom),
+                Size = new Size(ClientSize.Width, Math.Max(ScaleUi(120), WorkspaceBottom - titlePanel.Bottom)),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                BackColor = MiuiTheme.Background,
+                Visible = false
+            };
+
+            _syncPageHeader = new Panel { Dock = DockStyle.Top, BackColor = MiuiTheme.CardBackground };
+            var title = new Label
+            {
+                Text = "同步中心",
+                AutoSize = true,
+                Font = MiuiTheme.ProductTitleFont,
+                ForeColor = MiuiTheme.TextPrimary
+            };
+            _lblSyncWorkspace = new Label { AutoEllipsis = true, ForeColor = MiuiTheme.TextSecondary };
+            _lblSyncStatus = new Label { AutoEllipsis = true, ForeColor = MiuiTheme.TextSecondary };
+            _lblSyncLastRun = new Label { AutoSize = false, TextAlign = ContentAlignment.MiddleRight, ForeColor = MiuiTheme.TextSecondary };
+            _btnSyncNow = new Button { Text = "立即同步", AccessibleName = "立即同步" };
+            _btnSyncCancel = new Button { Text = "取消", AccessibleName = "取消当前同步", Enabled = false };
+            MiuiTheme.StyleButton(_btnSyncNow, true);
+            MiuiTheme.StyleButton(_btnSyncCancel);
+            _btnSyncNow.Click += async (s, e) => await RunSyncOperationAsync((service, token) => service.SynchronizeAsync(token));
+            _btnSyncCancel.Click += async (s, e) =>
+            {
+                var result = await _syncPresenter.CancelAsync();
+                ShowSyncOperationResult(result);
+            };
+            _syncPageHeader.Controls.AddRange(new Control[] { title, _lblSyncWorkspace, _lblSyncStatus, _lblSyncLastRun, _btnSyncNow, _btnSyncCancel });
+
+            _syncMetricsPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                BackColor = MiuiTheme.Background,
+                GrowStyle = TableLayoutPanelGrowStyle.AddRows,
+                Margin = Padding.Empty,
+                Padding = new Padding(ScaleUi(16), ScaleUi(8), ScaleUi(16), ScaleUi(8))
+            };
+            var metricDefinitions = new[]
+            {
+                ("同步状态", "待配置", "WebDAV 默认通道"),
+                ("待上传", "0", "0 B"),
+                ("设备数量", "0", "0 台可直连"),
+                ("冲突数量", "0", "暂无待处理冲突")
+            };
+            _syncMetricValues = new Label[metricDefinitions.Length];
+            _syncMetricDetails = new Label[metricDefinitions.Length];
+            for (var i = 0; i < metricDefinitions.Length; i++)
+            {
+                var metric = CreateSyncMetricCard(metricDefinitions[i].Item1, metricDefinitions[i].Item2, metricDefinitions[i].Item3,
+                    out var value, out var detail);
+                _syncMetricValues[i] = value;
+                _syncMetricDetails[i] = detail;
+                _syncMetricsPanel.Controls.Add(metric);
+            }
+
+            _syncTabs = new TabControl { Dock = DockStyle.Fill, AccessibleName = "同步中心页面" };
+            MiuiTheme.StyleTabControl(_syncTabs, DeviceDpi);
+            _syncTabs.TabPages.Add(CreateSyncOverviewPage());
+            _syncTabs.TabPages.Add(CreateSyncDevicesPage());
+            _syncTabs.TabPages.Add(CreateSyncConnectionPage());
+            _syncTabs.TabPages.Add(CreateSyncConflictsPage());
+            _syncTabs.TabPages.Add(CreateSyncDiagnosticsPage());
+            _syncTabs.SelectedIndexChanged += (s, e) => BeginInvoke((Action)LayoutSyncPage);
+
+            _syncPagePanel.Controls.Add(_syncTabs);
+            _syncPagePanel.Controls.Add(_syncMetricsPanel);
+            _syncPagePanel.Controls.Add(_syncPageHeader);
+            Controls.Add(_syncPagePanel);
+            _syncPresenter.StateChanged += state => PostToUi(() => RenderSyncState(state));
+            LayoutSyncPage();
+        }
+
+        private Panel CreateSyncMetricCard(string heading, string value, string detail, out Label valueLabel, out Label detailLabel)
+        {
+            var card = new Panel { Margin = new Padding(ScaleUi(4)), BackColor = MiuiTheme.CardBackground };
+            card.Paint += DrawCardBorder;
+            var headingLabel = new Label { Text = heading, ForeColor = MiuiTheme.TextSecondary, AutoEllipsis = true };
+            var valueControl = new Label { Text = value, ForeColor = MiuiTheme.TextPrimary, Font = MiuiTheme.ProductTitleFont, AutoEllipsis = true };
+            valueLabel = valueControl;
+            var detailControl = new Label { Text = detail, ForeColor = MiuiTheme.TextSecondary, AutoEllipsis = true };
+            detailLabel = detailControl;
+            headingLabel.SetBounds(ScaleUi(16), ScaleUi(12), ScaleUi(180), ScaleUi(20));
+            valueControl.SetBounds(ScaleUi(16), ScaleUi(36), ScaleUi(180), ScaleUi(30));
+            detailControl.SetBounds(ScaleUi(16), ScaleUi(70), ScaleUi(180), ScaleUi(20));
+            card.Controls.AddRange(new Control[] { headingLabel, valueControl, detailControl });
+            card.SizeChanged += (s, e) =>
+            {
+                var width = Math.Max(1, card.ClientSize.Width - ScaleUi(32));
+                headingLabel.Width = width;
+                valueControl.Width = width;
+                detailControl.Width = width;
+            };
+            return card;
+        }
+
+        private TabPage CreateSyncOverviewPage()
+        {
+            var page = CreateSyncTabPage("概览");
+            var content = CreateSyncFlowContent();
+            content.Controls.Add(CreateSyncSection("同步进度", "显示当前同步任务运行状态。", out var progressActions));
+            _syncProgress = new ProgressBar { Width = ScaleUi(520), Height = ScaleUi(18), Style = ProgressBarStyle.Continuous };
+            progressActions.Controls.Add(_syncProgress);
+            var recent = CreateSyncSection("最近同步结果", "最近同步与自动触发结果。", out var recentArea);
+            _syncActivitiesList = new ListBox { Width = ScaleUi(720), Height = ScaleUi(110), AccessibleName = "最近同步结果" };
+            recentArea.Controls.Add(_syncActivitiesList);
+            content.Controls.Add(recent);
+            content.Controls.Add(CreateSyncSection("待处理事项", "配置协作空间后，这里会显示连接失效、模板上传限制和冲突。", out _));
+            content.Controls.Add(CreateSyncSection("离线可用", "网络不可用时继续使用最近有效的订单、设置和模板。本地变更进入待上传队列。", out _));
+            page.Controls.Add(content);
+            return page;
+        }
+
+        private TabPage CreateSyncDevicesPage()
+        {
+            var page = CreateSyncTabPage("设备与直连");
+            var content = CreateSyncFlowContent();
+            var local = CreateSyncSection("本机直连", "候选 IP 由软件自动收集。启用后仅监听已配置端口，并通过 WebDAV 发布加密端点记录。", out var actions);
+            _chkSyncDirect = new CheckBox { Text = "启用专网直连", AutoSize = true };
+            _numSyncPort = new NumericUpDown { Minimum = 1024, Maximum = 65535, Value = 45873, Width = ScaleUi(100) };
+            var portLabel = new Label { Text = "监听端口", AutoSize = true, Padding = new Padding(0, ScaleUi(7), 0, 0) };
+            var apply = new Button { Text = "应用直连设置", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)) };
+            var publish = new Button { Text = "重新发布", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)) };
+            MiuiTheme.StyleCheckBox(_chkSyncDirect);
+            MiuiTheme.StyleNumericUpDown(_numSyncPort);
+            MiuiTheme.StyleButton(apply, true);
+            MiuiTheme.StyleButton(publish);
+            apply.Click += async (s, e) => await RunSyncOperationAsync((service, token) =>
+                service.ConfigureDirectSyncAsync(_chkSyncDirect.Checked, Decimal.ToInt32(_numSyncPort.Value), token));
+            publish.Click += async (s, e) => await RunSyncOperationAsync((service, token) => service.PublishDirectEndpointAsync(token));
+            actions.Controls.AddRange(new Control[] { _chkSyncDirect, portLabel, _numSyncPort, apply, publish });
+            content.Controls.Add(local);
+            var devices = CreateSyncSection("已知设备", "完成首次 WebDAV 同步后显示设备名称、端点有效期、候选地址数量和最近直连结果。", out var deviceActions);
+            _syncDevicesList = new ListBox { Width = ScaleUi(720), Height = ScaleUi(120), AccessibleName = "已知同步设备" };
+            var test = new Button { Text = "测试选中设备直连", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)) };
+            MiuiTheme.StyleButton(test);
+            test.Click += async (s, e) =>
+            {
+                var deviceId = (_syncDevicesList.SelectedItem as SyncDeviceState)?.DeviceId ?? string.Empty;
+                await RunSyncOperationAsync((service, token) => service.TestDirectConnectionAsync(deviceId, token));
+            };
+            deviceActions.Controls.Add(_syncDevicesList);
+            deviceActions.Controls.Add(test);
+            content.Controls.Add(devices);
+            page.Controls.Add(content);
+            return page;
+        }
+
+        private TabPage CreateSyncConnectionPage()
+        {
+            var page = CreateSyncTabPage("连接设置");
+            var content = CreateSyncFlowContent();
+            var create = CreateSyncSection("创建协作空间", "第一台电脑填写坚果云 WebDAV 信息。验证成功后再生成加密连接文件。", out var createForm);
+            var url = AddSyncField(createForm, "WebDAV 地址", "https://dav.jianguoyun.com/dav/", false);
+            var account = AddSyncField(createForm, "坚果云邮箱", string.Empty, false);
+            var appPassword = AddSyncField(createForm, "应用密码", string.Empty, true);
+            var workspace = AddSyncField(createForm, "空间名称", string.Empty, false);
+            var sharedPassword = AddSyncField(createForm, "共享密码", string.Empty, true);
+            var testWebDav = new Button { Text = "测试 WebDAV", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)) };
+            var createWorkspace = new Button { Text = "创建协作空间", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)) };
+            MiuiTheme.StyleButton(testWebDav);
+            MiuiTheme.StyleButton(createWorkspace, true);
+            SyncConnectionRequest Request() => new SyncConnectionRequest
+            {
+                WebDavUrl = url.Text.Trim(),
+                Account = account.Text.Trim(),
+                ApplicationPassword = appPassword.Text,
+                WorkspaceName = workspace.Text.Trim(),
+                SharedPassword = sharedPassword.Text
+            };
+            testWebDav.Click += async (s, e) => await RunSyncOperationAsync((service, token) => service.TestWebDavAsync(Request(), token));
+            createWorkspace.Click += async (s, e) => await RunSyncOperationAsync((service, token) => service.CreateWorkspaceAsync(Request(), token));
+            createForm.Controls.Add(testWebDav);
+            createForm.Controls.Add(createWorkspace);
+            content.Controls.Add(create);
+
+            var join = CreateSyncSection("加入协作空间", "导入管理员提供的 .btpsync 文件，并输入线下获得的共享密码。", out var joinForm);
+            var importPassword = AddSyncField(joinForm, "共享密码", string.Empty, true);
+            var import = new Button { Text = "导入连接文件", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)) };
+            var export = new Button { Text = "导出连接文件", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)) };
+            MiuiTheme.StyleButton(import, true);
+            MiuiTheme.StyleButton(export);
+            import.Click += async (s, e) =>
+            {
+                using var dialog = new OpenFileDialog { Filter = "同步连接文件|*.btpsync|所有文件|*.*" };
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                    await RunSyncOperationAsync((service, token) => service.ImportConnectionAsync(dialog.FileName, importPassword.Text, token));
+            };
+            export.Click += async (s, e) =>
+            {
+                using var dialog = new SaveFileDialog { Filter = "同步连接文件|*.btpsync", DefaultExt = "btpsync", AddExtension = true };
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                    await RunSyncOperationAsync((service, token) => service.ExportConnectionAsync(dialog.FileName, importPassword.Text, token));
+            };
+            joinForm.Controls.Add(import);
+            joinForm.Controls.Add(export);
+            content.Controls.Add(join);
+            page.Controls.Add(content);
+            return page;
+        }
+
+        private TabPage CreateSyncConflictsPage()
+        {
+            var page = CreateSyncTabPage("冲突处理");
+            var content = CreateSyncFlowContent();
+            var conflict = CreateSyncSection("待处理冲突", "选择冲突并指定处理方式。", out var actions);
+            _syncConflictsList = new ListBox { Width = ScaleUi(720), Height = ScaleUi(120), AccessibleName = "待处理同步冲突" };
+            _lblSyncConflictDetails = new Label { AutoSize = true, ForeColor = MiuiTheme.TextSecondary };
+            var save = new Button { Text = "保存合并结果", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)), Enabled = false };
+            _syncConflictsList.SelectedIndexChanged += (s, e) =>
+            {
+                var selected = _syncConflictsList.SelectedItem as SyncConflictStateItem;
+                save.Enabled = selected != null;
+                _lblSyncConflictDetails.Text = selected == null ? "未选择冲突" :
+                    $"冲突 {selected.ConflictId}    实体 {selected.EntityType}/{selected.EntityId}    时间 {selected.CreatedAtUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}";
+            };
+            var resolution = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = ScaleUi(180) };
+            resolution.Items.AddRange(new object[] { "保留本地版本", "采用远端版本", "逐字段合并" });
+            resolution.SelectedIndex = 0;
+            MiuiTheme.StyleComboBox(resolution);
+            MiuiTheme.StyleButton(save, true);
+            save.Click += async (s, e) =>
+            {
+                var conflictId = (_syncConflictsList.SelectedItem as SyncConflictStateItem)?.ConflictId ?? string.Empty;
+                await RunSyncOperationAsync((service, token) =>
+                    service.ResolveConflictAsync(conflictId, resolution.SelectedItem?.ToString() ?? string.Empty, token));
+            };
+            actions.Controls.Add(_syncConflictsList);
+            actions.Controls.Add(_lblSyncConflictDetails);
+            actions.Controls.Add(resolution);
+            actions.Controls.Add(save);
+            content.Controls.Add(conflict);
+            content.Controls.Add(CreateSyncSection("版本差异", "选择冲突后显示实体名称、来源设备、版本、时间、字段差异或模板摘要。", out _));
+            page.Controls.Add(content);
+            return page;
+        }
+
+        private TabPage CreateSyncDiagnosticsPage()
+        {
+            var page = CreateSyncTabPage("用量与诊断");
+            var content = CreateSyncFlowContent();
+            var usage = CreateSyncSection("本月用量", "当前设备记录的同步传输与请求用量。", out var usageArea);
+            _lblSyncUsage = new Label { AutoSize = true, ForeColor = MiuiTheme.TextPrimary };
+            _syncUsageProgress = new ProgressBar { Width = ScaleUi(520), Height = ScaleUi(18), Maximum = 100, Value = 0 };
+            usageArea.Controls.Add(_lblSyncUsage);
+            usageArea.Controls.Add(_syncUsageProgress);
+            content.Controls.Add(usage);
+            var diagnostics = CreateSyncSection("连接与本地状态", "当前连接、队列与冲突状态。", out var actions);
+            _lblSyncDiagnostics = new Label { AutoSize = true, ForeColor = MiuiTheme.TextPrimary };
+            var test = new Button { Text = "测试 WebDAV", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)) };
+            var export = new Button { Text = "导出脱敏诊断", AutoSize = true, MinimumSize = new Size(0, ScaleUi(36)) };
+            MiuiTheme.StyleButton(test);
+            MiuiTheme.StyleButton(export);
+            test.Click += async (s, e) => await RunSyncOperationAsync((service, token) => service.TestWebDavAsync(new SyncConnectionRequest(), token));
+            export.Click += async (s, e) =>
+            {
+                using var dialog = new SaveFileDialog { Filter = "诊断文件|*.txt", DefaultExt = "txt", AddExtension = true };
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                    await RunSyncOperationAsync((service, token) => service.ExportDiagnosticsAsync(dialog.FileName, token));
+            };
+            actions.Controls.Add(_lblSyncDiagnostics);
+            actions.Controls.Add(test);
+            actions.Controls.Add(export);
+            content.Controls.Add(diagnostics);
+            page.Controls.Add(content);
+            return page;
+        }
+
+        private TabPage CreateSyncTabPage(string text) => new TabPage
+        {
+            Text = text,
+            BackColor = MiuiTheme.Background,
+            Padding = Padding.Empty,
+            AutoScroll = true
+        };
+
+        private FlowLayoutPanel CreateSyncFlowContent() => new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Padding = new Padding(ScaleUi(16), ScaleUi(12), ScaleUi(16), ScaleUi(24)),
+            BackColor = MiuiTheme.Background
+        };
+
+        private Panel CreateSyncSection(string heading, string description, out FlowLayoutPanel actions)
+        {
+            var section = new Panel { BackColor = MiuiTheme.CardBackground, Margin = new Padding(0, 0, 0, ScaleUi(16)) };
+            section.Paint += DrawCardBorder;
+            var headingLabel = new Label
+            {
+                Text = heading,
+                Font = MiuiTheme.SectionFont,
+                ForeColor = MiuiTheme.TextPrimary,
+                AutoSize = true,
+                Location = new Point(ScaleUi(16), ScaleUi(16))
+            };
+            var descriptionLabel = new Label
+            {
+                Text = description,
+                ForeColor = MiuiTheme.TextSecondary,
+                AutoSize = true,
+                Location = new Point(ScaleUi(16), ScaleUi(44))
+            };
+            var actionPanel = new FlowLayoutPanel
+            {
+                Location = new Point(ScaleUi(16), ScaleUi(82)),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                Padding = Padding.Empty
+            };
+            actions = actionPanel;
+            section.Controls.AddRange(new Control[] { headingLabel, descriptionLabel, actionPanel });
+            section.SizeChanged += (s, e) =>
+            {
+                descriptionLabel.MaximumSize = new Size(Math.Max(1, section.ClientSize.Width - ScaleUi(32)), 0);
+                var availableWidth = Math.Max(ScaleUi(180), section.ClientSize.Width - ScaleUi(32));
+                actionPanel.MaximumSize = new Size(availableWidth, 0);
+                foreach (var field in actionPanel.Controls.OfType<Panel>())
+                    field.Width = Math.Min(ScaleUi(330), availableWidth);
+                actionPanel.Top = descriptionLabel.Bottom + ScaleUi(12);
+                section.Height = Math.Max(ScaleUi(116), actionPanel.Bottom + ScaleUi(16));
+            };
+            return section;
+        }
+
+        private TextBox AddSyncField(FlowLayoutPanel form, string label, string initialValue, bool password)
+        {
+            var field = new Panel { Width = ScaleUi(330), Height = ScaleUi(62), Margin = new Padding(0, 0, ScaleUi(12), ScaleUi(8)) };
+            var caption = new Label { Text = label, AutoSize = true, ForeColor = MiuiTheme.TextPrimary };
+            var input = new TextBox
+            {
+                Text = initialValue,
+                UseSystemPasswordChar = password,
+                Width = ScaleUi(password ? 258 : 320),
+                Location = new Point(0, ScaleUi(24)),
+                AccessibleName = label
+            };
+            MiuiTheme.StyleTextBox(input);
+            field.Controls.Add(caption);
+            field.Controls.Add(input);
+            CheckBox reveal = null;
+            if (password)
+            {
+                reveal = new CheckBox
+                {
+                    Text = "显示",
+                    AutoSize = true,
+                    Location = new Point(ScaleUi(264), ScaleUi(24)),
+                    AccessibleName = $"显示{label}"
+                };
+                reveal.CheckedChanged += (s, e) => input.UseSystemPasswordChar = !reveal.Checked;
+                MiuiTheme.StyleCheckBox(reveal);
+                field.Controls.Add(reveal);
+            }
+            field.SizeChanged += (s, e) =>
+            {
+                if (reveal == null)
+                {
+                    input.Width = Math.Max(ScaleUi(120), field.ClientSize.Width);
+                    return;
+                }
+                reveal.Left = Math.Max(ScaleUi(120), field.ClientSize.Width - reveal.Width);
+                input.Width = Math.Max(ScaleUi(100), reveal.Left - ScaleUi(6));
+            };
+            form.Controls.Add(field);
+            return input;
+        }
+
+        private async Task RunSyncOperationAsync(Func<ISyncPageService, System.Threading.CancellationToken, Task<SyncOperationResult>> operation)
+        {
+            var result = await _syncPresenter.ExecuteAsync(operation);
+            ShowSyncOperationResult(result);
+        }
+
+        private void ShowSyncOperationResult(SyncOperationResult result)
+        {
+            if (result == null || result.Succeeded) return;
+            _dialogs.ShowWarning(this, result.Message, "同步中心");
+        }
+
+        private void RenderSyncState(SyncPageState state)
+        {
+            if (state == null || IsDisposed || Disposing) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke((Action)(() => RenderSyncState(state)));
+                return;
+            }
+            _lblSyncWorkspace.Text = $"{state.WorkspaceName} · 本机 {state.DeviceName}";
+            _lblSyncStatus.Text = state.StatusText;
+            _lblSyncStatus.ForeColor = string.IsNullOrWhiteSpace(state.LastError) ? MiuiTheme.TextSecondary : MiuiTheme.Error;
+            _lblSyncLastRun.Text = state.LastSuccessfulSyncUtc.HasValue
+                ? $"最近同步 {state.LastSuccessfulSyncUtc.Value.ToLocalTime():yyyy-MM-dd HH:mm}"
+                : "尚无成功同步";
+            _btnSyncNow.Enabled = !state.IsBusy;
+            _btnSyncNow.Text = state.IsBusy ? "正在同步" : "立即同步";
+            _btnSyncCancel.Enabled = state.IsBusy;
+            if (_syncProgress != null) _syncProgress.Style = state.IsBusy ? ProgressBarStyle.Marquee : ProgressBarStyle.Continuous;
+            if (_chkSyncDirect != null) _chkSyncDirect.Checked = state.DirectSyncEnabled;
+            if (_numSyncPort != null && state.DirectSyncPort >= _numSyncPort.Minimum && state.DirectSyncPort <= _numSyncPort.Maximum)
+                _numSyncPort.Value = state.DirectSyncPort;
+            if (_syncMetricValues.Length == 4)
+            {
+                _syncMetricValues[0].Text = state.IsBusy ? "同步中" : state.ConnectionState == SyncConnectionState.NotConfigured ? "待配置" :
+                    state.ConnectionState == SyncConnectionState.NeedsAttention ? "需处理" : "已就绪";
+                _syncMetricValues[1].Text = state.PendingEventCount.ToString();
+                _syncMetricValues[2].Text = state.DeviceCount.ToString();
+                _syncMetricValues[3].Text = state.ConflictCount.ToString();
+            }
+            if (_syncMetricDetails.Length == 4)
+            {
+                _syncMetricDetails[0].Text = state.ActiveChannel;
+                _syncMetricDetails[1].Text = FormatBytes(state.PendingBytes);
+                _syncMetricDetails[2].Text = $"{state.DirectDeviceCount} 台可直连";
+                _syncMetricDetails[3].Text = state.ConflictCount == 0 ? "当前无待处理冲突" : "请选择冲突进行处理";
+            }
+            BindSyncList(_syncDevicesList, state.Devices);
+            BindSyncList(_syncConflictsList, state.Conflicts);
+            BindSyncList(_syncActivitiesList, state.RecentActivities);
+            if (_lblSyncUsage != null)
+            {
+                _lblSyncUsage.Text = $"上传 {FormatBytes(state.Usage.UploadedBytes)}    下载 {FormatBytes(state.Usage.DownloadedBytes)}    请求 {state.Usage.RequestCount}";
+                var transferred = state.Usage.UploadedBytes + state.Usage.DownloadedBytes;
+                _syncUsageProgress.Value = (int)Math.Min(100, transferred * 100L / (1024L * 1024L * 1024L));
+            }
+            if (_lblSyncDiagnostics != null)
+                _lblSyncDiagnostics.Text = $"通道 {state.ActiveChannel}    待上传 {state.PendingEventCount} / {FormatBytes(state.PendingBytes)}    冲突 {state.ConflictCount}    隔离 {state.QuarantinedObjectCount}    阻断 {state.BlockedOutboxCount}    直连端口 {state.DirectSyncPort}";
+            RefreshSyncNavigationBadge(state);
+        }
+
+        private static void BindSyncList<T>(ListBox list, IReadOnlyList<T> items)
+        {
+            if (list == null) return;
+            var selected = list.SelectedItem;
+            list.BeginUpdate();
+            try
+            {
+                list.Items.Clear();
+                if (items != null) list.Items.AddRange(items.Cast<object>().ToArray());
+                if (selected != null)
+                {
+                    var index = -1;
+                    for (var position = 0; position < list.Items.Count; position++)
+                    {
+                        if (!string.Equals(list.Items[position]?.ToString(), selected.ToString(), StringComparison.Ordinal)) continue;
+                        index = position;
+                        break;
+                    }
+                    if (index >= 0 && index < list.Items.Count) list.SelectedIndex = index;
+                }
+                if (list.SelectedIndex < 0 && list.Items.Count > 0) list.SelectedIndex = 0;
+            }
+            finally { list.EndUpdate(); }
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes >= 1024L * 1024L * 1024L) return $"{bytes / (1024d * 1024d * 1024d):0.##} GB";
+            if (bytes >= 1024L * 1024L) return $"{bytes / (1024d * 1024d):0.##} MB";
+            if (bytes >= 1024L) return $"{bytes / 1024d:0.##} KB";
+            return $"{bytes} B";
+        }
+
+        private void RefreshSyncNavigationBadge(SyncPageState state)
+        {
+            if (_btnSyncPage == null || state == null) return;
+            var pending = Math.Min(99, Math.Max(0, state.PendingEventCount) + Math.Max(0, state.ConflictCount));
+            _btnSyncPage.Text = pending == 0 ? "同步中心" : pending >= 99 ? "同步中心 99+" : $"同步中心 {pending}";
+        }
+
+        private void LayoutSyncPage()
+        {
+            if (_syncPagePanel == null || _syncPageHeader == null || _syncMetricsPanel == null) return;
+            var width = Math.Max(ScaleUi(320), _syncPagePanel.ClientSize.Width);
+            var padding = ScaleUi(16);
+            _syncPageHeader.Height = ScaleUi(width < ScaleUi(720) ? 132 : 96);
+            var controls = _syncPageHeader.Controls;
+            var title = controls.OfType<Label>().FirstOrDefault(label => label.Text == "同步中心");
+            title?.SetBounds(padding, ScaleUi(14), ScaleUi(240), ScaleUi(30));
+            _lblSyncWorkspace.SetBounds(padding, ScaleUi(48), Math.Max(ScaleUi(200), width - ScaleUi(360)), ScaleUi(20));
+            _lblSyncStatus.SetBounds(padding, ScaleUi(70), Math.Max(ScaleUi(200), width - ScaleUi(360)), ScaleUi(20));
+            if (width < ScaleUi(720))
+            {
+                _lblSyncLastRun.SetBounds(padding, ScaleUi(96), Math.Max(ScaleUi(120), width - ScaleUi(250)), ScaleUi(30));
+                _btnSyncCancel.SetBounds(width - ScaleUi(224), ScaleUi(94), ScaleUi(84), ScaleUi(36));
+                _btnSyncNow.SetBounds(width - ScaleUi(132), ScaleUi(94), ScaleUi(116), ScaleUi(36));
+            }
+            else
+            {
+                _lblSyncLastRun.SetBounds(width - ScaleUi(440), ScaleUi(18), ScaleUi(210), ScaleUi(36));
+                _btnSyncCancel.SetBounds(width - ScaleUi(216), ScaleUi(18), ScaleUi(80), ScaleUi(36));
+                _btnSyncNow.SetBounds(width - ScaleUi(128), ScaleUi(18), ScaleUi(112), ScaleUi(36));
+            }
+
+            var columns = SyncLayoutPolicy.GetMetricColumnCount(Math.Max(1, width - padding * 2), Math.Max(96, DeviceDpi));
+            _syncMetricsPanel.SuspendLayout();
+            _syncMetricsPanel.ColumnStyles.Clear();
+            _syncMetricsPanel.RowStyles.Clear();
+            _syncMetricsPanel.ColumnCount = columns;
+            _syncMetricsPanel.RowCount = (int)Math.Ceiling(_syncMetricsPanel.Controls.Count / (double)columns);
+            for (var i = 0; i < columns; i++) _syncMetricsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F / columns));
+            for (var i = 0; i < _syncMetricsPanel.RowCount; i++) _syncMetricsPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, ScaleUi(108)));
+            for (var i = 0; i < _syncMetricsPanel.Controls.Count; i++)
+            {
+                var card = _syncMetricsPanel.Controls[i];
+                _syncMetricsPanel.SetCellPosition(card, new TableLayoutPanelCellPosition(i % columns, i / columns));
+                card.Dock = DockStyle.Fill;
+            }
+            _syncMetricsPanel.Height = _syncMetricsPanel.RowCount * ScaleUi(108) + ScaleUi(16);
+            _syncMetricsPanel.ResumeLayout();
+
+            if (_syncTabs != null)
+            {
+                MiuiTheme.StyleTabControl(_syncTabs, DeviceDpi);
+                _syncTabs.ItemSize = new Size(Math.Max(ScaleUi(96), (width - ScaleUi(24)) / 5), ScaleUi(40));
+                foreach (TabPage page in _syncTabs.TabPages)
+                {
+                    var content = page.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
+                    if (content == null) continue;
+                    content.Width = Math.Max(ScaleUi(280), page.ClientSize.Width - SystemInformation.VerticalScrollBarWidth);
+                    foreach (Control section in content.Controls)
+                        section.Width = Math.Max(ScaleUi(260), content.ClientSize.Width - content.Padding.Horizontal);
+                }
+            }
         }
 
         private ComboBox AddPrintOrderCombo(string labelText, int x, int y, int width)
@@ -1326,10 +2050,12 @@ namespace BarTenderPrinter
             _sidebarExpanded = expanded;
             _btnPrintPage.Visible = expanded;
             _btnOrderPage.Visible = expanded;
+            _btnSyncPage.Visible = expanded;
             _navPanel.Visible = expanded;
             LayoutSidebar();
             RebuildPrintPageLayout();
             LayoutOrderEditor();
+            LayoutSyncPage();
             _toolTips.SetToolTip(_btnSidebarToggle, expanded ? "收起侧栏" : "展开侧栏");
             if (expanded) _navPanel.BringToFront();
         }
@@ -1340,13 +2066,17 @@ namespace BarTenderPrinter
             if (_activeOrderTemplate != null && !ResolveTemplateUpdate(_activeOrder, _activeOrderTemplate)) return;
             if (!SaveSelectedOrderTemplateDraft()) return;
             _orderPagePanel.Visible = false;
+            _syncPagePanel.Visible = false;
             _printPagePanel.Visible = true;
             _printPagePanel.BringToFront();
             _navPanel.BringToFront();
             titlePanel.BringToFront();
+            groupBoxLog.BringToFront();
+            statusStrip.BringToFront();
             if (_chkPreview != null) _chkPreview.Visible = true;
             MiuiTheme.StyleNavigationButton(_btnPrintPage, true);
             MiuiTheme.StyleNavigationButton(_btnOrderPage, false);
+            MiuiTheme.StyleNavigationButton(_btnSyncPage, false);
             ApplyNavigationIcons(false);
         }
 
@@ -1358,10 +2088,16 @@ namespace BarTenderPrinter
                 _chkPreview.Visible = false;
             }
             _printPagePanel.Visible = false;
+            _syncPagePanel.Visible = false;
             _orderPagePanel.Visible = true;
             _orderPagePanel.BringToFront();
+            _navPanel.BringToFront();
+            titlePanel.BringToFront();
+            groupBoxLog.BringToFront();
+            statusStrip.BringToFront();
             MiuiTheme.StyleNavigationButton(_btnOrderPage, true);
             MiuiTheme.StyleNavigationButton(_btnPrintPage, false);
+            MiuiTheme.StyleNavigationButton(_btnSyncPage, false);
             ApplyNavigationIcons(true);
             if (_activeOrder != null)
             {
@@ -1378,6 +2114,30 @@ namespace BarTenderPrinter
                 else BuildOrderEditor(null);
             }
             else BuildOrderEditor(null);
+        }
+
+        private void ShowSyncPage()
+        {
+            if (_orderPagePanel.Visible && !ConfirmOrderEditorChanges()) return;
+            if (_chkPreview != null)
+            {
+                _chkPreview.Checked = false;
+                _chkPreview.Visible = false;
+            }
+            _printPagePanel.Visible = false;
+            _orderPagePanel.Visible = false;
+            _syncPagePanel.Visible = true;
+            LayoutSyncPage();
+            _syncPagePanel.BringToFront();
+            _navPanel.BringToFront();
+            titlePanel.BringToFront();
+            groupBoxLog.BringToFront();
+            statusStrip.BringToFront();
+            MiuiTheme.StyleNavigationButton(_btnPrintPage, false);
+            MiuiTheme.StyleNavigationButton(_btnOrderPage, false);
+            MiuiTheme.StyleNavigationButton(_btnSyncPage, true);
+            ApplyNavigationIcons(false);
+            _ = _syncPresenter.RefreshAsync();
         }
 
         private enum PrintOrderFilterLevel { All, Customer, Model, Color }
@@ -1807,6 +2567,13 @@ namespace BarTenderPrinter
             {
                 SaveOrderFromPage();
                 return !_orderEditorDirty;
+            }
+            if (_remoteOrdersPendingReload)
+            {
+                _orders.Reload();
+                _remoteOrdersPendingReload = false;
+                RefreshOrderFilters(OrderFilterLevel.All, false);
+                RefreshPrintOrderSelector(PrintOrderFilterLevel.All, true);
             }
             if (_editingOrder != null) BuildOrderEditor(_editingOrder);
             else BuildOrderEditor(null);
@@ -3095,6 +3862,12 @@ namespace BarTenderPrinter
 
         private void SaveOrderFromPage()
         {
+            if (_remoteOrdersPendingReload)
+            {
+                MessageBox.Show(this, "远端订单已更新并保存在磁盘。请先放弃当前编辑并刷新订单，再重新应用本次修改。", "订单需要刷新",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             if (!ValidateOrderDataSourceGrid()) return;
             if (!SaveSelectedOrderTemplateDraft()) return;
             if (!ValidateOrderTemplateDrafts()) return;
@@ -3164,6 +3937,7 @@ namespace BarTenderPrinter
             var applied = ApplyOrder(savedOrder, false, _selectedOrderTemplateDraft?.Id);
             ShowOrderSettingsPage(savedOrder);
             _orderEditorDirty = false;
+            ScheduleSharedDataSync();
             AddLog($"已保存订单设置: {savedOrder.DisplayName}", "SUCCESS");
             MessageBox.Show(this,
                 applied ? "订单设置已保存，打印页面已加载最新模板设置。" : "订单设置已保存，打印页面暂未切换到该订单，请检查模板文件。",
@@ -3257,6 +4031,8 @@ namespace BarTenderPrinter
 
         private async void MainForm_Shown(object sender, EventArgs e)
         {
+            await _syncPresenter.InitializeAsync();
+            BindNetworkEvents();
             AddLog("正在连接 BarTender...", "INFO");
             try
             {
@@ -3300,6 +4076,7 @@ namespace BarTenderPrinter
                         "管理员初始化", MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
                 AddLog("系统启动完成", "INFO");
+                _ = RunAutomaticSyncAsync("应用启动");
             }
             catch (Exception ex)
             {
@@ -5638,7 +6415,7 @@ namespace BarTenderPrinter
         private void btnSaveConfig_Click(object sender, EventArgs e)
         {
             var configSaved = SaveConfig();
-            var templateSaved = SaveCurrentTemplateSettings();
+            var templateSaved = SaveCurrentTemplateSettings(true);
             if (configSaved && templateSaved)
             {
                 MessageBox.Show(this, "配置已保存");
@@ -5651,8 +6428,9 @@ namespace BarTenderPrinter
         private void btnLoadConfig_Click(object sender, EventArgs e)
         { LoadConfig(_configFile); PopulateTemplateList(_templatesFolder); RebuildInputFields(); MessageBox.Show(this, "配置已加载"); }
 
-        private bool SaveCurrentTemplateSettings()
+        private bool SaveCurrentTemplateSettings(bool force = false)
         {
+            if (_remoteTemplateSettingsPendingReload && !force) return true;
             if (string.IsNullOrEmpty(_selectedTemplatePath)) return true;
             try
             {
@@ -5666,6 +6444,8 @@ namespace BarTenderPrinter
                 {
                     _templateSettings.Save(settings);
                 }
+                _remoteTemplateSettingsPendingReload = false;
+                ScheduleSharedDataSync();
                 return true;
             }
             catch (Exception ex)
@@ -5693,6 +6473,7 @@ namespace BarTenderPrinter
         private bool RestoreTemplateSettings(string templateName, string templatePath)
         {
             if (!_templateSettings.TryGet(templateName, templatePath, out var settings)) return false;
+            _remoteTemplateSettingsPendingReload = false;
             _legacyDataSourcesPending.Clear();
             ApplyTemplateSettings(settings);
             AddLog($"已恢复模板设置: {templateName}", "INFO");

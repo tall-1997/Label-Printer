@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without v prefix, for example 5.7.93'
+        description: 'Release version without v prefix, for example 5.7.94'
         required: true
         type: string
 
@@ -71,7 +71,15 @@ jobs:
           echo "SEMVER=$semver" >> $env:GITHUB_OUTPUT
 
       - name: Run tests
-        run: dotnet test BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release
+        run: dotnet test BarTenderPrinter.Tests/BarTenderPrinter.Tests.csproj -c Release --logger "trx;LogFileName=release-windows.trx" --results-directory TestResults
+
+      - name: Upload Windows test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-csharp-windows-test-results
+          path: TestResults/*.trx
+          if-no-files-found: warn
 
       - name: Publish self-contained application
         run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish -p:Version=${{ steps.version.outputs.SEMVER }} -p:AssemblyVersion=${{ steps.version.outputs.SEMVER }}.0 -p:FileVersion=${{ steps.version.outputs.SEMVER }}.0
@@ -116,9 +124,17 @@ jobs:
 
             ### 更新内容
 
-            #### 产品精简
-            - 保留 WinForms 打印页面、订单管理、模板预览、打印历史和补打印
-            - 移除 MES Web、中心 API、PostgreSQL、Station Agent、设备模拟和 MES 工位入口
+            #### 加密协作同步
+            - 新增坚果云 WebDAV 协作空间及 `.btpsync` 加密连接文件
+            - 同步订单、模板设置、模板文件、打印历史、作业状态和补打印审计
+            - 使用 AES-256-GCM 加密云端对象，并使用 Windows DPAPI 保护本地凭据和密钥
+            - 支持持久化 outbox、连续游标、冲突决议、损坏对象隔离、退避重试和加密快照
+
+            #### 同步中心与专网直连
+            - 新增与打印页面、订单管理同级的同步中心
+            - 展示设备、待上传事件、冲突、流量、近期活动和脱敏诊断
+            - 支持 TLS 专网直连、加密设备端点交换和 WebDAV 自动回退
+            - 支持启动、保存后防抖、网络恢复、手动操作和退出前按需同步
 
             #### 打印可靠性
             - 保留 SQLite 打印作业账本、幂等防重和并发重复提交保护
@@ -126,13 +142,14 @@ jobs:
             - 保持 BarTender COM 打印接口和独立预览宿主兼容
 
             #### 安全与合规
-            - 保留账户权限、补打印审批、历史完整性和输入验证边界
-            - 发布制品排除 HASP、Sentinel、旧 MobileMes 资产、证书、数据库和日志
+            - 保留 SQLite 打印权威账本、补打印审批和历史完整性校验
+            - 固定使用坚果云官方 HTTPS WebDAV 地址并验证协作空间身份
+            - 发布制品排除连接文件、同步配置、数据库、模板缓存、设备私钥、诊断和日志
 
             #### 测试与发布
             - Linux CI 验证跨平台打印可靠性测试
-            - Windows CI 验证 WinForms、BarTender 边界、自包含发布和安装包内容
-            - 发布制品自动扫描敏感配置和非授权运行时资产
+            - Windows CI 验证 WinForms、同步协议、直连、BarTender 边界和自包含发布
+            - 发布制品自动扫描同步凭据、连接文件、证书私钥和运行时业务数据
 
             ### 系统要求
             - Windows 10/11 x64

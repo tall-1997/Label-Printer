@@ -34,7 +34,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："; Flags: unchecked
 
 [Files]
-Source: "..\publish\*"; DestDir: "{app}"; Excludes: "*MobileMes*,*HASP*,*Sentinel*,*SafeNet*,*Hardlock*,*Dongle*,*.pfx,*.p12,*.pem,*.key,*.cer,*.crt,*.der,*.p7b,*.p7c,*.snk,*.jks,*.keystore,*.db,*.sqlite,*.sqlite3,*.log"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\publish\*"; DestDir: "{app}"; Excludes: "*MobileMes*,*HASP*,*Sentinel*,*SafeNet*,*Hardlock*,*Dongle*,sync-profile.dat,*.btpsync,sync.db,sync-incoming\*,*\sync-incoming\*,template-cache\*,*\template-cache\*,sync-staging\*,*\sync-staging\*,direct-sync-certificates\*,*\direct-sync-certificates\*,*sync-diagnostic*,*sync_diagnostic*,*syncdiagnostic*,*diagnostic-sync*,*diagnostic_sync*,*.pfx,*.pfx.dat,*.p12,*.pem,*.key,*.cer,*.crt,*.der,*.p7b,*.p7c,*.snk,*.jks,*.keystore,*.db,*.sqlite,*.sqlite3,*.log"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"

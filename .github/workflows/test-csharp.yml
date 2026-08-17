@@ -8,6 +8,7 @@ on:
       - 'BarTenderPrinter.Tests/**'
       - 'BarTenderPreviewHost/**'
       - 'installer/**'
+      - 'scripts/Test-ReleaseArtifact.ps1'
       - '.github/workflows/test-csharp.yml'
   push:
     branches: [ main ]
@@ -15,6 +16,7 @@ on:
       - 'BarTenderPrinter/**'
       - 'BarTenderPrinter.Tests/**'
       - 'BarTenderPreviewHost/**'
+      - 'scripts/Test-ReleaseArtifact.ps1'
       - '.github/workflows/test-csharp.yml'
   release:
     types: [published]
@@ -36,6 +38,10 @@ jobs:
 
       - name: Build
         run: dotnet publish BarTenderPrinter/BarTenderPrinter.csproj -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Verify release artifact contents
+        shell: pwsh
+        run: ./scripts/Test-ReleaseArtifact.ps1 -PublishDirectory publish
 
       - name: Verify EXE exists
         run: |

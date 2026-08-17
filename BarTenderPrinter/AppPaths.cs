@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 
 namespace BarTenderPrinter
 {
@@ -23,12 +24,29 @@ namespace BarTenderPrinter
         public static readonly string ValidationDataDirectory = Path.Combine(DataDirectory, "validation-data");
         public static readonly string PreviewDirectory = Path.Combine(DataDirectory, "previews");
         public static readonly string HistoryRecordsDirectory = Path.Combine(DataDirectory, "history-records");
+        public static readonly string SyncProfileFile = Path.Combine(DataDirectory, "sync-profile.dat");
+        public static readonly string SyncDatabaseFile = Path.Combine(DataDirectory, "sync.db");
+        public static readonly string SyncIncomingDirectory = Path.Combine(DataDirectory, "sync-incoming");
+        public static readonly string SyncTemplateCacheDirectory = Path.Combine(DataDirectory, "template-cache");
+        public static readonly string SyncStagingDirectory = Path.Combine(DataDirectory, "sync-staging");
+        public static readonly string DirectSyncCertificatesDirectory = Path.Combine(DataDirectory, "direct-sync-certificates");
+
+        public static string GetDirectSyncCertificateFile(string deviceId)
+        {
+            if (string.IsNullOrWhiteSpace(deviceId) || deviceId.Length > 128 ||
+                deviceId.Any(character => !char.IsLetterOrDigit(character) && character != '-' && character != '_'))
+                throw new ArgumentException("设备标识无效。", nameof(deviceId));
+            return Path.Combine(DirectSyncCertificatesDirectory, deviceId + ".pfx.dat");
+        }
 
         public static void Initialize()
         {
             Directory.CreateDirectory(DataDirectory);
             Directory.CreateDirectory(ValidationDataDirectory);
             Directory.CreateDirectory(PreviewDirectory);
+            Directory.CreateDirectory(SyncIncomingDirectory);
+            Directory.CreateDirectory(SyncTemplateCacheDirectory);
+            Directory.CreateDirectory(DirectSyncCertificatesDirectory);
             var legacyDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".bartender-printer");

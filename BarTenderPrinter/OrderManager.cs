@@ -93,6 +93,12 @@ namespace BarTenderPrinter
         public IReadOnlyList<PackagingOrder> Orders => _orders;
         public Exception LoadError { get; private set; }
 
+        public void Reload()
+        {
+            LoadError = null;
+            Load();
+        }
+
         public OrderManager()
             : this(AppPaths.OrdersFile, true)
         {

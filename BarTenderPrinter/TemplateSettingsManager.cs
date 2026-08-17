@@ -58,6 +58,12 @@ namespace BarTenderPrinter
             return _settings.TryGetValue(GetKey(templateName, templatePath), out settings);
         }
 
+        public void Reload()
+        {
+            _settings.Clear();
+            Load();
+        }
+
         public void Save(TemplateSettings settings)
         {
             var key = GetKey(settings);

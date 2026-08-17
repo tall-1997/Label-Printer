@@ -999,7 +999,7 @@ namespace BarTenderPrinter
             }
         }
 
-        private static void StampChecksum(PrintRecord record)
+        internal static void StampChecksum(PrintRecord record)
         {
             record.RecordChecksum = ComputeChecksum(record);
         }
