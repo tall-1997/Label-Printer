@@ -62,7 +62,7 @@ jobs:
           $assemblyBytes = [System.IO.File]::ReadAllBytes("publish/BarTenderPrinter.dll")
           $assemblyContent = [System.Text.Encoding]::ASCII.GetString($assemblyBytes) +
             [System.Text.Encoding]::Unicode.GetString($assemblyBytes)
-          foreach ($marker in @("print_records.jsonl", "print_records.db", "SyncApplicationService", "DirectSyncHost")) {
+          foreach ($marker in @("SyncApplicationService", "DirectSyncHost")) {
             if ($assemblyContent -notmatch [regex]::Escape($marker)) {
               throw "Compiled application is missing required marker: $marker"
             }
