@@ -61,6 +61,7 @@ namespace BarTenderPrinter
     {
         public bool Succeeded { get; init; }
         public bool AuthenticationFailed { get; init; }
+        public string SafeErrorCode { get; init; } = "";
         public IReadOnlyList<RemoteSyncObject> DownloadedObjects { get; init; } = Array.Empty<RemoteSyncObject>();
         public IReadOnlyCollection<string> UploadedEventIds { get; init; } = Array.Empty<string>();
     }

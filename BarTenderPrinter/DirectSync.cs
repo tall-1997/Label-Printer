@@ -78,13 +78,14 @@ namespace BarTenderPrinter
         {
             if (profile == null) throw new ArgumentNullException(nameof(profile));
             if (profile.DataKey == null || profile.DataKey.Length != 32)
-                return new DirectSyncResult { AuthenticationFailed = true };
+                return new DirectSyncResult { AuthenticationFailed = true, SafeErrorCode = "DIRECT_AUTH_KEY_INVALID" };
 
             var endpoints = await _endpointSource.GetPublishedEndpointsAsync(profile.SpaceId, localDeviceId, cancellationToken).ConfigureAwait(false);
             var candidates = (endpoints ?? Array.Empty<PublishedDirectEndpoint>())
                 .Where(endpoint => IsValidPublishedEndpoint(endpoint, localDeviceId, DateTime.UtcNow))
                 .OrderByDescending(endpoint => endpoint.Priority)
                 .ToArray();
+            string lastErrorCode = "";
             foreach (var endpoint in candidates)
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -94,16 +95,17 @@ namespace BarTenderPrinter
                     await using var session = await _connector.ConnectAsync(endpoint, profile, localDeviceId, timeout.Token).ConfigureAwait(false);
                     return await session.SynchronizeAsync(profile, cursors, outbox, timeout.Token).ConfigureAwait(false);
                 }
-                catch (DirectSyncAuthenticationException)
+                catch (DirectSyncAuthenticationException ex)
                 {
-                    return new DirectSyncResult { AuthenticationFailed = true };
+                    return new DirectSyncResult { AuthenticationFailed = true, SafeErrorCode = SafeErrorCode(ex) };
                 }
                 catch (Exception ex) when (IsEndpointFailure(ex, cancellationToken))
                 {
                     // Continue only through addresses explicitly published for this device.
+                    lastErrorCode = SafeErrorCode(ex);
                 }
             }
-            return new DirectSyncResult();
+            return new DirectSyncResult { SafeErrorCode = lastErrorCode };
         }
 
         internal static bool IsValidPublishedEndpoint(PublishedDirectEndpoint endpoint, string localDeviceId, DateTime nowUtc)
@@ -119,6 +121,13 @@ namespace BarTenderPrinter
         {
             return exception is SocketException || exception is IOException || exception is AuthenticationException ||
                 exception is TimeoutException || (exception is OperationCanceledException && !outerToken.IsCancellationRequested);
+        }
+
+        private static string SafeErrorCode(Exception exception)
+        {
+            var prefix = exception is DirectSyncAuthenticationException ? "DIRECT_AUTH_" : "DIRECT_ENDPOINT_";
+            var cause = exception.InnerException ?? exception;
+            return prefix + cause.GetType().Name.ToUpperInvariant();
         }
 
         private static bool IsSha256(string value)
@@ -167,7 +176,15 @@ namespace BarTenderPrinter
                 }, cancellationToken).ConfigureAwait(false);
                 if (!fingerprintMatched) throw new DirectSyncAuthenticationException("直连 TLS 证书指纹不匹配。");
                 var session = new TlsDirectSyncSession(client, ssl, endpoint);
-                await session.AuthenticateAsync(profile, localDeviceId, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await session.AuthenticateAsync(profile, localDeviceId, cancellationToken).ConfigureAwait(false);
+                }
+                catch (IOException ex)
+                {
+                    await session.DisposeAsync().ConfigureAwait(false);
+                    throw new DirectSyncAuthenticationException("直连设备认证阶段连接已关闭。", ex);
+                }
                 return session;
             }
             catch (Exception ex)

@@ -146,7 +146,7 @@ namespace BarTenderPrinter.Tests
         public async Task UploadRetryUsesRetryAfterAndContinuesOtherItems()
         {
             var now = new DateTimeOffset(2026, 8, 17, 10, 0, 0, TimeSpan.Zero);
-            var cloud = new FakeCloud { PutFailurePath = "events/local/1.evt", PutFailure = new WebDavException(SyncErrorCodes.WebDavRateLimited, "limited", retryAfter: TimeSpan.FromMinutes(2)) };
+            var cloud = new FakeCloud { PutFailurePath = "BarTenderPrinterSync/spaces/space/events/local/1.evt", PutFailure = new WebDavException(SyncErrorCodes.WebDavRateLimited, "limited", retryAfter: TimeSpan.FromMinutes(2)) };
             var store = CreateStore();
             store.Enqueue(Outbox(1));
             store.Enqueue(Outbox(2));
@@ -164,7 +164,7 @@ namespace BarTenderPrinter.Tests
         public async Task UploadRetryExponentialDelayIsCapped()
         {
             var now = new DateTimeOffset(2026, 8, 17, 10, 0, 0, TimeSpan.Zero);
-            var cloud = new FakeCloud { PutFailurePath = "events/local/1.evt", PutFailure = new WebDavException(SyncErrorCodes.NetworkUnavailable, "offline") };
+            var cloud = new FakeCloud { PutFailurePath = "BarTenderPrinterSync/spaces/space/events/local/1.evt", PutFailure = new WebDavException(SyncErrorCodes.NetworkUnavailable, "offline") };
             var store = CreateStore();
             var item = Outbox(1);
             item.RetryCount = 20;
@@ -181,7 +181,7 @@ namespace BarTenderPrinter.Tests
         [Fact]
         public async Task AuthenticationFailurePermanentlyBlocksOnlyFailedItem()
         {
-            var cloud = new FakeCloud { PutFailurePath = "events/local/1.evt", PutFailure = new WebDavException(SyncErrorCodes.WebDavAuthenticationFailed, "auth", System.Net.HttpStatusCode.Unauthorized) };
+            var cloud = new FakeCloud { PutFailurePath = "BarTenderPrinterSync/spaces/space/events/local/1.evt", PutFailure = new WebDavException(SyncErrorCodes.WebDavAuthenticationFailed, "auth", System.Net.HttpStatusCode.Unauthorized) };
             var store = CreateStore();
             store.Enqueue(Outbox(1));
             store.Enqueue(Outbox(2));
@@ -199,7 +199,7 @@ namespace BarTenderPrinter.Tests
         public async Task ExistingRemoteObjectWithDifferentDigestIsPermanentlyBlocked()
         {
             var cloud = new FakeCloud();
-            cloud.Objects["events/local/1.evt"] = Encoding.UTF8.GetBytes("different");
+            cloud.Objects["BarTenderPrinterSync/spaces/space/events/local/1.evt"] = Encoding.UTF8.GetBytes("different");
             var store = CreateStore();
             store.Enqueue(Outbox(1));
             var coordinator = new SyncCoordinator(new SyncConnectionProfile { SpaceId = "space", DataKey = new byte[32] },
@@ -215,7 +215,7 @@ namespace BarTenderPrinter.Tests
         private static SyncOutboxItem Outbox(long sequence) => new SyncOutboxItem
         {
             EventId = $"local:{sequence}", DeviceId = "local", Sequence = sequence,
-            ObjectPath = $"events/local/{sequence}.evt", EncryptedBlob = Encoding.UTF8.GetBytes($"event-{sequence}"), CreatedAtUtc = DateTimeOffset.UtcNow
+            ObjectPath = $"BarTenderPrinterSync/spaces/space/events/local/{sequence}.evt", EncryptedBlob = Encoding.UTF8.GetBytes($"event-{sequence}"), CreatedAtUtc = DateTimeOffset.UtcNow
         };
 
         private static SyncStore CreateStore()

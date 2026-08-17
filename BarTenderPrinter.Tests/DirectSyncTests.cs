@@ -39,7 +39,7 @@ namespace BarTenderPrinter.Tests
                 Array.Empty<SyncOutboxItem>(),
                 CancellationToken.None);
 
-            Assert.True(result.Succeeded);
+            Assert.True(result.Succeeded, result.SafeErrorCode);
             Assert.Single(connector.Attempts);
             Assert.Equal("10.0.0.3", connector.Attempts[0]);
         }
@@ -60,7 +60,7 @@ namespace BarTenderPrinter.Tests
                 "local",
                 new Dictionary<string, long>(), Array.Empty<SyncOutboxItem>(), CancellationToken.None);
 
-            Assert.True(result.AuthenticationFailed);
+            Assert.True(result.AuthenticationFailed, result.SafeErrorCode);
             Assert.Single(connector.Attempts);
         }
 
@@ -89,7 +89,7 @@ namespace BarTenderPrinter.Tests
             var result = await client.TrySynchronizeAsync(clientProfile, "client", clientStore.GetCursors(),
                 clientStore.GetPendingOutbox(10), CancellationToken.None);
 
-            Assert.True(result.Succeeded);
+            Assert.True(result.Succeeded, result.SafeErrorCode);
             Assert.Single(result.DownloadedObjects);
             Assert.Equal(hostEvent.ObjectPath, result.DownloadedObjects[0].Path);
             Assert.NotNull(hostStore.GetOutbox(clientEvent.EventId));
@@ -114,7 +114,7 @@ namespace BarTenderPrinter.Tests
                 Profile("client", SyncCrypto.GenerateDataKey()), "client", new Dictionary<string, long>(),
                 Array.Empty<SyncOutboxItem>(), CancellationToken.None);
 
-            Assert.True(result.AuthenticationFailed);
+            Assert.True(result.AuthenticationFailed, result.SafeErrorCode);
         }
 
         [Fact]
