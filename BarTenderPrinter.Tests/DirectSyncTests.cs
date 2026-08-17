@@ -89,7 +89,7 @@ namespace BarTenderPrinter.Tests
             var result = await client.TrySynchronizeAsync(clientProfile, "client", clientStore.GetCursors(),
                 clientStore.GetPendingOutbox(10), CancellationToken.None);
 
-            Assert.True(result.Succeeded, result.SafeErrorCode);
+            Assert.True(result.Succeeded, $"client={result.SafeErrorCode};host={host.LastSafeErrorCode}");
             Assert.Single(result.DownloadedObjects);
             Assert.Equal(hostEvent.ObjectPath, result.DownloadedObjects[0].Path);
             Assert.NotNull(hostStore.GetOutbox(clientEvent.EventId));
@@ -114,7 +114,7 @@ namespace BarTenderPrinter.Tests
                 Profile("client", SyncCrypto.GenerateDataKey()), "client", new Dictionary<string, long>(),
                 Array.Empty<SyncOutboxItem>(), CancellationToken.None);
 
-            Assert.True(result.AuthenticationFailed, result.SafeErrorCode);
+            Assert.True(result.AuthenticationFailed, $"client={result.SafeErrorCode};host={host.LastSafeErrorCode}");
         }
 
         [Fact]

@@ -127,6 +127,7 @@ namespace BarTenderPrinter
         private readonly object _gate = new object();
         private CancellationTokenSource _lifetime;
         private bool _disposed;
+        private string _lastSafeErrorCode = "";
 
         public DirectSyncHost(SyncConnectionProfile profile, SyncStore store, X509Certificate2 certificate,
             IReadOnlyList<IPAddress> addresses, int maxConcurrentConnections = 4)
@@ -146,6 +147,7 @@ namespace BarTenderPrinter
         public bool IsListening { get { lock (_gate) return _listeners.Count > 0 && !_disposed; } }
         public int Port { get; private set; }
         public string CertificateSha256 => Convert.ToHexString(SHA256.HashData(_certificate.RawData));
+        internal string LastSafeErrorCode => Volatile.Read(ref _lastSafeErrorCode);
 
         public Task StartAsync(int port, CancellationToken cancellationToken)
         {
@@ -219,12 +221,46 @@ namespace BarTenderPrinter
                 ex is DirectSyncAuthenticationException ||
                 ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
             {
+                Volatile.Write(ref _lastSafeErrorCode, GetSafeErrorCode(ex));
             }
             finally
             {
                 client.Dispose();
                 if (entered) _connections.Release();
             }
+        }
+
+        private static string GetSafeErrorCode(Exception exception)
+        {
+            if (exception is DirectSyncAuthenticationException) return "HOST_AUTH_REJECTED";
+            if (exception is AuthenticationException) return "HOST_TLS_AUTHENTICATION";
+            if (exception is CryptographicException) return "HOST_CRYPTOGRAPHIC";
+            if (exception is JsonException) return "HOST_JSON";
+            if (exception is FormatException) return "HOST_FORMAT";
+            if (exception is ArgumentException) return "HOST_ARGUMENT";
+            if (exception is SocketException) return "HOST_SOCKET";
+            if (exception is OperationCanceledException) return "HOST_CANCELLED";
+            return exception.Message switch
+            {
+                "直连清单请求无效。" => "HOST_INVENTORY_REQUEST",
+                "直连对象清单超过限制。" => "HOST_INVENTORY_LIMIT",
+                "直连对象清单包含空对象。" => "HOST_INVENTORY_NULL",
+                "直连对象清单包含无效对象。" => "HOST_OBJECT_METADATA",
+                "直连事件路径无效。" => "HOST_EVENT_PATH",
+                "直连事件身份无效。" => "HOST_EVENT_IDENTITY",
+                "直连事件序号无效。" => "HOST_EVENT_SEQUENCE",
+                "直连对象请求无效。" => "HOST_OBJECT_REQUEST",
+                "直连对象响应身份无效。" => "HOST_OBJECT_RESPONSE_IDENTITY",
+                "直连对象完成帧无效。" => "HOST_OBJECT_COMPLETE",
+                "直连对象帧类型无效。" => "HOST_OBJECT_FRAME",
+                "直连对象分块大小无效。" => "HOST_OBJECT_CHUNK",
+                "直连对象摘要校验失败。" => "HOST_OBJECT_DIGEST",
+                "直连同步确认无效。" => "HOST_RECEIPT",
+                "直连游标无效。" => "HOST_CURSOR",
+                "直连控制帧长度无效。" => "HOST_FRAME_LENGTH",
+                "直连会话意外关闭。" => "HOST_CONNECTION_CLOSED",
+                _ => "HOST_IO"
+            };
         }
 
         private async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
