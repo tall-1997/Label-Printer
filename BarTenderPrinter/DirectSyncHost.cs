@@ -359,6 +359,7 @@ namespace BarTenderPrinter
             var receipt = await ReadMessageAsync(stream, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(receipt.Type, "SyncReceipt", StringComparison.Ordinal) || !string.Equals(receipt.RequestId, request.RequestId, StringComparison.Ordinal))
                 throw new IOException("直连同步确认无效。");
+            await WriteMessageAsync(stream, new WireMessage { Type = "SyncCompleted", RequestId = request.RequestId }, cancellationToken).ConfigureAwait(false);
         }
 
         private static async Task<byte[]> ReadObjectAsync(SslStream stream, WireObject metadata, string requestId, CancellationToken cancellationToken)

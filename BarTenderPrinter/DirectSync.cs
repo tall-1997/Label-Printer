@@ -313,6 +313,10 @@ namespace BarTenderPrinter
                 uploaded.Add(item.EventId);
             }
             await WriteMessageAsync(new WireMessage { Type = "SyncReceipt", RequestId = requestId }, cancellationToken).ConfigureAwait(false);
+            var completed = await ReadMessageAsync(cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(completed.Type, "SyncCompleted", StringComparison.Ordinal) ||
+                !string.Equals(completed.RequestId, requestId, StringComparison.Ordinal))
+                throw new IOException("直连同步完成确认无效。");
             return new DirectSyncResult { Succeeded = true, DownloadedObjects = downloaded, UploadedEventIds = uploaded };
         }
 

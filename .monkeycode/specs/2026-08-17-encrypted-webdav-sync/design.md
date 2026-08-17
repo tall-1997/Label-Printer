@@ -315,6 +315,7 @@ EntityId = 订单、设置、历史或作业的稳定 ID
 | `ObjectChunk` | 传输加密对象分块 |
 | `ObjectComplete` | 提交对象大小和 SHA-256 |
 | `SyncReceipt` | 确认已持久化的事件游标 |
+| `SyncCompleted` | 确认服务端已完成本轮持久化 |
 | `Error` | 返回稳定错误码和安全消息 |
 
 - 控制帧上限为 1MB。
