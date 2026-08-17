@@ -178,7 +178,7 @@ namespace BarTenderPrinter.Tests
             var request = new CertificateRequest($"CN={deviceId}", key, HashAlgorithmName.SHA256);
             using var generated = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
             return new X509Certificate2(generated.Export(X509ContentType.Pfx), (string)null,
-                X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+                X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
         }
 
         private static string TestDirectory()

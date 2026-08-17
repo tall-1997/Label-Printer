@@ -80,7 +80,7 @@ namespace BarTenderPrinter
             var pfx = _protector.Unprotect(protectedBytes);
             try
             {
-                var certificate = new X509Certificate2(pfx, (string)null, X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+                var certificate = new X509Certificate2(pfx, (string)null, X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
                 if (!certificate.HasPrivateKey || !string.Equals(certificate.GetNameInfo(X509NameType.SimpleName, false), deviceId, StringComparison.Ordinal))
                 {
                     certificate.Dispose();
